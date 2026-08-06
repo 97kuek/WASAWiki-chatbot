@@ -9,7 +9,7 @@
     ただし **最上位見出しをまたいでマージしない**。またぐとパンくずが嘘になる
   - 全チャンクにパンくず（ページ名 > H2 > H3）を付与。検索精度に最も効く
   - タイトル＋本文から代（世代）を抽出し、根拠の強さを source で区別する
-  - スタブは検索対象から外すが、目次には残す（存在自体は知らせる必要がある）
+  - 短いページも検索対象に含める（98字の「作業場移転履歴」に答えが完結していた）
 
   python build_index.py
 出力: data/index.json（Wiki本文を含むため .gitignore 対象）
@@ -28,7 +28,12 @@ DUMP = Path("dump/pages.jsonl")
 OUT = Path("data/index.json")
 PAGE_URL_BASE = "https://wasabirdman.sakura.ne.jp/wbwiki/w/index.php/"
 
-STUB_CHARS = 120    # これ未満は検索対象から外す（ただし目次には残す）
+# 「中身が薄い」ことを目次で示すための閾値。検索対象からは外さない。
+# 当初はこの閾値未満を検索対象外にしていたが、98字の「作業場移転履歴」に
+# 移転年・移転先・理由が完結して書かれており、答えがあるのに引けなくなっていた。
+# 短い＝価値がない、ではない。除外するのは実質的に空のページだけにする。
+STUB_CHARS = 120
+MIN_INDEX_CHARS = 20  # これ未満は本当に空。チャンクを作らない
 CHUNK_TARGET = 1200  # チャンクの目標サイズ
 CHUNK_MAX = 2500     # レンダリング後にこれを超えたら分割する
 CHUNK_MIN = 200      # これ未満の末尾チャンクは直前に吸収する
@@ -550,9 +555,11 @@ def main() -> None:
                 "headings": headings,
                 "images": images,
                 "links": links,
-                # スタブも目次には載せるが、検索対象のチャンクは作らない
-                "chunks": [] if is_stub else build_chunks(raw["pageid"], raw["title"], body),
-                "body": body if is_stub else None,
+                "chunks": (
+                    build_chunks(raw["pageid"], raw["title"], body)
+                    if len(body) >= MIN_INDEX_CHARS
+                    else []
+                ),
             }
         )
 
@@ -560,7 +567,7 @@ def main() -> None:
     OUT.write_text(json.dumps({"pages": pages}, ensure_ascii=False, indent=1), encoding="utf-8")
 
     # ---- 結果レポート ----
-    searchable = [p for p in pages if not p["is_stub"]]
+    searchable = [p for p in pages if p["chunks"]]
     chunks = [c for p in pages for c in p["chunks"]]
     sizes = sorted(c["chars"] for c in chunks)
     gens = Counter(p["gen_source"] for p in pages)
