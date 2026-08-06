@@ -1,0 +1,169 @@
+"""検索の評価ハーネス。ゴールデンデータに対して Evidence Recall などを算出する。
+
+設計方針 docs/01-設計方針.md §5-3 に対応。
+
+**採点と検索は分離してある。** 採点器（score）は「質問 → チャンクIDの順位リスト」を
+返す任意の関数を受け取る。したがって、後段でGoに実装するBM25の結果を
+JSONで書き出せば、同じ採点器でそのまま比較できる。Python側の実装は
+あくまで測定の足場であって、本番の検索器ではない。
+
+同梱のベースライン検索器は **文字bigramのBM25**。形態素解析器を使わないのは、
+本番のGo側は kagome を使う予定であり、ここでSudachiPyを持ち込むと
+「索引と検索で分かち書きが食い違う」問題を評価にも持ち込むことになるため。
+日本語では文字bigramでも語彙検索の下限として十分機能する。
+
+  python eval/retrieval_eval.py
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import re
+from collections import Counter, defaultdict
+from pathlib import Path
+from typing import Callable
+
+INDEX = Path("data/index.json")
+GOLDEN = Path("eval/golden.json")
+K_VALUES = (1, 3, 5, 10)
+
+# 検索器の型: 質問文 → チャンクIDを関連度順に並べたリスト
+Retriever = Callable[[str], list[str]]
+
+
+def tokenize(text: str) -> list[str]:
+    """日本語は文字bigram、英数字は単語単位で切る。
+
+    形態素解析器を使わない代わりに、CJKは文字bigramで近似する。
+    「主翼桁」が「主翼」「翼桁」に分かれるため、部分一致も拾える。
+    """
+    text = text.lower()
+    tokens: list[str] = []
+    for run in re.findall(r"[a-z0-9]+|[^\sa-z0-9]+", text):
+        if re.match(r"^[a-z0-9]+$", run):
+            tokens.append(run)
+        else:
+            cjk = re.sub(r"[\s　、。，．・「」（）()｜|*#>\[\]:：/]", "", run)
+            tokens += [cjk[i : i + 2] for i in range(len(cjk) - 1)] or ([cjk] if cjk else [])
+    return tokens
+
+
+class BM25:
+    """文字bigramに対する BM25。117ページ規模なら総当たりで一瞬。"""
+
+    def __init__(self, docs: dict[str, str], k1: float = 1.2, b: float = 0.75):
+        self.k1, self.b = k1, b
+        self.ids = list(docs)
+        self.tf = {i: Counter(tokenize(t)) for i, t in docs.items()}
+        self.len = {i: sum(c.values()) for i, c in self.tf.items()}
+        self.avgdl = sum(self.len.values()) / len(self.len)
+
+        df: Counter[str] = Counter()
+        for counts in self.tf.values():
+            df.update(counts.keys())
+        n = len(self.ids)
+        self.idf = {t: math.log(1 + (n - d + 0.5) / (d + 0.5)) for t, d in df.items()}
+
+    def search(self, query: str) -> list[str]:
+        scores: dict[str, float] = defaultdict(float)
+        for token in tokenize(query):
+            idf = self.idf.get(token)
+            if idf is None:
+                continue
+            for doc_id, counts in self.tf.items():
+                freq = counts.get(token)
+                if not freq:
+                    continue
+                norm = 1 - self.b + self.b * self.len[doc_id] / self.avgdl
+                scores[doc_id] += idf * freq * (self.k1 + 1) / (freq + self.k1 * norm)
+        return [i for i, _ in sorted(scores.items(), key=lambda kv: -kv[1])]
+
+
+def score(questions: list[dict], retrieve: Retriever, chunk_page: dict[str, str]) -> dict:
+    """Evidence Recall / All-Evidence Recall / MRR を算出する。
+
+    ページ単位のRecallも併記する。36,261字ある「駆動・フレーム班」が
+    ヒットしただけで正解扱いになる指標では実力が測れないことを、
+    数字の差として見えるようにするため。
+    """
+    scored = [q for q in questions if q["evidence_chunks"]]
+    out = {
+        "n": len(scored),
+        "skipped": [q["id"] for q in questions if not q["evidence_chunks"]],
+        "chunk_recall": {}, "all_evidence_recall": {}, "page_recall": {},
+        "mrr": 0.0, "per_type": defaultdict(lambda: {"n": 0, "hit@5": 0}), "misses": [],
+    }
+
+    reciprocal = 0.0
+    for q in scored:
+        ranked = retrieve(q["question"])
+        gold = set(q["evidence_chunks"])
+        gold_pages = {chunk_page[c] for c in gold if c in chunk_page}
+
+        for k in K_VALUES:
+            top = ranked[:k]
+            out["chunk_recall"].setdefault(k, 0)
+            out["all_evidence_recall"].setdefault(k, 0)
+            out["page_recall"].setdefault(k, 0)
+            if gold & set(top):
+                out["chunk_recall"][k] += 1
+            if gold <= set(top):
+                out["all_evidence_recall"][k] += 1
+            if gold_pages & {chunk_page[c] for c in top if c in chunk_page}:
+                out["page_recall"][k] += 1
+
+        rank = next((i + 1 for i, c in enumerate(ranked) if c in gold), None)
+        reciprocal += 1 / rank if rank else 0
+        bucket = out["per_type"][q["type"]]
+        bucket["n"] += 1
+        bucket["hit@5"] += 1 if gold & set(ranked[:5]) else 0
+        if not rank or rank > 5:
+            out["misses"].append((q["id"], q["question"][:34], rank))
+
+    out["mrr"] = reciprocal / len(scored) if scored else 0.0
+    return out
+
+
+def report(name: str, result: dict) -> None:
+    n = result["n"]
+    pct = lambda x: f"{x / n * 100:5.1f}%"
+    print(f"\n{'=' * 62}\n{name}  (採点対象 {n}問)\n{'=' * 62}")
+    print(f"{'k':>3} | {'Evidence Recall':>16} | {'All-Evidence':>13} | {'Page Recall':>12}")
+    print("-" * 62)
+    for k in K_VALUES:
+        print(f"{k:>3} | {pct(result['chunk_recall'][k]):>16} | "
+              f"{pct(result['all_evidence_recall'][k]):>13} | {pct(result['page_recall'][k]):>12}")
+    print(f"\nMRR: {result['mrr']:.3f}")
+
+    print("\n種別ごとの Hit@5:")
+    for qtype, v in sorted(result["per_type"].items()):
+        bar = "#" * round(v["hit@5"] / v["n"] * 20)
+        print(f"  {qtype:<14} {v['hit@5']:>2}/{v['n']:<2} {bar}")
+
+    if result["misses"]:
+        print(f"\n上位5件で拾えなかった質問 ({len(result['misses'])}件):")
+        for qid, text, rank in result["misses"]:
+            print(f"  {qid}  {text:<36} 正解の順位: {rank or '圏外'}")
+    if result["skipped"]:
+        print(f"\n検索評価の対象外（根拠チャンクを持たない設問）: {', '.join(result['skipped'])}")
+
+
+def main() -> None:
+    index = json.loads(INDEX.read_text(encoding="utf-8"))
+    questions = json.loads(GOLDEN.read_text(encoding="utf-8"))["questions"]
+
+    chunks = {c["id"]: c["text"] for p in index["pages"] for c in p["chunks"]}
+    chunk_page = {c["id"]: p["title"] for p in index["pages"] for c in p["chunks"]}
+    print(f"チャンク {len(chunks)} 件 / 設問 {len(questions)} 問を読み込み")
+
+    bm25 = BM25(chunks)
+    report("ベースライン: BM25（文字bigram）", score(questions, bm25.search, chunk_page))
+
+    # 下限の目安。これを明確に上回らない検索器は、検索していないのと同じ
+    order = list(chunks)
+    report("参考: 無情報（インデックス順）", score(questions, lambda q: order, chunk_page))
+
+
+if __name__ == "__main__":
+    main()
