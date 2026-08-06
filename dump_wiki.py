@@ -123,7 +123,11 @@ def list_pages(ns_id: int) -> list[dict]:
 
 
 def fetch_contents(page_ids: list[int]) -> list[dict]:
-    """wikitext 本文と最終更新日時をまとめて取得する。"""
+    """wikitext 本文・最終更新日時・版IDをまとめて取得する。
+
+    revid は差分更新の土台になる。次回ダンプ時に revid が変わっていない
+    ページは、本文の再取得も要約の再生成もスキップできる。
+    """
     out = []
     for i in range(0, len(page_ids), BATCH):
         chunk = page_ids[i : i + BATCH]
@@ -132,7 +136,7 @@ def fetch_contents(page_ids: list[int]) -> list[dict]:
                 "action": "query",
                 "pageids": "|".join(map(str, chunk)),
                 "prop": "revisions",
-                "rvprop": "content|timestamp|user",
+                "rvprop": "ids|content|timestamp|user",
                 "rvslots": "main",
             }
         )
@@ -146,6 +150,7 @@ def fetch_contents(page_ids: list[int]) -> list[dict]:
                     "pageid": page["pageid"],
                     "ns": page["ns"],
                     "title": page["title"],
+                    "revid": revision.get("revid"),
                     "last_edited": revision["timestamp"],
                     "last_editor": revision.get("user"),
                     "wikitext": revision["slots"]["main"].get("content", ""),
