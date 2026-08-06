@@ -17,17 +17,19 @@ BM25ベースライン（docs/02-測定結果.md M1）と**ページ単位で**�
 from __future__ import annotations
 
 import json
+import sys
 import time
-import urllib.request
 from collections import defaultdict
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from dotenv import load_dotenv  # noqa: E402
+from rag.llm import make_llm  # noqa: E402
 
 INDEX = Path("data/index.json")
 TOC = Path("data/toc.md")
 GOLDEN = Path("eval/golden.json")
 
-MODEL = "qwen3:30b-a3b"
-ENDPOINT = "http://localhost:11434/api/generate"
 TOP_N = 3  # 選ばせるページ数。BM25の Page Recall@3 と比較する
 
 SCHEMA = {
@@ -49,23 +51,11 @@ titles には最も近そうなページだけを挙げてください。
 質問: """
 
 
-def select(toc: str, question: str) -> tuple[dict, float]:
-    body = json.dumps(
-        {
-            "model": MODEL,
-            "prompt": toc + INSTRUCTION + question,  # 目次を先頭に固定（キャッシュのため）
-            "stream": False,
-            "think": False,
-            "format": SCHEMA,
-            "options": {"num_ctx": 32768, "temperature": 0, "num_predict": 200},
-        }
-    ).encode()
+def select(llm, toc: str, question: str) -> tuple[dict, float]:
     started = time.time()
-    request = urllib.request.Request(ENDPOINT, body, {"Content-Type": "application/json"})
-    response = json.load(urllib.request.urlopen(request, timeout=900))
-    try:
-        parsed = json.loads(response["response"])
-    except json.JSONDecodeError:
+    # 目次を先頭に固定する（キャッシュのため）
+    parsed = llm(toc + INSTRUCTION + question, SCHEMA, 200)
+    if not isinstance(parsed, dict):
         parsed = {"titles": [], "answerable": True}
     return parsed, time.time() - started
 
@@ -75,13 +65,15 @@ def main() -> None:
     questions = json.loads(GOLDEN.read_text(encoding="utf-8"))["questions"]
     toc = TOC.read_text(encoding="utf-8")
 
+    load_dotenv()
+    llm = make_llm()
     known = {p["title"] for p in index["pages"]}
     chunks_of = {p["title"]: len(p["chunks"]) for p in index["pages"]}
     chars_of = {p["title"]: p["chars"] for p in index["pages"]}
 
     scored = [q for q in questions if q["evidence_pages"]]
     print(f"目次 {len(toc):,}字 / 設問 {len(questions)}問（ページ採点対象 {len(scored)}問）")
-    print(f"モデル: {MODEL}\n")
+    print(f"モデル: {llm.name()}\n")
 
     hit_any = hit_all = 0
     hit_top1 = 0
@@ -93,7 +85,7 @@ def main() -> None:
     elapsed = 0.0
 
     for q in questions:
-        result, dt = select(toc, q["question"])
+        result, dt = select(llm, toc, q["question"])
         elapsed += dt
         titles = [t.strip() for t in result.get("titles", []) if t.strip()]
 
