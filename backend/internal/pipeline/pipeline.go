@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/97kuek/WASAWiki-chatbot/backend/internal/index"
@@ -97,6 +98,11 @@ func (p *Pipeline) Run(ctx context.Context, question string, emit func(Event)) e
 		return fmt.Errorf("ページ選択: %w", err)
 	}
 	if len(pages) == 0 {
+		// M2b で、モデルが空文字列のタイトルを3件返して照合で全滅し、
+		// 文脈ゼロになった事例があった。字面一致で拾い直す保険。
+		pages = p.fallbackPages(question)
+	}
+	if len(pages) == 0 {
 		emit(Event{Type: "delta", Text: "Wikiの目次から関連するページを特定できませんでした。"})
 		emit(Event{Type: "done"})
 		return nil
@@ -172,6 +178,48 @@ func (p *Pipeline) selectPages(ctx context.Context, question string) ([]*index.P
 		}
 	}
 	return pages, nil
+}
+
+// fallbackPages は LLM がページを1件も返せなかったときの保険。
+// 目次に対する素朴な字面一致。精度は高くないが「何も答えられない」よりはよい。
+func (p *Pipeline) fallbackPages(question string) []*index.Page {
+	grams := map[string]bool{}
+	runes := []rune(question)
+	for i := 0; i+1 < len(runes); i++ {
+		grams[string(runes[i:i+2])] = true
+	}
+
+	type scored struct {
+		page  *index.Page
+		score int
+	}
+	var ranked []scored
+	for i := range p.ix.Pages {
+		pg := &p.ix.Pages[i]
+		if len(pg.Chunks) == 0 {
+			continue
+		}
+		hay := pg.Title
+		for _, c := range pg.Chunks {
+			hay += " " + c.Breadcrumb
+		}
+		score := 0
+		for g := range grams {
+			if strings.Contains(hay, g) {
+				score++
+			}
+		}
+		if score > 0 {
+			ranked = append(ranked, scored{pg, score})
+		}
+	}
+	sort.Slice(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
+
+	var out []*index.Page
+	for i := 0; i < len(ranked) && i < maxPages; i++ {
+		out = append(out, ranked[i].page)
+	}
+	return out
 }
 
 func (p *Pipeline) selectChunks(ctx context.Context, question string, pages []*index.Page) ([]string, error) {
