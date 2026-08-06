@@ -36,15 +36,31 @@ def strip_thinking(text: str) -> str:
     return text.strip()
 
 
-def post(url: str, payload: dict, headers: dict | None = None, timeout: int = 300) -> dict:
+def post(url: str, payload: dict, headers: dict | None = None, timeout: int = 300,
+         retries: int = 5) -> dict:
+    """POSTしてJSONを返す。429（レート制限）は待って再試行する。
+
+    無料枠は毎分数リクエストしか通らないため、31問の測定を素直に回すと
+    途中で必ず 429 に当たる。ここで吸収しないと測定が完走しない。
+    """
     body = json.dumps(payload).encode()
-    req = urllib.request.Request(url, body, {"Content-Type": "application/json", **(headers or {})})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            return json.load(response)
-    except urllib.error.HTTPError as err:
-        detail = err.read().decode("utf-8", "replace")[:500]
-        raise RuntimeError(f"{url} が {err.code}: {detail}") from err
+    for attempt in range(retries):
+        req = urllib.request.Request(url, body,
+                                     {"Content-Type": "application/json", **(headers or {})})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as err:
+            detail = err.read().decode("utf-8", "replace")
+            if err.code in (429, 503) and attempt < retries - 1:
+                # サーバーが待ち時間を指定してくればそれに従う
+                match = re.search(r'"retryDelay"\s*:\s*"(\d+)s"', detail)
+                wait = int(match.group(1)) if match else min(60, 5 * 2**attempt)
+                print(f"    レート制限。{wait}秒待って再試行 ({attempt + 1}/{retries - 1})", flush=True)
+                time.sleep(wait + 1)
+                continue
+            raise RuntimeError(f"{url} が {err.code}: {detail[:400]}") from err
+    raise RuntimeError("再試行の上限に達しました")
 
 
 class Base:
@@ -146,6 +162,10 @@ class GeminiLLM(Base):
             raise RuntimeError("GEMINI_API_KEY を .env に設定してください")
         self.timeout = timeout
         self.model = model or os.environ.get("GEMINI_MODEL") or self.pick_model()
+        # 無料枠は毎分のリクエスト数が絞られている。事前に間隔を空けておくと
+        # 429 での待ち直しより結果的に速い
+        self.interval = float(os.environ.get("GEMINI_MIN_INTERVAL", "4"))
+        self._last = 0.0
 
     def name(self) -> str:
         return f"gemini/{self.model}"
@@ -160,23 +180,44 @@ class GeminiLLM(Base):
         ]
 
     def pick_model(self) -> str:
-        """無料枠の対象である Flash 系を優先して選ぶ。"""
+        """無料枠の対象である Flash 系のうち、最も新しいものを選ぶ。
+
+        一覧はバージョン順に並んでいないため（gemini-2.5-flash が
+        gemini-3.5-flash より先に来る）、名前からバージョンを読んで比較する。
+        """
         available = self.list_models()
         if not available:
             raise RuntimeError("利用可能なモデルを取得できませんでした")
-        for want in (lambda n: "flash" in n and "lite" not in n and "preview" not in n,
-                     lambda n: "flash" in n,
-                     lambda _: True):
-            for name in available:
-                if want(name):
-                    return name
-        return available[0]
+
+        def version(name: str) -> float:
+            m = re.search(r"(\d+(?:\.\d+)?)", name)
+            return float(m.group(1)) if m else 0.0
+
+        # 画像・音声用や lite / preview は除いた素の Flash を優先する
+        plain = [n for n in available
+                 if "flash" in n and not any(x in n for x in ("lite", "preview", "image", "tts"))]
+        if plain:
+            return max(plain, key=version)
+        flash = [n for n in available if "flash" in n]
+        return max(flash, key=version) if flash else available[0]
 
     def __call__(self, prompt: str, schema: dict | None = None, max_tokens: int = 800) -> Any:
-        config: dict[str, Any] = {"temperature": 0, "maxOutputTokens": max_tokens}
+        config: dict[str, Any] = {
+            "temperature": 0,
+            # Gemini 3.x は思考トークンが maxOutputTokens を食う。実測では
+            # 「1+1は？」でも47トークン使い、予算50だと本文がゼロ件で返ってきた。
+            # 思考の分を上乗せしておく
+            "maxOutputTokens": max_tokens + 2000,
+            # thinkingBudget は 3.6-flash では 400 になる。3.x は thinkingLevel
+            "thinkingConfig": {"thinkingLevel": "LOW"},
+        }
         if schema:
             config["responseMimeType"] = "application/json"
             config["responseSchema"] = to_gemini_schema(schema)
+
+        if (gap := self.interval - (time.time() - self._last)) > 0:
+            time.sleep(gap)
+        self._last = time.time()
 
         started = time.time()
         result = post(

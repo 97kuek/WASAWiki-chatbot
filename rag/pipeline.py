@@ -15,6 +15,7 @@ LLMは呼び出し可能オブジェクトとして注入する。測定はロ�
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -89,6 +90,9 @@ titles には最も近そうなページだけを挙げてください。
         「構造設計 41st」などが返ってきた。ここで落とさないと後段が壊れる。
         """
         title = title.strip()
+        # 目次は「タイトル（別名: X）」と表示するため、モデルが注記ごと
+        # コピーしてくることがある（M2a-gemini で2件発生）。剥がしてから照合する
+        title = re.sub(r"\s*（別名:[^）]*）\s*$", "", title)
         if title in self.pages:
             return title
         if title in self.alias:

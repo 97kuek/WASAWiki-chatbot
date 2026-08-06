@@ -10,8 +10,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
+
+var aliasSuffix = regexp.MustCompile(`\s*（別名:[^）]*）\s*$`)
 
 // Chunk は検索・回答の単位。breadcrumb は「ページ名 > 見出し > 見出し」。
 type Chunk struct {
@@ -99,6 +102,9 @@ func (ix *Index) Chunk(id string) (*Chunk, *Page, bool) {
 // ここで落とさないと、存在しないページを根拠として回答してしまう。
 func (ix *Index) Resolve(name string) (*Page, bool) {
 	name = strings.TrimSpace(name)
+	// 目次は「タイトル（別名: X）」と表示するため、モデルが注記ごと
+	// コピーしてくることがある（M2a-gemini で2件発生）。剥がしてから照合する
+	name = strings.TrimSpace(aliasSuffix.ReplaceAllString(name, ""))
 	if name == "" {
 		return nil, false
 	}
