@@ -33,6 +33,13 @@ CHUNK_TARGET = 1200  # チャンクの目標サイズ
 CHUNK_MAX = 2500     # レンダリング後にこれを超えたら分割する
 CHUNK_MIN = 200      # これ未満の末尾チャンクは直前に吸収する
 
+# 個人情報のマスキング。氏名・役職・班は「40代の駆動班長は誰か」に答えるため残す。
+# 連絡先と生年月日は回答に不要な一方、外部API送信・パスワード漏洩時の露出面になる。
+MASK_PII = True
+EMAIL = re.compile(r"[\w.+-]+\s*@\s*[\w-]+(?:\.[\w-]+)+")
+BIRTHDAY = re.compile(r"\d{4}\s*[年/.\-]\s*\d{1,2}\s*[月/.\-]\s*\d{1,2}\s*日?\s*生まれ")
+PHONE = re.compile(r"(?<![\d-])0\d{1,4}[-‐（(]\d{1,4}[-‐)）]\d{3,4}(?![\d-])")
+
 IMAGE_PREFIX = re.compile(r"^\s*(ファイル|File|画像|Image)\s*:", re.I)
 CATEGORY_PREFIX = re.compile(r"^\s*(Category|カテゴリ)\s*:", re.I)
 REDIRECT = re.compile(r"^\s*#\s*(REDIRECT|転送)\s*\[\[([^\]|]+)", re.I)
@@ -211,6 +218,13 @@ def convert_tables(text: str) -> str:
 
 def clean(text: str) -> tuple[str, list[dict], list[str], list[str]]:
     """wikitext を Markdown 寄りのプレーンテキストにする。"""
+    # マスキングはパース前に行う。後段だと links やキャプションに取り残しが出る
+    # （実際 [[Mailto:...]] が内部リンク扱いで links 配列に残った）
+    if MASK_PII:
+        text = EMAIL.sub("［メールアドレス］", text)
+        text = BIRTHDAY.sub("［生年月日］", text)
+        text = PHONE.sub("［電話番号］", text)
+
     text, stash = protect(text)
     text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
     text = re.sub(r"\{\{\s*(DISPLAYTITLE|DEFAULTSORT)\s*:[^}]*\}\}", "", text, flags=re.I)

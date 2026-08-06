@@ -1,0 +1,27 @@
+{
+  "_comment": "ゴールデンデータセットのスキーマ見本。実データ（golden.json）はWiki由来の回答を含むため .gitignore 対象。",
+  "questions": [
+    {
+      "id": "q01",
+      "type": "fact | procedure | comparison | global | partial | unanswerable",
+      "question": "実際に新入生や後任から聞かれそうな質問文",
+      "expected": "期待する回答。事実型は答えそのもの、手順型は含むべき要点を書く",
+      "evidence_pages": ["根拠となるWikiページのタイトル"],
+      "evidence_chunks": [
+        "pXXX-cN 形式のチャンクID。data/index.json に対して照合すること。",
+        "ページ単位ではなくチャンク単位で持つのは、36,000字あるページがヒットしただけで",
+        "正解扱いになると Evidence Recall が測れないため（docs/01-設計方針.md §5-3）"
+      ],
+      "answerable": true,
+      "notes": "期待回答が曖昧な場合や、質問の前提が実データと食い違う場合はここに書く"
+    }
+  ],
+  "_type_guide": {
+    "fact": "単一の事実を問う。答えが一意に決まる",
+    "procedure": "手順を問う。複数チャンクにまたがることが多く all-evidence recall で見る",
+    "comparison": "複数ページを横断して差分を問う",
+    "global": "全体を見ないと答えられない。Top-k検索では原理的に答えられない種類",
+    "partial": "一部しか書かれていない。「書かれていない」と言いつつ分かる範囲を出せるかを見る",
+    "unanswerable": "Wikiに存在しない。ハルシネーション検出用。必ず数問入れる"
+  }
+}
