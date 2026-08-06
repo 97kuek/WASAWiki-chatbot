@@ -170,8 +170,25 @@ titles には最も近そうなページだけを挙げてください。
 {question}
 """
 
+    def fallback_pages(self, question: str) -> list[str]:
+        """LLMがページを1件も返せなかったときの保険。
+
+        M2b の q15 でモデルが空文字列のタイトルを3件返し、照合で全部落ちて
+        文脈ゼロになった。目次に対する素朴な字面一致で拾い直す。
+        精度は高くないが「何も答えられない」よりはよい。
+        """
+        scores: list[tuple[int, str]] = []
+        grams = {question[i : i + 2] for i in range(len(question) - 1)}
+        for title, page in self.pages.items():
+            hay = title + " " + " ".join(page["headings"]) + " " + page["lead"][:200]
+            scores.append((sum(1 for g in grams if g in hay), title))
+        scores.sort(reverse=True)
+        return [t for score, t in scores[:MAX_PAGES] if score > 0]
+
     def answer(self, question: str) -> Answer:
         titles, answerable, dropped = self.select_pages(question)
+        if not titles:
+            titles = self.fallback_pages(question)
         if not titles:
             return Answer(question, "Wikiの目次から関連するページを特定できませんでした。",
                           answerable=False, dropped_titles=dropped)

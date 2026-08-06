@@ -42,19 +42,25 @@ CITATION = re.compile(r"出典|参照|最終更新")
 FAITHFUL_SCHEMA = {
     "type": "object",
     "properties": {
+        # 理由を先に書かせる。判定を先に置くと、根拠を考える前に決めてしまい
+        # 判定基準の文をそのままオウム返しする（M2bで実際に起きた）
+        "unsupported_claim": {"type": "string"},
         "faithful": {"type": "boolean"},
-        "reason": {"type": "string"},
     },
-    "required": ["faithful", "reason"],
+    "required": ["unsupported_claim", "faithful"],
 }
 
 
 def judge_faithfulness(llm, context: str, answer: str) -> dict:
     prompt = f"""以下の「資料」と「回答」を読み、回答の内容が資料だけで裏付けられるかを判定してください。
 
-判定基準:
-- 資料に書かれていない事実を述べていたら faithful = false
-- 「記載がない」と正しく述べているのは faithful = true
+手順:
+1. 回答の中に、資料で裏付けられない具体的な記述があれば、その一文を
+   unsupported_claim にそのまま引用する。無ければ空文字列にする
+2. unsupported_claim が空なら faithful = true、そうでなければ false
+
+注意:
+- 「記載がない」と述べているだけなら faithful = true
 - 資料の要約・言い換えは faithful = true
 
 # 資料
@@ -64,7 +70,8 @@ def judge_faithfulness(llm, context: str, answer: str) -> dict:
 {answer}
 """
     result = llm(prompt, FAITHFUL_SCHEMA, 300)
-    return {"faithful": bool(result.get("faithful", False)), "reason": result.get("reason", "")}
+    claim = (result.get("unsupported_claim") or "").strip()
+    return {"faithful": not claim, "reason": claim}
 
 
 def main() -> None:

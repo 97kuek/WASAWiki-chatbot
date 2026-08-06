@@ -47,6 +47,9 @@ class OllamaLLM:
     def __call__(self, prompt: str, schema: dict | None = None, max_tokens: int = 800) -> Any:
         import time
 
+        # qwen3 のソフトスイッチ。API の think=false だけでは
+        # 閉じタグの無い思考文が本文に混ざることが M2b で分かった
+        prompt = prompt + "\n/no_think"
         payload: dict[str, Any] = {
             "model": self.model,
             "prompt": prompt,
