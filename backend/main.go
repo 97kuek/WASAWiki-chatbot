@@ -47,6 +47,15 @@ func main() {
 	switch env("LLM_PROVIDER", "ollama") {
 	case "claude":
 		client = llm.NewClaude(os.Getenv("CLAUDE_MODEL"))
+	case "gemini":
+		// ⚠️ 無料枠は送信内容が学習に使われる場合がある。対象は非公開Wikiの本文
+		key := env("GEMINI_API_KEY", os.Getenv("GOOGLE_API_KEY"))
+		if key == "" {
+			log.Fatal("GEMINI_API_KEY が未設定です")
+		}
+		client = llm.NewGemini(key, env("GEMINI_MODEL", "gemini-flash-latest"))
+	case "compat", "grok", "groq", "openrouter", "mistral":
+		client = llm.NewCompat(os.Getenv("LLM_BASE_URL"), os.Getenv("LLM_API_KEY"), os.Getenv("LLM_MODEL"))
 	default:
 		client = llm.NewOllama(
 			env("OLLAMA_ENDPOINT", "http://localhost:11434"),

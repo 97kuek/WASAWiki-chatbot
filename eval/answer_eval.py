@@ -26,7 +26,8 @@ from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from rag.llm import OllamaLLM  # noqa: E402
+from dotenv import load_dotenv  # noqa: E402
+from rag.llm import make_llm  # noqa: E402
 from rag.pipeline import Pipeline  # noqa: E402
 
 GOLDEN = Path("eval/golden.json")
@@ -76,7 +77,9 @@ def judge_faithfulness(llm, context: str, answer: str) -> dict:
 
 def main() -> None:
     questions = json.loads(GOLDEN.read_text(encoding="utf-8"))["questions"]
-    llm = OllamaLLM()
+    load_dotenv()
+    llm = make_llm()
+    print(f'モデル: {llm.name()}')
     pipeline = Pipeline(Path("data/index.json"), Path("data/toc.md"), llm)
 
     records = []

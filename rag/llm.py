@@ -1,26 +1,32 @@
-"""LLMクライアント。測定はローカル（Ollama）、本番はClaudeを想定する。
+"""LLMクライアント。パイプライン側（pipeline.py）は具象実装に依存しない。
 
-パイプライン側（pipeline.py）はこのモジュールの具象実装に依存しない。
-測定用のローカルモデルと本番モデルを差し替えても、プロンプトと段構成は変わらない。
+環境変数 LLM_PROVIDER で切り替える。
+
+  ollama    ローカル（既定）。データを外部に出さない
+  gemini    Google Gemini。無料枠あり
+  compat    OpenAI互換API。Grok(xAI) / Groq / Mistral / OpenRouter などが該当
+
+⚠️ gemini / compat の無料枠は、送信内容がモデルの学習に使われる場合がある。
+   対象は非公開Wikiの本文である。個人情報（メール・生年月日・電話番号）は
+   build_index.py でマスク済みだが、氏名・役職・契約情報は本文に残っている。
 """
 
 from __future__ import annotations
 
 import json
-import re
 import os
+import re
+import time
+import urllib.error
 import urllib.request
 from typing import Any
 
-OLLAMA_ENDPOINT = "http://localhost:11434/api/generate"
-DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:30b-a3b")
 NUM_CTX = 32768
 
 # think=false を指定しても qwen3 は思考を本文に混ぜてくることがある。
-# 本番のClaudeでは thinking ブロックが構造として分離されるため不要になるが、
-# ローカル測定では後処理で落とさないと、回答評価が思考文まで採点してしまう。
-THINK_BLOCK = re.compile(r"<think>.*?</think>", re.S | re.I)
-THINK_TAIL = re.compile(r"^.*?</think>\s*", re.S | re.I)
+# Gemini や Claude では思考が構造として分離されるため、これはローカル向けの処置。
+THINK_BLOCK = re.compile(r"(?is)<think>.*?</think>")
+THINK_TAIL = re.compile(r"(?is)^.*?</think>\s*")
 
 
 def strip_thinking(text: str) -> str:
@@ -30,49 +36,238 @@ def strip_thinking(text: str) -> str:
     return text.strip()
 
 
-class OllamaLLM:
-    """ローカル測定用。非公開Wikiのデータを外部に出さないために使う。
+def post(url: str, payload: dict, headers: dict | None = None, timeout: int = 300) -> dict:
+    body = json.dumps(payload).encode()
+    req = urllib.request.Request(url, body, {"Content-Type": "application/json", **(headers or {})})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as err:
+        detail = err.read().decode("utf-8", "replace")[:500]
+        raise RuntimeError(f"{url} が {err.code}: {detail}") from err
 
-    プロンプトの先頭に置かれた固定部分（目次）はKVキャッシュで再利用されるため、
-    2回目以降のプロンプト処理が 80秒 → 0.8秒 になる（M2aで実測）。
-    呼び出し側は目次を必ず先頭に置くこと。
-    """
 
-    def __init__(self, model: str = DEFAULT_MODEL, timeout: int = 900):
-        self.model = model
-        self.timeout = timeout
+class Base:
+    """呼び出し回数と所要時間を数える共通部分。"""
+
+    def __init__(self) -> None:
         self.calls = 0
         self.seconds = 0.0
 
-    def __call__(self, prompt: str, schema: dict | None = None, max_tokens: int = 800) -> Any:
-        import time
+    def _record(self, started: float) -> None:
+        self.calls += 1
+        self.seconds += time.time() - started
 
-        # qwen3 のソフトスイッチ。API の think=false だけでは
-        # 閉じタグの無い思考文が本文に混ざることが M2b で分かった
-        prompt = prompt + "\n/no_think"
+    def _parse(self, text: str, schema: dict | None) -> Any:
+        text = strip_thinking(text)
+        if not schema:
+            return text
+        # コードフェンスや前置きが付くことがあるのでJSON本体を取り出す
+        start, end = text.find("{"), text.rfind("}")
+        if start >= 0 and end > start:
+            text = text[start : end + 1]
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return {}  # 呼び出し側が既定値で処理する
+
+
+# ---------------------------------------------------------------- Ollama
+
+class OllamaLLM(Base):
+    """ローカル測定用。データを外部に出さない。
+
+    プロンプト先頭の固定部分（目次）はKVキャッシュで再利用され、
+    プロンプト処理が 80秒 → 0.8秒 になる（M2aで実測）。
+    """
+
+    def __init__(self, model: str | None = None, timeout: int = 900):
+        super().__init__()
+        self.model = model or os.environ.get("OLLAMA_MODEL", "qwen3:30b-a3b")
+        self.endpoint = os.environ.get("OLLAMA_ENDPOINT", "http://localhost:11434")
+        self.timeout = timeout
+
+    def name(self) -> str:
+        return f"ollama/{self.model}"
+
+    def __call__(self, prompt: str, schema: dict | None = None, max_tokens: int = 800) -> Any:
         payload: dict[str, Any] = {
             "model": self.model,
             "prompt": prompt,
             "stream": False,
-            "think": False,  # 思考トークンで出力を使い切るのを防ぐ
+            "think": False,
             "options": {"num_ctx": NUM_CTX, "temperature": 0, "num_predict": max_tokens},
         }
         if schema:
             payload["format"] = schema
+        started = time.time()
+        result = post(f"{self.endpoint}/api/generate", payload, timeout=self.timeout)
+        self._record(started)
+        return self._parse(result.get("response", ""), schema)
+
+
+# ---------------------------------------------------------------- Gemini
+
+GEMINI_TYPES = {"object": "OBJECT", "array": "ARRAY", "string": "STRING",
+                "boolean": "BOOLEAN", "integer": "INTEGER", "number": "NUMBER"}
+
+
+def to_gemini_schema(schema: dict) -> dict:
+    """JSON Schema を Gemini の responseSchema（OpenAPI 3.0 のサブセット）へ変換する。
+
+    型名が大文字である点と、maxItems などの制約が通らない点が主な差分。
+    """
+    out: dict[str, Any] = {}
+    if "type" in schema:
+        out["type"] = GEMINI_TYPES.get(schema["type"], "STRING")
+    if "properties" in schema:
+        out["properties"] = {k: to_gemini_schema(v) for k, v in schema["properties"].items()}
+    if "items" in schema:
+        out["items"] = to_gemini_schema(schema["items"])
+    if "required" in schema:
+        out["required"] = schema["required"]
+    return out
+
+
+class GeminiLLM(Base):
+    """Google Gemini。
+
+    モデル名は変わりやすく、情報源によって食い違うため固定しない。
+    キーで models API に問い合わせて、実際に使えるものから選ぶ。
+    一覧は `python -m rag.llm` で確認できる。
+    """
+
+    BASE = "https://generativelanguage.googleapis.com/v1beta"
+
+    def __init__(self, model: str | None = None, timeout: int = 300):
+        super().__init__()
+        self.key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY", "")
+        if not self.key:
+            raise RuntimeError("GEMINI_API_KEY を .env に設定してください")
+        self.timeout = timeout
+        self.model = model or os.environ.get("GEMINI_MODEL") or self.pick_model()
+
+    def name(self) -> str:
+        return f"gemini/{self.model}"
+
+    def list_models(self) -> list[str]:
+        with urllib.request.urlopen(f"{self.BASE}/models?key={self.key}&pageSize=200", timeout=30) as r:
+            data = json.load(r)
+        return [
+            m["name"].removeprefix("models/")
+            for m in data.get("models", [])
+            if "generateContent" in m.get("supportedGenerationMethods", [])
+        ]
+
+    def pick_model(self) -> str:
+        """無料枠の対象である Flash 系を優先して選ぶ。"""
+        available = self.list_models()
+        if not available:
+            raise RuntimeError("利用可能なモデルを取得できませんでした")
+        for want in (lambda n: "flash" in n and "lite" not in n and "preview" not in n,
+                     lambda n: "flash" in n,
+                     lambda _: True):
+            for name in available:
+                if want(name):
+                    return name
+        return available[0]
+
+    def __call__(self, prompt: str, schema: dict | None = None, max_tokens: int = 800) -> Any:
+        config: dict[str, Any] = {"temperature": 0, "maxOutputTokens": max_tokens}
+        if schema:
+            config["responseMimeType"] = "application/json"
+            config["responseSchema"] = to_gemini_schema(schema)
 
         started = time.time()
-        request = urllib.request.Request(
-            OLLAMA_ENDPOINT, json.dumps(payload).encode(), {"Content-Type": "application/json"}
+        result = post(
+            f"{self.BASE}/models/{self.model}:generateContent?key={self.key}",
+            {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": config},
+            timeout=self.timeout,
         )
-        response = json.load(urllib.request.urlopen(request, timeout=self.timeout))
-        self.calls += 1
-        self.seconds += time.time() - started
+        self._record(started)
 
-        text = strip_thinking(response.get("response", ""))
-        if not schema:
-            return text
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            # スキーマを指定しても壊れることがある。呼び出し側が既定値で処理する
-            return {}
+        candidates = result.get("candidates") or []
+        if not candidates:
+            return {} if schema else ""
+        parts = candidates[0].get("content", {}).get("parts") or []
+        return self._parse("".join(p.get("text", "") for p in parts), schema)
+
+
+# ---------------------------------------------------------------- OpenAI互換
+
+class CompatLLM(Base):
+    """OpenAI互換API。Grok(xAI) / Groq / Mistral / OpenRouter などが同じ形式で使える。
+
+    LLM_BASE_URL / LLM_API_KEY / LLM_MODEL で指定する。例:
+      xAI Grok  : https://api.x.ai/v1
+      Groq      : https://api.groq.com/openai/v1
+      OpenRouter: https://openrouter.ai/api/v1
+    """
+
+    def __init__(self, model: str | None = None, timeout: int = 300):
+        super().__init__()
+        self.base = os.environ.get("LLM_BASE_URL", "").rstrip("/")
+        self.key = os.environ.get("LLM_API_KEY", "")
+        self.model = model or os.environ.get("LLM_MODEL", "")
+        if not (self.base and self.key and self.model):
+            raise RuntimeError("LLM_BASE_URL / LLM_API_KEY / LLM_MODEL を .env に設定してください")
+        self.timeout = timeout
+
+    def name(self) -> str:
+        return f"compat/{self.model}"
+
+    def __call__(self, prompt: str, schema: dict | None = None, max_tokens: int = 800) -> Any:
+        if schema:
+            # json_schema モードは提供元によって対応が割れる。
+            # 広く通る json_object と、プロンプトでのスキーマ指示を併用する
+            prompt += ("\n\n次のJSONスキーマに厳密に従うJSONだけを出力してください。"
+                       "前置き・説明・コードフェンスは書かないこと。\n"
+                       + json.dumps(schema, ensure_ascii=False))
+
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0,
+            "max_tokens": max_tokens,
+        }
+        if schema:
+            payload["response_format"] = {"type": "json_object"}
+
+        started = time.time()
+        result = post(f"{self.base}/chat/completions", payload,
+                      {"Authorization": f"Bearer {self.key}"}, timeout=self.timeout)
+        self._record(started)
+        choices = result.get("choices") or []
+        text = choices[0].get("message", {}).get("content", "") if choices else ""
+        return self._parse(text, schema)
+
+
+# ----------------------------------------------------------------
+
+def make_llm() -> Any:
+    """LLM_PROVIDER に従ってクライアントを組み立てる。"""
+    provider = os.environ.get("LLM_PROVIDER", "ollama").lower()
+    if provider == "gemini":
+        return GeminiLLM()
+    if provider in ("compat", "grok", "groq", "openrouter", "mistral"):
+        return CompatLLM()
+    return OllamaLLM()
+
+
+if __name__ == "__main__":
+    # 使えるモデル名を確認する: python -m rag.llm
+    from dotenv import load_dotenv
+
+    load_dotenv()
+    key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not key:
+        raise SystemExit("GEMINI_API_KEY が未設定です。.env に追記してください")
+
+    probe = GeminiLLM.__new__(GeminiLLM)
+    Base.__init__(probe)
+    probe.key, probe.timeout = key, 30
+    names = probe.list_models()
+    print(f"generateContent が使えるモデル {len(names)}件:")
+    for n in names:
+        print(f"  {n}")
+    print(f"\n自動選択されるモデル: {probe.pick_model()}")
