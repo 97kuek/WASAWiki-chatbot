@@ -15,3 +15,6 @@ __pycache__/
 .DS_Store
 node_modules/
 dist/
+
+# ゴールデンデータ（Wiki由来の回答を含む。golden.example.json のみ公開）
+eval/golden.json
