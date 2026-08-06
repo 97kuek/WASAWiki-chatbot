@@ -1,0 +1,160 @@
+"""M2b: エンドツーエンドの回答品質を測る。
+
+設計方針 docs/01-設計方針.md §5-3 に対応。評価は2層に分ける。
+
+  1. ルールベース（決定的・無料）
+     - 出典を明示したか
+     - 回答不能な問いで「記載がない」と言えたか（ハルシネーション検出）
+     - 検索段でのページ選択が当たっているか
+
+  2. LLM-as-a-Judge（Faithfulness）
+     - 回答が渡した資料だけで裏付けられるか
+     - ⚠️ **判定器がローカルモデルの間は暫定値**。設計方針 §5-3 の通り、
+       人手評価との一致率（κ）を測るまで、この数字は指標として信用しない
+
+  ollama serve  # OLLAMA_CONTEXT_LENGTH=32768 で起動しておく
+  python eval/answer_eval.py
+出力: eval/answers.json（人手レビュー用。Wiki由来の内容を含むため .gitignore 対象）
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from rag.llm import OllamaLLM  # noqa: E402
+from rag.pipeline import Pipeline  # noqa: E402
+
+GOLDEN = Path("eval/golden.json")
+OUT = Path("eval/answers.json")
+
+# 「記載がない」と言えているかの検出。表現の揺れを拾う
+NO_INFO = re.compile(
+    r"記載(が|は)?(あり|ござい)?ませ|記述(が|は)?(あり|ござい)?ませ|書かれてい(ませ|ない)|"
+    r"見当たりませ|情報(が|は)(あり|ござい)?ませ|特定できませ|含まれてい(ませ|ない)"
+)
+CITATION = re.compile(r"出典|参照|最終更新")
+
+FAITHFUL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "faithful": {"type": "boolean"},
+        "reason": {"type": "string"},
+    },
+    "required": ["faithful", "reason"],
+}
+
+
+def judge_faithfulness(llm, context: str, answer: str) -> dict:
+    prompt = f"""以下の「資料」と「回答」を読み、回答の内容が資料だけで裏付けられるかを判定してください。
+
+判定基準:
+- 資料に書かれていない事実を述べていたら faithful = false
+- 「記載がない」と正しく述べているのは faithful = true
+- 資料の要約・言い換えは faithful = true
+
+# 資料
+{context}
+
+# 回答
+{answer}
+"""
+    result = llm(prompt, FAITHFUL_SCHEMA, 300)
+    return {"faithful": bool(result.get("faithful", False)), "reason": result.get("reason", "")}
+
+
+def main() -> None:
+    questions = json.loads(GOLDEN.read_text(encoding="utf-8"))["questions"]
+    llm = OllamaLLM()
+    pipeline = Pipeline(Path("data/index.json"), Path("data/toc.md"), llm)
+
+    records = []
+    stats = {
+        "page_hit": 0, "page_scored": 0,
+        "cited": 0, "said_no_info": 0, "should_say_no_info": 0,
+        "wrongly_said_no_info": 0, "faithful": 0,
+        "dropped": [],
+    }
+    per_type = defaultdict(lambda: {"n": 0, "page_hit": 0, "faithful": 0})
+
+    for q in questions:
+        answer = pipeline.answer(q["question"])
+        gold = set(q["evidence_pages"])
+        picked = set(answer.pages)
+
+        # --- ルールベース ---
+        page_hit = bool(gold & picked) if gold else None
+        if page_hit is not None:
+            stats["page_scored"] += 1
+            stats["page_hit"] += page_hit
+        cited = bool(CITATION.search(answer.text))
+        no_info = bool(NO_INFO.search(answer.text))
+        stats["cited"] += cited
+        stats["dropped"] += [(q["id"], t) for t in answer.dropped_titles]
+
+        if not q["answerable"]:
+            stats["should_say_no_info"] += 1
+            stats["said_no_info"] += no_info
+        elif no_info:
+            # 答えられる問いなのに「記載がない」と言ってしまった（取りこぼし）
+            stats["wrongly_said_no_info"] += 1
+
+        # --- LLM-as-a-Judge（暫定） ---
+        context = "\n\n".join(pipeline.chunks[c]["text"] for c in answer.chunk_ids)
+        verdict = judge_faithfulness(llm, context[:20000], answer.text) if answer.chunk_ids else \
+            {"faithful": True, "reason": "資料なし"}
+        stats["faithful"] += verdict["faithful"]
+
+        bucket = per_type[q["type"]]
+        bucket["n"] += 1
+        bucket["page_hit"] += bool(page_hit)
+        bucket["faithful"] += verdict["faithful"]
+
+        records.append({
+            "id": q["id"], "type": q["type"], "question": q["question"],
+            "expected": q["expected"], "answer": answer.text,
+            "pages": answer.pages, "gold_pages": q["evidence_pages"],
+            "chunk_ids": answer.chunk_ids, "gold_chunks": q["evidence_chunks"],
+            "page_hit": page_hit, "cited": cited, "said_no_info": no_info,
+            "answerable_gold": q["answerable"], "faithful": verdict["faithful"],
+            "faithful_reason": verdict["reason"], "context_chars": answer.context_chars,
+            "dropped_titles": answer.dropped_titles,
+        })
+        mark = "○" if page_hit is not False else "×"
+        print(f"  {mark} {q['id']} 文脈{answer.context_chars:>6,}字 "
+              f"{'出典○' if cited else '出典×'} {'忠実○' if verdict['faithful'] else '忠実×'} "
+              f"{' / '.join(answer.pages)}")
+
+    OUT.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    n = len(questions)
+    ps = stats["page_scored"]
+    print(f"\n{'=' * 66}\nM2b: エンドツーエンドの回答品質（{n}問）\n{'=' * 66}")
+    print("【ルールベース（決定的）】")
+    print(f"  ページ選択が的中     : {stats['page_hit']}/{ps} = {stats['page_hit'] / ps * 100:.1f}%")
+    print(f"  出典を明示           : {stats['cited']}/{n} = {stats['cited'] / n * 100:.1f}%")
+    print(f"  回答不能な問いで「記載なし」と言えた : "
+          f"{stats['said_no_info']}/{stats['should_say_no_info']}")
+    print(f"  答えられる問いで誤って「記載なし」   : {stats['wrongly_said_no_info']}")
+    print(f"  照合で落とした架空ページ名          : {len(stats['dropped'])}件 {stats['dropped'] or ''}")
+    print(f"  文脈量               : 中央値 "
+          f"{sorted(r['context_chars'] for r in records)[n // 2]:,}字 / "
+          f"最大 {max(r['context_chars'] for r in records):,}字")
+
+    print("\n【LLM-as-a-Judge（⚠️ 判定器がローカルモデルのため暫定値）】")
+    print(f"  Faithfulness         : {stats['faithful']}/{n} = {stats['faithful'] / n * 100:.1f}%")
+
+    print("\n種別ごと（ページ的中 / 忠実性）:")
+    for qtype, v in sorted(per_type.items()):
+        print(f"  {qtype:<14} {v['page_hit']:>2}/{v['n']:<2}   {v['faithful']:>2}/{v['n']}")
+
+    print(f"\nLLM呼び出し {llm.calls}回 / 合計 {llm.seconds:.0f}秒")
+    print(f"回答全文は {OUT} に保存（人手レビュー用）")
+
+
+if __name__ == "__main__":
+    main()
