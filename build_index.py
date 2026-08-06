@@ -344,6 +344,31 @@ def split_text(body: str, limit: int) -> list[str]:
     return [p.strip() for p in out if p.strip()]
 
 
+def outline(text: str) -> tuple[str, list[str]]:
+    """目次用に、リード文と最上位見出しの一覧を取り出す。
+
+    見出し一覧は目次の情報密度を大きく上げる。「駆動・フレーム班」という
+    タイトルだけでは中身が分からないが、「40代引き継ぎ / ギア比 / チェーン」
+    まで見えれば、どのページを開くべきかLLMが判断できる。
+    """
+    sections = split_sections(text)
+    if not sections:
+        return "", []
+
+    levels = [s["level"] for s in sections if s["level"] > 0]
+    top = min(levels) if levels else 0
+    headings = [s["heading"] for s in sections if s["level"] == top and s["heading"]]
+
+    # リード文は本文の書き出し。表・図・箇条書き記号は目次では邪魔になる
+    lines = [
+        ln.strip().lstrip("*#:;").strip()
+        for ln in sections[0]["body"].split("\n")
+        if ln.strip() and not ln.lstrip().startswith(("|", "［図:", "---"))
+    ]
+    lead = re.sub(r"\s+", " ", " ".join(lines)).strip()
+    return lead, headings
+
+
 def common_prefix(paths: list[list[str]]) -> list[str]:
     """チャンクに含まれる全節に共通する見出し階層。これが正しいパンくずになる。"""
     if not paths:
@@ -455,8 +480,18 @@ def extract_gen(title: str, body: str) -> dict:
     return {"gen": None, "gen_source": None, "gens_mentioned": []}
 
 
+# 「40代」「42nd」「40 Kosei Ozaki」のような、代のまとめページ・人物ページ
+GEN_PAGE = re.compile(r"^\d{2}\s*(代|st|nd|rd|th)?(\s|$)")
+
+
 def extract_team(title: str, body: str) -> str | None:
-    """班・カテゴリを推定する。タイトル優先、無ければ本文冒頭で補う。"""
+    """班・カテゴリを推定する。タイトル優先、無ければ本文冒頭で補う。
+
+    代のまとめページ・人物ページを先に弾くのが重要。本文に「空力設計」と
+    書かれた名簿ページが空力班に混ざると、班フィルタが信用できなくなる。
+    """
+    if GEN_PAGE.match(unicodedata.normalize("NFKC", title)):
+        return "代まとめ・人物"
     for scope in (title, body[:400]):
         for team, keywords in TEAM_RULES:
             if any(kw in scope for kw in keywords):
@@ -483,6 +518,7 @@ def main() -> None:
     for raw in articles:
         body, images, links, cats = clean(raw["wikitext"])
         is_stub = len(body) < STUB_CHARS
+        lead, headings = outline(body)
         pages.append(
             {
                 "id": raw["pageid"],
@@ -496,6 +532,8 @@ def main() -> None:
                 "categories": cats,
                 "chars": len(body),
                 "is_stub": is_stub,
+                "lead": lead,
+                "headings": headings,
                 "images": images,
                 "links": links,
                 # スタブも目次には載せるが、検索対象のチャンクは作らない
