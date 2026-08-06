@@ -1,0 +1,17 @@
+# 認証情報
+.env
+
+# Wikiの本文・生成物（非公開Wikiの内容そのもの。絶対にコミットしない）
+dump/
+data/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# ローカルのエディタ／ツール設定
+.claude/
+.DS_Store
+node_modules/
+dist/
