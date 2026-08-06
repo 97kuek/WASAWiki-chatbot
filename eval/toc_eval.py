@@ -1,0 +1,158 @@
+"""M2a: 目次方式によるページ選択の精度を測る（検索層なし）。
+
+設計方針 docs/01-設計方針.md §2 の Phase 1（L1 目次層）の検証。
+「目次だけをコンテキストに置いて、LLMが正しいページを選べるか」を測り、
+BM25ベースライン（docs/02-測定結果.md M1）と**ページ単位で**突き合わせる。
+
+チャンク単位ではなくページ単位で比較するのは、目次方式が返すのがページだからである。
+指標の粒度を揃えないと比較にならない。
+
+**目次を必ずプロンプトの先頭に固定する。** llama.cpp のKVキャッシュが再利用され、
+プロンプト処理が 80秒 → 0.8秒 になる（実測）。本番のGo実装でも同じ構造にすること。
+
+  ollama serve  # OLLAMA_CONTEXT_LENGTH=32768 で起動しておく
+  python eval/toc_eval.py
+"""
+
+from __future__ import annotations
+
+import json
+import time
+import urllib.request
+from collections import defaultdict
+from pathlib import Path
+
+INDEX = Path("data/index.json")
+TOC = Path("data/toc.md")
+GOLDEN = Path("eval/golden.json")
+
+MODEL = "qwen3:30b-a3b"
+ENDPOINT = "http://localhost:11434/api/generate"
+TOP_N = 3  # 選ばせるページ数。BM25の Page Recall@3 と比較する
+
+SCHEMA = {
+    "type": "object",
+    "properties": {
+        "titles": {"type": "array", "items": {"type": "string"}, "maxItems": TOP_N},
+        "answerable": {"type": "boolean"},
+    },
+    "required": ["titles", "answerable"],
+}
+
+INSTRUCTION = f"""---
+上はWikiの目次です。次の質問に答えるために読むべきページを、目次のタイトルから
+最大{TOP_N}件選んでください。関連が薄いものを埋め合わせで入れないこと。
+
+目次を見る限りWikiに答えが存在しないと判断できる場合は、answerable を false にし、
+titles には最も近そうなページだけを挙げてください。
+
+質問: """
+
+
+def select(toc: str, question: str) -> tuple[dict, float]:
+    body = json.dumps(
+        {
+            "model": MODEL,
+            "prompt": toc + INSTRUCTION + question,  # 目次を先頭に固定（キャッシュのため）
+            "stream": False,
+            "think": False,
+            "format": SCHEMA,
+            "options": {"num_ctx": 32768, "temperature": 0, "num_predict": 200},
+        }
+    ).encode()
+    started = time.time()
+    request = urllib.request.Request(ENDPOINT, body, {"Content-Type": "application/json"})
+    response = json.load(urllib.request.urlopen(request, timeout=900))
+    try:
+        parsed = json.loads(response["response"])
+    except json.JSONDecodeError:
+        parsed = {"titles": [], "answerable": True}
+    return parsed, time.time() - started
+
+
+def main() -> None:
+    index = json.loads(INDEX.read_text(encoding="utf-8"))
+    questions = json.loads(GOLDEN.read_text(encoding="utf-8"))["questions"]
+    toc = TOC.read_text(encoding="utf-8")
+
+    known = {p["title"] for p in index["pages"]}
+    chunks_of = {p["title"]: len(p["chunks"]) for p in index["pages"]}
+    chars_of = {p["title"]: p["chars"] for p in index["pages"]}
+
+    scored = [q for q in questions if q["evidence_pages"]]
+    print(f"目次 {len(toc):,}字 / 設問 {len(questions)}問（ページ採点対象 {len(scored)}問）")
+    print(f"モデル: {MODEL}\n")
+
+    hit_any = hit_all = 0
+    hit_top1 = 0
+    hallucinated: list[tuple[str, str]] = []
+    per_type: dict[str, dict[str, int]] = defaultdict(lambda: {"n": 0, "hit": 0})
+    fed_chars: list[int] = []
+    misses: list[tuple[str, str, list[str], list[str]]] = []
+    answerable_correct = 0
+    elapsed = 0.0
+
+    for q in questions:
+        result, dt = select(toc, q["question"])
+        elapsed += dt
+        titles = [t.strip() for t in result.get("titles", []) if t.strip()]
+
+        # 目次に無いタイトルを返していないか（ハルシネーション）
+        for t in titles:
+            if t not in known:
+                hallucinated.append((q["id"], t))
+
+        # answerable の判定が合っているか
+        if result.get("answerable") == q["answerable"]:
+            answerable_correct += 1
+
+        fed_chars.append(sum(chars_of.get(t, 0) for t in titles))
+
+        if q["evidence_pages"]:
+            gold = set(q["evidence_pages"])
+            picked = set(titles)
+            per_type[q["type"]]["n"] += 1
+            if gold & picked:
+                hit_any += 1
+                per_type[q["type"]]["hit"] += 1
+            if gold <= picked:
+                hit_all += 1
+            if titles and titles[0] in gold:
+                hit_top1 += 1
+            if not (gold & picked):
+                misses.append((q["id"], q["question"][:30], sorted(gold), titles))
+
+        mark = "○" if not q["evidence_pages"] or set(q["evidence_pages"]) & set(titles) else "×"
+        print(f"  {mark} {q['id']} {dt:4.1f}s  {' / '.join(titles) or '(なし)'}")
+
+    n = len(scored)
+    print(f"\n{'=' * 64}\nM2a: 目次方式によるページ選択（上位{TOP_N}件）\n{'=' * 64}")
+    print(f"Page Recall@{TOP_N}      : {hit_any}/{n} = {hit_any / n * 100:.1f}%")
+    print(f"All-Pages Recall@{TOP_N} : {hit_all}/{n} = {hit_all / n * 100:.1f}%")
+    print(f"1位が正解            : {hit_top1}/{n} = {hit_top1 / n * 100:.1f}%")
+    print(f"回答可否の判定        : {answerable_correct}/{len(questions)} "
+          f"= {answerable_correct / len(questions) * 100:.1f}%")
+    print(f"存在しないページ名     : {len(hallucinated)}件 {hallucinated or ''}")
+    print(f"選択ページの合計文字数 : 中央値 {sorted(fed_chars)[len(fed_chars) // 2]:,}字 "
+          f"/ 最大 {max(fed_chars):,}字")
+    print(f"所要                 : 合計 {elapsed:.0f}秒 / 平均 {elapsed / len(questions):.1f}秒")
+
+    print("\n種別ごとの Hit:")
+    for qtype, v in sorted(per_type.items()):
+        print(f"  {qtype:<14} {v['hit']:>2}/{v['n']:<2} {'#' * round(v['hit'] / v['n'] * 20)}")
+
+    if misses:
+        print(f"\n選べなかった質問 ({len(misses)}件):")
+        for qid, text, gold, got in misses:
+            print(f"  {qid} {text}")
+            print(f"      正解: {' / '.join(gold)}")
+            print(f"      選択: {' / '.join(got) or '(なし)'}")
+
+    print(f"\n{'=' * 64}\nBM25ベースライン（M1）との比較 ※ページ単位で揃えてある\n{'=' * 64}")
+    print(f"  BM25 Page Recall@3 : 69.0%")
+    print(f"  BM25 Page Recall@5 : 72.4%")
+    print(f"  目次方式  @{TOP_N}       : {hit_any / n * 100:.1f}%")
+
+
+if __name__ == "__main__":
+    main()
