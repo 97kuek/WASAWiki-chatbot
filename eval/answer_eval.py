@@ -40,6 +40,30 @@ NO_INFO = re.compile(
 )
 CITATION = re.compile(r"出典|参照|最終更新")
 
+
+def body_only(text: str) -> str:
+    """出典欄を除いた本文。出典に含まれる語で判定が揺れるのを防ぐ。"""
+    return re.sub(r"出典[:：].*", "", text, flags=re.S).strip()
+
+
+def answered_well(qtype: str, text: str) -> bool:
+    """回答の出し方が種別に対して適切かを判定する。
+
+    ⚠️ 当初は「本文に『記載がありません』が出たら拒否」と一律に数えていたが、
+    プロンプトは「何が書かれていて何が書かれていないかを分けて述べる」と
+    指示している。つまり**指示どおりに答えた回答ほど誤検知される**構造だった。
+    種別ごとに基準を分ける。
+    """
+    body = body_only(text)
+    says_missing = bool(NO_INFO.search(body))
+    if qtype == "unanswerable":
+        return says_missing and len(body) < 300          # 明確に断る
+    if qtype == "partial":
+        return says_missing and len(body) >= 120         # 欠落を認めつつ中身も出す
+    if qtype == "false_premise":
+        return says_missing or "ではなく" in body        # 前提の誤りを指摘する
+    return not (says_missing and len(body) < 160)        # 実質的に答えている
+
 FAITHFUL_SCHEMA = {
     "type": "object",
     "properties": {
@@ -102,16 +126,12 @@ def main() -> None:
             stats["page_scored"] += 1
             stats["page_hit"] += page_hit
         cited = bool(CITATION.search(answer.text))
-        no_info = bool(NO_INFO.search(answer.text))
+        no_info = not answered_well(q["type"], answer.text)
         stats["cited"] += cited
         stats["dropped"] += [(q["id"], t) for t in answer.dropped_titles]
 
-        if not q["answerable"]:
-            stats["should_say_no_info"] += 1
-            stats["said_no_info"] += no_info
-        elif no_info:
-            # 答えられる問いなのに「記載がない」と言ってしまった（取りこぼし）
-            stats["wrongly_said_no_info"] += 1
+        stats["should_say_no_info"] += 1
+        stats["said_no_info"] += not no_info  # 種別に対して適切に答えられたか
 
         # --- LLM-as-a-Judge（暫定） ---
         context = "\n\n".join(pipeline.chunks[c]["text"] for c in answer.chunk_ids)
@@ -147,9 +167,9 @@ def main() -> None:
     print("【ルールベース（決定的）】")
     print(f"  ページ選択が的中     : {stats['page_hit']}/{ps} = {stats['page_hit'] / ps * 100:.1f}%")
     print(f"  出典を明示           : {stats['cited']}/{n} = {stats['cited'] / n * 100:.1f}%")
-    print(f"  回答不能な問いで「記載なし」と言えた : "
-          f"{stats['said_no_info']}/{stats['should_say_no_info']}")
-    print(f"  答えられる問いで誤って「記載なし」   : {stats['wrongly_said_no_info']}")
+    print(f"  回答の出し方が種別に対して適切     : "
+          f"{stats['said_no_info']}/{stats['should_say_no_info']} "
+          f"= {stats['said_no_info'] / stats['should_say_no_info'] * 100:.1f}%")
     print(f"  照合で落とした架空ページ名          : {len(stats['dropped'])}件 {stats['dropped'] or ''}")
     print(f"  文脈量               : 中央値 "
           f"{sorted(r['context_chars'] for r in records)[n // 2]:,}字 / "
