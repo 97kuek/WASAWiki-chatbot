@@ -1,4 +1,4 @@
-# WASAWiki-chatbot
+# WASA Chat
 
 > 状態： 設計・検証フェーズ
 
@@ -85,7 +85,8 @@ docker compose up --build   # → http://localhost:8080
 - 質問は右寄せの吹き出し、回答はMarkdownとTeX数式で表示する
 - 入力欄は画面下部に固定し、`Enter` で送信、`Shift + Enter` で改行する
 - チャット履歴は現在のタブ内だけに保存し、タブを閉じたときとログアウト時に消去する
-- PCは履歴と会話の2カラム、スマートフォンは履歴を上部に表示する
+- PCは履歴と会話の2カラムで、履歴欄は折りたためる。狭い画面では重ねて開く
+- 右上のサポート先は `VITE_SUPPORT_URL` で変更できる
 
 ### 環境変数
 
@@ -95,7 +96,8 @@ docker compose up --build   # → http://localhost:8080
 | `WIKI_USER` | (なし) | Wiki取得と実Wiki認証テストに使う通常アカウントの利用者名 |
 | `WIKI_PASS` | (なし) | 上記通常アカウントのパスワード。`.env` だけに置く |
 | `SESSION_SECRET` | 自動生成 | Cookie署名鍵。未設定だと再起動で全員ログアウト |
-| `DAILY_LIMIT` | 30 | 利用者ひとりあたりの1日の質問数。API費用の上限装置 |
+| `DAILY_LIMIT` | 30 | 利用者ひとりあたり・日本時間1日の質問数。API費用の安全弁 |
+| `VITE_SUPPORT_URL` | WASA公式サイト | 画面右上のサポートリンク |
 | `LLM_PROVIDER` | `ollama` | `claude` にすると本番モデルを使う |
 | `CLAUDE_MODEL` | `claude-opus-5` | 費用優先なら `claude-sonnet-5` |
 | `DATA_DIR` | `data` | index.json と toc.md の置き場所 |

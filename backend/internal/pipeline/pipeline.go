@@ -12,8 +12,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/97kuek/WASAWiki-chatbot/backend/internal/index"
-	"github.com/97kuek/WASAWiki-chatbot/backend/internal/llm"
+	"github.com/97kuek/wasa-chat/backend/internal/index"
+	"github.com/97kuek/wasa-chat/backend/internal/llm"
 )
 
 const (

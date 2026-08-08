@@ -48,7 +48,7 @@ SITEMAPS = {"page-sitemap.xml": "固定ページ", "post-sitemap.xml": "投稿"}
 OUT = Path("dump/site.jsonl")
 DELAY = 1.0  # 秒。縮めないこと
 # HTTPヘッダは latin-1 しか通らないのでASCIIで書く（日本語だと送信時に落ちる）
-UA = "WASAWikiChatbot/0.1 (internal handover chatbot for WASA; cites with source links)"
+UA = "WASAChat/0.1 (internal handover chatbot for WASA; cites with source links)"
 
 # 本文の終わりを示す目印。ここから先はテーマの付属物なので捨てる
 TAIL_MARKERS = (

@@ -1,5 +1,5 @@
 {
-  "name": "wasa-wiki-chatbot-web",
+  "name": "wasa-chat-web",
   "private": true,
   "type": "module",
   "scripts": {

@@ -17,9 +17,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/97kuek/WASAWiki-chatbot/backend/internal/index"
-	"github.com/97kuek/WASAWiki-chatbot/backend/internal/pipeline"
-	"github.com/97kuek/WASAWiki-chatbot/backend/internal/wiki"
+	"github.com/97kuek/wasa-chat/backend/internal/index"
+	"github.com/97kuek/wasa-chat/backend/internal/pipeline"
+	"github.com/97kuek/wasa-chat/backend/internal/wiki"
 )
 
 const (
@@ -267,7 +267,7 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	_ = json.NewEncoder(w).Encode(body)
 }
 
-// limiter はセッションごとの1日の質問数を数える。
+// limiter は利用者ごとの1日の質問数を数える。
 //
 // メモリ上に持つため、Cloud Run が min-instances=0 でコールドスタートすると
 // カウンタは失われる。上限を厳密に守る仕組みではなく、暴走を止める安全弁である。
@@ -283,7 +283,10 @@ func newLimiter(limit int) *limiter {
 	return &limiter{limit: limit, day: today(), used: map[string]int{}}
 }
 
-func today() string { return time.Now().UTC().Format("2006-01-02") }
+// 画面の「本日」と一致させるため、Cloud RunのUTCではなく日本時間で日付を切り替える。
+var japanTime = time.FixedZone("JST", 9*60*60)
+
+func today() string { return time.Now().In(japanTime).Format("2006-01-02") }
 
 func (l *limiter) rollover() {
 	if d := today(); d != l.day {
