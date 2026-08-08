@@ -99,7 +99,8 @@ docker compose up --build   # → http://localhost:8080
 | `LLM_PROVIDER` | `ollama` | 本番でGeminiを使う場合は `gemini` |
 | `GEMINI_API_KEY` | (なし) | WASAで共有するGeminiプロジェクトのAPIキー。サーバーの`.env`だけに置く |
 | `GEMINI_MODEL` | `gemini-flash-latest` | Geminiのモデル名 |
-| `GEMINI_PAID_TIER` | `false` | 課金有効プロジェクトの確認フラグ。Cloud RunでGeminiを使う場合は確認後に`true`が必須 |
+| `GEMINI_PAID_TIER` | `false` | Gemini有料枠を確認した場合だけ`true`にする |
+| `GEMINI_FREE_TIER_APPROVED` | `false` | 非公開WikiをGemini無料枠へ送る組織承認。2026-08-08のWASA会議で代表・PMが承認 |
 | `GEMINI_MIN_INTERVAL` | 4 | Goバックエンド全体でGeminiリクエスト間に空ける秒数 |
 | `GEMINI_MAX_RETRIES` | 2 | 短時間の429、503、通信失敗時の追加試行回数。日次上限は再試行しない |
 | `VITE_WIKI_URL` | 本Wiki | プロフィールメニューから開くWiki |
