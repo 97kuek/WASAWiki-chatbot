@@ -80,7 +80,8 @@ docker compose up --build   # → http://localhost:8080
 - ログインはWASA Wikiの通常の利用者名・パスワードだけを使う
 - 質問は右寄せの吹き出し、回答はMarkdownとTeX数式で表示する
 - 入力欄は画面下部に固定し、`Enter` で送信、`Shift + Enter` で改行する
-- チャット履歴は現在のタブ内だけに保存し、タブを閉じたときとログアウト時に消去する
+- チャット履歴はWiki利用者ごとにFirestoreへ最大30件保存し、別端末でのログイン時にも同期する
+- Firestore導入前に現在のタブへ残っていた履歴は、初回ログイン時に自動移行する
 - PCは履歴と会話の2カラムで、履歴欄は折りたためる。狭い画面では重ねて開く
 - 履歴は今日、昨日、過去7日間、年月で分け、各履歴からピン留め、タイトル変更、共有、削除ができる
 - ベルからリポジトリ管理のお知らせ、利用者アイコンからWikiとログアウトを開く
@@ -93,8 +94,9 @@ docker compose up --build   # → http://localhost:8080
 | `WIKI_API` | 本Wikiのapi.php | Wiki取得とログイン時の照合先 |
 | `WIKI_USER` | (なし) | Wiki取得と実Wiki認証テストに使う通常アカウントの利用者名 |
 | `WIKI_PASS` | (なし) | 上記通常アカウントのパスワード。`.env` だけに置く |
-| `SESSION_SECRET` | 自動生成 | Cookie署名鍵。本番では固定値が必須。未設定だと再起動で全員ログアウトし、当日の回数も復元できない |
+| `SESSION_SECRET` | 自動生成 | Cookie署名とFirestore上の利用者識別に使う固定鍵。本番では固定値が必須。変更するとログアウトし、既存履歴を参照できなくなる |
 | `DAILY_LIMIT` | 30 | 利用者ひとりあたり・日本時間1日の質問数。API費用の安全弁 |
+| `FIRESTORE_PROJECT_ID` | (なし) | 利用回数と最大30件のチャット履歴を端末間同期するGoogle Cloudプロジェクト。本番では必須 |
 | `ALLOW_ORIGIN` | (なし) | 本番のCloudflare Pages URL。複数はカンマ区切り。Cloud Runでは必須で、許可外OriginのPOSTを拒否する |
 | `LLM_PROVIDER` | `ollama` | 本番でGeminiを使う場合は `gemini` |
 | `GEMINI_API_KEY` | (なし) | WASAで共有するGeminiプロジェクトのAPIキー。サーバーの`.env`だけに置く |
