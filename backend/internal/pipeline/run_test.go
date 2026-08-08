@@ -85,6 +85,44 @@ func testIndexWithTOC(t *testing.T, toc string) *index.Index {
 	return ix
 }
 
+// 型番検索のテスト用。質問はハイフン無し、本文はハイフン有りにして、
+// 目次選択だけでは再現できなかったTR797の表記揺れを固定する。
+func testIdentifierIndex(t *testing.T) *index.Index {
+	t.Helper()
+	dir := t.TempDir()
+	payload := map[string]any{"pages": []map[string]any{
+		{
+			"id": "1", "source": "wiki", "title": "人物ページ", "url": "https://wiki.example/person",
+			"last_edited": "2026-04-01", "team": "代まとめ・人物", "chars": 100,
+			"chunks": []map[string]any{
+				{"id": "p1-c0", "breadcrumb": "人物ページ", "text": "空力設計について相談できます。", "chars": 15},
+			},
+		},
+		{
+			"id": "2", "source": "wiki", "title": "空力設計", "url": "https://wiki.example/aero",
+			"last_edited": "2026-04-01", "team": "空力", "chars": 13001,
+			"chunks": []map[string]any{
+				{"id": "p2-c0", "breadcrumb": "空力設計 > 循環分布", "text": "TR-797型分布は翼根曲げモーメントを制約した最適循環分布です。", "chars": 13001},
+			},
+		},
+	}}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "index.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "toc.md"), []byte("# 目次\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ix, err := index.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ix
+}
+
 func run(t *testing.T, assistant *state.Assistant) (*stubLLM, []Source, string) {
 	t.Helper()
 	// モデルは毎回「両方のページを使いたい」と答える。絞り込みが効いていなければ
@@ -138,6 +176,37 @@ func TestRunWithoutAssistantKeepsEverything(t *testing.T) {
 	_, sources, _ := run(t, nil)
 	if len(sources) != 2 {
 		t.Fatalf("未選択なのに資料が減った: %+v", sources)
+	}
+}
+
+func TestSelectPagesAddsNormalizedIdentifierMatch(t *testing.T) {
+	client := &stubLLM{titles: []string{"人物ページ"}}
+	pipe := New(testIdentifierIndex(t), client)
+
+	pages, err := pipe.selectPages(context.Background(), "TR797とは何ですか？", nil, nil)
+	if err != nil {
+		t.Fatalf("ページ選択が失敗: %v", err)
+	}
+	if len(pages) != 2 {
+		t.Fatalf("型番候補とLLM候補が合流していない: %+v", pages)
+	}
+	if pages[0].Title != "空力設計" || pages[1].Title != "人物ページ" {
+		t.Fatalf("型番の完全一致候補が優先されていない: %q, %q", pages[0].Title, pages[1].Title)
+	}
+}
+
+func TestRunKeepsIdentifierChunkAfterNarrowing(t *testing.T) {
+	client := &stubLLM{
+		titles:   []string{"人物ページ"},
+		chunkIDs: []string{"p1-c0"}, // LLMは型番のない節だけを選ぶ
+	}
+	pipe := New(testIdentifierIndex(t), client)
+
+	if err := pipe.Run(context.Background(), "TR797とは何ですか？", nil, func(Event) {}); err != nil {
+		t.Fatalf("Run が失敗: %v", err)
+	}
+	if !strings.Contains(client.lastAnswer, "TR-797型分布") {
+		t.Fatal("ページ選択後の節絞り込みで、型番の完全一致チャンクが落ちた")
 	}
 }
 

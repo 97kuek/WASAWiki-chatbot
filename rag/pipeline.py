@@ -26,6 +26,9 @@ MAX_PAGES = 4  # 空力設計は代違いで4ページあり、3では構造的�
 # M2aでは3ページの合計が最大48,100字になった（36,261字の「駆動・フレーム班」が原因）
 DIRECT_CONTEXT_LIMIT = 12_000
 MAX_CHUNKS = 8
+# B1や40thまで拾うと候補が増えすぎるため、英字で始まり数字を含む型番だけを扱う。
+# TR797の正解チャンクがBM25で22位だった実測は docs/02 §M8。
+IDENTIFIER_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_-]*[0-9][A-Za-z0-9_-]*")
 
 
 class LLM(Protocol):
@@ -135,14 +138,48 @@ titles には最も近そうなページだけを挙げてください。
         result = self.llm(self.toc + self.SELECT_PROMPT + question, self.SELECT_SCHEMA, 200)
         titles = [t for t in result.get("titles", []) if isinstance(t, str)]
 
-        resolved, dropped = [], []
+        # 空回答時だけのfallbackでは、LLMが人物ページを選んだTR797の誤答を
+        # 防げない。型番の完全一致候補を先に入れ、LLM候補と合流する。
+        resolved, dropped = self.identifier_pages(question), []
         for raw in titles:
             hit = self.resolve(raw)
-            if hit and hit not in resolved:
+            if hit and hit not in resolved and len(resolved) < MAX_PAGES:
                 resolved.append(hit)
             elif not hit:
                 dropped.append(raw)
         return resolved, bool(result.get("answerable", True)), dropped
+
+    def identifier_pages(self, question: str) -> list[str]:
+        """ハイフンとアンダースコアの表記差を無視し、型番を本文から探す。
+
+        Go側 pipeline.identifierPages と同じ挙動にすること。評価側だけ違うと、
+        Pythonで測った数字が本番の説明にならない。
+        """
+        identifiers = {
+            self.normalize_identifier(raw)
+            for raw in IDENTIFIER_PATTERN.findall(question)
+            if len(self.normalize_identifier(raw)) >= 4
+        }
+        if not identifiers:
+            return []
+
+        ranked: list[tuple[int, int, str]] = []
+        for order, (title, page) in enumerate(self.pages.items()):
+            score = 0
+            normalized_title = self.normalize_identifier(title)
+            for identifier in identifiers:
+                score += normalized_title.count(identifier) * 100
+                for chunk in page["chunks"]:
+                    score += self.normalize_identifier(chunk["breadcrumb"]).count(identifier) * 10
+                    score += self.normalize_identifier(chunk["text"]).count(identifier)
+            if score:
+                ranked.append((-score, order, title))
+        ranked.sort()
+        return [title for _, _, title in ranked[:2]]
+
+    @staticmethod
+    def normalize_identifier(value: str) -> str:
+        return value.lower().replace("-", "").replace("_", "")
 
     # ------------------------------------------------------------------
     # Stage 2: ページ内のチャンクを絞る
@@ -166,6 +203,17 @@ titles には最も近そうなページだけを挙げてください。
         if total <= DIRECT_CONTEXT_LIMIT:
             return ids
 
+        identifier_ids = self.identifier_chunks(question, titles)
+
+        def merge(picked: list[str]) -> list[str]:
+            merged: list[str] = []
+            for chunk_id in identifier_ids + picked:
+                if chunk_id not in merged:
+                    merged.append(chunk_id)
+                if len(merged) == MAX_CHUNKS:
+                    break
+            return merged
+
         catalog = "\n".join(
             f"{i}\t{self.chunks[i]['breadcrumb']}（{self.chunks[i]['chars']}字）" for i in ids
         )
@@ -175,8 +223,33 @@ titles には最も近そうなページだけを挙げてください。
             f"質問「{question}」に答えるために必要な節を、最大{MAX_CHUNKS}件選び、IDだけをJSONで返してください。"
         )
         result = self.llm(prompt, self.CHUNK_SCHEMA, 300)
-        picked = [i for i in result.get("ids", []) if i in self.chunks]
-        return picked or ids[:MAX_CHUNKS]  # 選べなかったら先頭から詰める
+        # 索引全体ではなく、今回選んだページの節だけを受け付ける。
+        picked = [i for i in result.get("ids", []) if i in ids]
+        return merge(picked or ids)  # 型番一致を先に残し、残りをLLM候補で埋める
+
+    def identifier_chunks(self, question: str, titles: list[str]) -> list[str]:
+        """長いページの節絞り込みでも、本文の型番完全一致を残す。"""
+        identifiers = {
+            self.normalize_identifier(raw)
+            for raw in IDENTIFIER_PATTERN.findall(question)
+            if len(self.normalize_identifier(raw)) >= 4
+        }
+        if not identifiers:
+            return []
+
+        ranked: list[tuple[int, int, str]] = []
+        order = 0
+        for title in titles:
+            for chunk in self.pages[title]["chunks"]:
+                score = 0
+                for identifier in identifiers:
+                    score += self.normalize_identifier(chunk["breadcrumb"]).count(identifier) * 10
+                    score += self.normalize_identifier(chunk["text"]).count(identifier)
+                if score:
+                    ranked.append((-score, order, chunk["id"]))
+                order += 1
+        ranked.sort()
+        return [chunk_id for _, _, chunk_id in ranked[:MAX_CHUNKS]]
 
     # ------------------------------------------------------------------
     # Stage 3: 回答する

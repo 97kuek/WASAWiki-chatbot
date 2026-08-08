@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -86,6 +87,11 @@ titles には最も近そうなページだけを挙げてください。
 var selectSchema = json.RawMessage(`{"type":"object","properties":{"titles":{"type":"array","items":{"type":"string"},"maxItems":4},"answerable":{"type":"boolean"}},"required":["titles","answerable"]}`)
 
 var chunkSchema = json.RawMessage(`{"type":"object","properties":{"ids":{"type":"array","items":{"type":"string"},"maxItems":8}},"required":["ids"]}`)
+
+// 型番は目次のリード文や上位見出しに現れないことがある。実際に「TR797とは」で
+// 正解チャンクがBM25の22位となり、「資料に記載なし」と誤答した。一方で B1 や
+// 40th まで拾うと候補が増えすぎるため、英字で始まり数字を含む4文字以上に限る。
+var identifierPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9_-]*[0-9][A-Za-z0-9_-]*`)
 
 const answerPrompt = `あなたは早稲田大学の鳥人間サークル WASA の資料に詳しいアシスタントです。
 資料は部内の引き継ぎWikiと一般公開の公式サイトの2つからなります。
@@ -312,20 +318,98 @@ func (p *Pipeline) selectPages(ctx context.Context, question string, a *state.As
 
 	var pages []*index.Page
 	seen := map[string]bool{}
+	add := func(pg *index.Page) {
+		if pg == nil || seen[pg.Title] || !inScope(pg, a) || len(pages) == maxPages {
+			return
+		}
+		seen[pg.Title] = true
+		pages = append(pages, pg)
+	}
+
+	// LLMがもっともらしい別ページを返した場合でも、型番が本文に完全一致する
+	// ページを捨てない。空回答時だけのfallbackでは今回のTR797誤答を防げない。
+	for _, pg := range p.identifierPages(question, a) {
+		add(pg)
+	}
 	for _, title := range out.Titles {
 		// 実在しないページ名は落とす。M2a でモデルは班名・節名・
 		// 推測で作った名前を返してきた（index.Resolve のコメント参照）。
 		pg, ok := p.ix.Resolve(title)
-		if !ok || seen[pg.Title] || !inScope(pg, a) {
+		if !ok {
 			continue
 		}
-		seen[pg.Title] = true
-		pages = append(pages, pg)
+		add(pg)
 		if len(pages) == maxPages {
 			break
 		}
 	}
 	return pages, nil
+}
+
+// identifierPages は質問中の型番を、ハイフンとアンダースコアの表記差を
+// 無視して本文全体から探す。索引は数MBなので、型番がある質問だけ
+// 総当たりしても検索基盤を増やす必要はない。
+func (p *Pipeline) identifierPages(question string, a *state.Assistant) []*index.Page {
+	identifiers := questionIdentifiers(question)
+	if len(identifiers) == 0 {
+		return nil
+	}
+
+	type scored struct {
+		page  *index.Page
+		score int
+		order int
+	}
+	var ranked []scored
+	for i := range p.ix.Pages {
+		pg := &p.ix.Pages[i]
+		if len(pg.Chunks) == 0 || !inScope(pg, a) {
+			continue
+		}
+		score := 0
+		title := normalizeIdentifier(pg.Title)
+		for id := range identifiers {
+			score += strings.Count(title, id) * 100
+			for _, c := range pg.Chunks {
+				score += strings.Count(normalizeIdentifier(c.Breadcrumb), id) * 10
+				score += strings.Count(normalizeIdentifier(c.Text), id)
+			}
+		}
+		if score > 0 {
+			ranked = append(ranked, scored{page: pg, score: score, order: i})
+		}
+	}
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].score == ranked[j].score {
+			return ranked[i].order < ranked[j].order
+		}
+		return ranked[i].score > ranked[j].score
+	})
+
+	// 完全一致だけで4枠を埋めると、質問全体の意味を見たLLM候補を捨ててしまう。
+	// 上位2件を保険として加え、残り2件は従来の選択に残す。
+	const maxIdentifierPages = 2
+	var out []*index.Page
+	for i := 0; i < len(ranked) && i < maxIdentifierPages; i++ {
+		out = append(out, ranked[i].page)
+	}
+	return out
+}
+
+func normalizeIdentifier(value string) string {
+	value = strings.ToLower(value)
+	return strings.NewReplacer("-", "", "_", "").Replace(value)
+}
+
+func questionIdentifiers(question string) map[string]bool {
+	identifiers := map[string]bool{}
+	for _, raw := range identifierPattern.FindAllString(question, -1) {
+		id := normalizeIdentifier(raw)
+		if len(id) >= 4 {
+			identifiers[id] = true
+		}
+	}
+	return identifiers
 }
 
 // fallbackPages は LLM がページを1件も返せなかったときの保険。
@@ -384,6 +468,21 @@ func (p *Pipeline) selectChunks(ctx context.Context, question string, pages []*i
 	if len(ids) == 0 || total <= directContextLimit {
 		return ids, nil
 	}
+	identifierIDs := identifierChunks(question, pages)
+	merge := func(picked []string) []string {
+		seen := map[string]bool{}
+		var merged []string
+		for _, id := range append(identifierIDs, picked...) {
+			if !seen[id] {
+				seen[id] = true
+				merged = append(merged, id)
+				if len(merged) == maxChunks {
+					break
+				}
+			}
+		}
+		return merged
+	}
 
 	// 本文は見せず、パンくずの一覧だけで選ばせる。
 	// パンくずは「ページ名 > 見出し > 見出し」で節の内容を要約しているため、これで足りる。
@@ -403,14 +502,14 @@ func (p *Pipeline) selectChunks(ctx context.Context, question string, pages []*i
 		OnWait:    onWait,
 	})
 	if err != nil {
-		return truncate(ids, maxChunks), nil // 絞れなければ先頭から詰める
+		return merge(ids), nil // 型番一致を先に残し、残りは先頭から詰める
 	}
 
 	var out struct {
 		IDs []string `json:"ids"`
 	}
 	if err := json.Unmarshal([]byte(extractJSON(raw)), &out); err != nil {
-		return truncate(ids, maxChunks), nil
+		return merge(ids), nil
 	}
 	// 索引全体に存在するかではなく、**この質問で選んだページの節か**で判定する。
 	// 全体で照合すると、モデルが範囲外の節IDを返したときにそのまま通り、
@@ -426,16 +525,50 @@ func (p *Pipeline) selectChunks(ctx context.Context, question string, pages []*i
 		}
 	}
 	if len(picked) == 0 {
-		return truncate(ids, maxChunks), nil
+		return merge(ids), nil
 	}
-	return picked, nil
+	return merge(picked), nil
 }
 
-func truncate(ids []string, n int) []string {
-	if len(ids) <= n {
-		return ids
+// identifierChunks はページを開いた後の節選択でも型番一致を残す。
+// 長いページではパンくずだけをLLMへ見せるため、本文にしかないTR797は
+// ページ選択に成功しても再び落ちる可能性がある。
+func identifierChunks(question string, pages []*index.Page) []string {
+	identifiers := questionIdentifiers(question)
+	if len(identifiers) == 0 {
+		return nil
 	}
-	return ids[:n]
+	type scored struct {
+		id    string
+		score int
+		order int
+	}
+	var ranked []scored
+	order := 0
+	for _, pg := range pages {
+		for _, c := range pg.Chunks {
+			score := 0
+			for id := range identifiers {
+				score += strings.Count(normalizeIdentifier(c.Breadcrumb), id) * 10
+				score += strings.Count(normalizeIdentifier(c.Text), id)
+			}
+			if score > 0 {
+				ranked = append(ranked, scored{id: c.ID, score: score, order: order})
+			}
+			order++
+		}
+	}
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].score == ranked[j].score {
+			return ranked[i].order < ranked[j].order
+		}
+		return ranked[i].score > ranked[j].score
+	})
+	var out []string
+	for i := 0; i < len(ranked) && i < maxChunks; i++ {
+		out = append(out, ranked[i].id)
+	}
+	return out
 }
 
 // extractJSON はコードフェンスや前置きが付いた出力からJSON本体を取り出す。
