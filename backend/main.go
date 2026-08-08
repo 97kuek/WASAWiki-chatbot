@@ -5,6 +5,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"log"
@@ -19,6 +20,7 @@ import (
 	"github.com/97kuek/wasa-chat/backend/internal/llm"
 	"github.com/97kuek/wasa-chat/backend/internal/pipeline"
 	"github.com/97kuek/wasa-chat/backend/internal/server"
+	appstate "github.com/97kuek/wasa-chat/backend/internal/state"
 	"github.com/97kuek/wasa-chat/backend/internal/wiki"
 )
 
@@ -129,12 +131,27 @@ func main() {
 		log.Fatal("Cloud RunではCloudflare PagesのURLをALLOW_ORIGINに設定してください")
 	}
 
+	sharedState := appstate.Store(appstate.NewMemory())
+	if projectID := os.Getenv("FIRESTORE_PROJECT_ID"); projectID != "" {
+		firestoreState, err := appstate.NewFirestore(context.Background(), projectID)
+		if err != nil {
+			log.Fatalf("Firestoreへ接続できません: %v", err)
+		}
+		defer firestoreState.Close()
+		sharedState = firestoreState
+		log.Printf("共有状態: Firestore（project=%s）", projectID)
+	} else if os.Getenv("K_SERVICE") != "" {
+		log.Fatal("Cloud RunではFIRESTORE_PROJECT_IDが必須です")
+	} else {
+		log.Println("共有状態: メモリ（ローカル開発用。再起動で履歴と利用回数が消えます）")
+	}
+
 	srv := server.New(server.Config{
 		SessionSecret: secret,
 		DailyLimit:    envInt("DAILY_LIMIT", 30),
 		AllowOrigin:   allowOrigin,
 		SPADir:        os.Getenv("SPA_DIR"),
-	}, ix, pipeline.New(ix, client), wiki.New(wikiAPI))
+	}, ix, pipeline.New(ix, client), wiki.New(wikiAPI), sharedState)
 
 	addr := ":" + env("PORT", "8080") // Cloud Run は PORT を渡してくる
 	log.Printf("起動: http://localhost%s", addr)

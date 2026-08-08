@@ -9,6 +9,26 @@ export type Source = {
   origin?: "wiki" | "site";
 };
 
+export type Turn = {
+  question: string;
+  answer: string;
+  sources: Source[];
+  status: string;
+  retryAt?: string;
+  error?: string;
+  errorCode?: "daily_quota" | "rate_limit" | "user_daily_limit" | "unavailable";
+  streaming: boolean;
+};
+
+export type Chat = {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  turns: Turn[];
+  pinned?: boolean;
+};
+
 /** サーバーから流れてくる進捗イベント。pipeline.Event と対応する。 */
 export type Event =
   | { type: "status"; message: string; retry_at?: string }
@@ -48,6 +68,31 @@ export async function session(): Promise<Session> {
   const res = await fetch(`${base}/api/session`, { credentials: "include" });
   if (!res.ok) return { authenticated: false, username: "", remaining: 0 };
   return res.json();
+}
+
+export async function listChats(): Promise<Chat[]> {
+  const res = await fetch(`${base}/api/chats`, { credentials: "include" });
+  if (!res.ok) throw new Error("チャット履歴を読み込めませんでした");
+  const body = await res.json() as { chats?: Chat[] };
+  return Array.isArray(body.chats) ? body.chats : [];
+}
+
+export async function saveChat(chat: Chat): Promise<void> {
+  const res = await fetch(`${base}/api/chats/${encodeURIComponent(chat.id)}`, {
+    method: "PUT",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(chat),
+  });
+  if (!res.ok) throw new Error("チャット履歴を保存できませんでした");
+}
+
+export async function deleteChat(chatId: string): Promise<void> {
+  const res = await fetch(`${base}/api/chats/${encodeURIComponent(chatId)}`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error("チャット履歴を削除できませんでした");
 }
 
 /**

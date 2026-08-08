@@ -1,26 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { ask, login, logout, session, type Source } from "./api";
+import {
+  ask,
+  deleteChat,
+  listChats,
+  login,
+  logout,
+  saveChat,
+  session,
+  type Chat,
+  type Turn,
+} from "./api";
 import { Markdown } from "./markdown";
-
-type Turn = {
-  question: string;
-  answer: string;
-  sources: Source[];
-  status: string;
-  retryAt?: string;
-  error?: string;
-  errorCode?: "daily_quota" | "rate_limit" | "user_daily_limit" | "unavailable";
-  streaming: boolean;
-};
-
-type Chat = {
-  id: string;
-  title: string;
-  createdAt: string;
-  updatedAt: string;
-  turns: Turn[];
-  pinned?: boolean;
-};
 
 type Announcement = {
   id: string;
@@ -120,7 +110,7 @@ function retryLabel(value: string | undefined, now: number): string {
   return `再開目安: ${duration}（${clock}頃）`;
 }
 
-function clearStoredChats(username: string) {
+function clearLegacyChats(username: string) {
   try {
     sessionStorage.removeItem(storageKey(username));
   } catch {
@@ -138,10 +128,10 @@ function loadReadAnnouncementIds(): string[] {
 }
 
 /**
- * 非公開Wikiの内容を端末へ恒久保存しないよう、履歴は現在のタブだけに置く。
- * 読み込み時には途中だったストリーミング状態を解除し、再送信と誤認させない。
+ * Firestore導入前のsessionStorage履歴を初回ログイン時に移行する。
+ * 読み込み時には途中だったストリーミング状態を解除する。
  */
-function loadChats(username: string): Chat[] {
+function loadLegacyChats(username: string): Chat[] {
   try {
     const parsed = JSON.parse(sessionStorage.getItem(storageKey(username)) ?? "[]") as unknown;
     if (!Array.isArray(parsed)) return [];
@@ -197,16 +187,48 @@ export default function App() {
   const bottom = useRef<HTMLDivElement>(null);
   const headerMenus = useRef<HTMLDivElement>(null);
   const historyArea = useRef<HTMLElement>(null);
+  const syncedChats = useRef<Map<string, string>>(new Map());
 
   const activeChat = chats.find((chat) => chat.id === activeChatId);
   const streaming = chats.some((chat) => chat.turns.some((turn) => turn.streaming));
   const unreadCount = announcements.filter((announcement) => !readAnnouncementIds.includes(announcement.id)).length;
   const historySections = groupChats(chats);
 
-  function restoreHistory(user: string) {
-    const saved = loadChats(user);
-    setChats(saved);
-    setActiveChatId(saved[0]?.id ?? null);
+  async function restoreHistory(user: string) {
+    const legacy = loadLegacyChats(user);
+    try {
+      const remote = await listChats();
+      const merged = new Map(remote.map((chat) => [chat.id, chat]));
+      const migrate: Chat[] = [];
+      for (const chat of legacy) {
+        const saved = merged.get(chat.id);
+        if (!saved || chat.updatedAt > saved.updatedAt) {
+          merged.set(chat.id, chat);
+          migrate.push(chat);
+        }
+      }
+      const restored = Array.from(merged.values())
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+        .slice(0, MAX_CHATS)
+        .map((chat) => ({
+          ...chat,
+          turns: chat.turns.map((turn) => ({ ...turn, status: "", streaming: false })),
+        }));
+      await Promise.all(migrate.map((chat) => saveChat(chat)));
+      clearLegacyChats(user);
+      syncedChats.current = new Map(restored.map((chat) => [chat.id, JSON.stringify(chat)]));
+      setChats(restored);
+      setActiveChatId((current) => current && restored.some((chat) => chat.id === current)
+        ? current
+        : restored[0]?.id ?? null);
+    } catch {
+      // 一時的にFirestoreへ接続できない場合も、移行前の現在タブの履歴は失わない。
+      syncedChats.current = new Map();
+      setChats(legacy);
+      setActiveChatId(legacy[0]?.id ?? null);
+      setToast("チャット履歴を同期できませんでした");
+      window.setTimeout(() => setToast(""), 3000);
+    }
   }
 
   useEffect(() => {
@@ -214,7 +236,7 @@ export default function App() {
       setAuthed(current.authenticated);
       setUsername(current.username);
       setRemaining(current.remaining);
-      if (current.authenticated) restoreHistory(current.username);
+      if (current.authenticated) void restoreHistory(current.username);
     });
   }, []);
 
@@ -277,12 +299,19 @@ export default function App() {
   useEffect(() => {
     if (!authed || !username || streaming) return;
     const timer = window.setTimeout(() => {
-      try {
-        sessionStorage.setItem(storageKey(username), JSON.stringify(chats.slice(0, MAX_CHATS)));
-      } catch {
-        // ブラウザ設定でストレージが無効でも、現在の画面内では会話を続けられる。
-      }
-    }, 200);
+      const pending = chats.slice(0, MAX_CHATS).filter((chat) => (
+        syncedChats.current.get(chat.id) !== JSON.stringify(chat)
+      ));
+      void Promise.allSettled(pending.map(async (chat) => {
+        await saveChat(chat);
+        syncedChats.current.set(chat.id, JSON.stringify(chat));
+      })).then((results) => {
+        if (results.some((result) => result.status === "rejected")) {
+          setToast("チャット履歴を同期できませんでした");
+          window.setTimeout(() => setToast(""), 3000);
+        }
+      });
+    }, 400);
     return () => window.clearTimeout(timer);
   }, [authed, chats, streaming, username]);
 
@@ -309,16 +338,16 @@ export default function App() {
     setAuthed(true);
     setUsername(current.username);
     setRemaining(current.remaining);
-    restoreHistory(current.username);
+    void restoreHistory(current.username);
   }
 
   async function handleLogout() {
     setNoticeOpen(false);
     setProfileOpen(false);
     await logout();
-    clearStoredChats(username);
     setAuthed(false);
     setUsername("");
+    syncedChats.current.clear();
     setChats([]);
     setActiveChatId(null);
   }
@@ -390,13 +419,21 @@ export default function App() {
     }
   }
 
-  function handleDeleteChat(chat: Chat) {
+  async function handleDeleteChat(chat: Chat) {
     setHistoryMenuId(null);
     if (chat.turns.some((turn) => turn.streaming)) return;
     if (!window.confirm(`「${chat.title}」を削除しますか？`)) return;
     const next = chats.filter((item) => item.id !== chat.id);
     setChats(next);
+    syncedChats.current.delete(chat.id);
     if (activeChatId === chat.id) setActiveChatId(next[0]?.id ?? null);
+    try {
+      await deleteChat(chat.id);
+    } catch {
+      setToast("チャット履歴を削除できませんでした");
+      window.setTimeout(() => setToast(""), 3000);
+      void restoreHistory(username);
+    }
   }
 
   async function handleAsk(text: string) {
