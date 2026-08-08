@@ -17,7 +17,7 @@ import {
   type Team,
   type Turn,
 } from "./api";
-import { AssistantAvatar, DefaultAvatar, toIconDataURL } from "./avatar";
+import { AssistantAvatar, DefaultAvatar, toIconDataURL, type IconCropPosition } from "./avatar";
 import { Markdown } from "./markdown";
 import { SelectMenu, type SelectOption } from "./SelectMenu";
 
@@ -31,11 +31,23 @@ type Announcement = {
 const MAX_CHATS = 30;
 const ANNOUNCEMENT_READ_KEY = "wasa-chat-read-announcements";
 const ASSISTANT_KEY = "wasa-chat-assistant";
+const ASSISTANT_FAVORITES_KEY = "wasa-chat-assistant-favorites";
+const ASSISTANT_SORT_KEY = "wasa-chat-assistant-sort";
+const TOAST_DURATION_MS = 3000;
+const CENTER_ICON_POSITION: IconCropPosition = { x: 50, y: 50 };
+
+type AssistantSort = "favorite" | "name" | "author";
 
 const ORIGIN_OPTIONS: SelectOption[] = [
   { value: "", label: "すべて" },
   { value: "wiki", label: "引き継ぎWikiのみ" },
   { value: "site", label: "公式サイトのみ（部外に出せる情報だけ）" },
+];
+
+const ASSISTANT_SORT_OPTIONS: SelectOption[] = [
+  { value: "favorite", label: "お気に入り順" },
+  { value: "name", label: "名前順" },
+  { value: "author", label: "作成者順" },
 ];
 
 const emptyDraft: AssistantDraft = { id: "", name: "", description: "", instruction: "" };
@@ -150,6 +162,24 @@ function loadReadAnnouncementIds(): string[] {
   }
 }
 
+function loadFavoriteAssistantIds(): string[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(ASSISTANT_FAVORITES_KEY) ?? "[]") as unknown;
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function loadAssistantSort(): AssistantSort {
+  try {
+    const saved = localStorage.getItem(ASSISTANT_SORT_KEY);
+    return saved === "name" || saved === "author" ? saved : "favorite";
+  } catch {
+    return "favorite";
+  }
+}
+
 /**
  * Firestore導入前のsessionStorage履歴を初回ログイン時に移行する。
  * 読み込み時には途中だったストリーミング状態を解除する。
@@ -209,6 +239,8 @@ export default function App() {
   const [clock, setClock] = useState(Date.now());
   const [assistants, setAssistants] = useState<Assistant[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
+  const [favoriteAssistantIds, setFavoriteAssistantIds] = useState(loadFavoriteAssistantIds);
+  const [assistantSort, setAssistantSort] = useState<AssistantSort>(loadAssistantSort);
   // 選んだアシスタントは端末に覚える。毎回選び直させると、結局
   // 誰も使わない機能になる（サーバーに持つほどの情報でもない）
   const [assistantId, setAssistantId] = useState(() => localStorage.getItem(ASSISTANT_KEY) ?? "");
@@ -219,26 +251,48 @@ export default function App() {
   const [assistantForm, setAssistantForm] = useState<{ editing: string | null } | null>(null);
   const [assistantDraft, setAssistantDraft] = useState<AssistantDraft>(emptyDraft);
   const [assistantError, setAssistantError] = useState("");
+  const [pendingIcon, setPendingIcon] = useState<{ file: File; url: string } | null>(null);
+  const [iconPosition, setIconPosition] = useState<IconCropPosition>(CENTER_ICON_POSITION);
   const bottom = useRef<HTMLDivElement>(null);
   const headerMenus = useRef<HTMLDivElement>(null);
   const historyArea = useRef<HTMLElement>(null);
   const syncedChats = useRef<Map<string, string>>(new Map());
   const toastTimer = useRef<number | null>(null);
+  const toastMessage = useRef("");
 
   const activeAssistant = assistants.find((item) => item.id === assistantId);
   const activeChat = chats.find((chat) => chat.id === activeChatId);
   const streaming = chats.some((chat) => chat.turns.some((turn) => turn.streaming));
   const unreadCount = announcements.filter((announcement) => !readAnnouncementIds.includes(announcement.id)).length;
   const historySections = groupChats(chats);
+  const sortedAssistants = [...assistants].sort((left, right) => {
+    if (assistantSort === "favorite") {
+      return Number(favoriteAssistantIds.includes(right.id)) - Number(favoriteAssistantIds.includes(left.id));
+    }
+    if (assistantSort === "author") {
+      return left.author.localeCompare(right.author, "ja") || left.name.localeCompare(right.name, "ja");
+    }
+    return left.name.localeCompare(right.name, "ja");
+  });
 
-  /** 新しい通知が来たら古いタイマーを捨て、最後の通知を5秒間きちんと読めるようにする。 */
-  function showToast(message: string) {
+  function hideToast() {
     if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    toastTimer.current = null;
+    toastMessage.current = "";
+    setToast("");
+  }
+
+  /** 同じ失敗の再通知でタイマーが延び続けないよう、表示中の同一文言は更新しない。 */
+  function showToast(message: string) {
+    if (toastMessage.current === message && toastTimer.current !== null) return;
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    toastMessage.current = message;
     setToast(message);
     toastTimer.current = window.setTimeout(() => {
       setToast("");
       toastTimer.current = null;
-    }, 5000);
+      toastMessage.current = "";
+    }, TOAST_DURATION_MS);
   }
 
   async function restoreHistory(user: string) {
@@ -344,6 +398,12 @@ export default function App() {
   useEffect(() => () => {
     if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
   }, []);
+
+  useEffect(() => {
+    if (!pendingIcon) return;
+    // 選び直しとフォーム終了の両方で、一時プレビューのメモリを解放する。
+    return () => URL.revokeObjectURL(pendingIcon.url);
+  }, [pendingIcon]);
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -514,25 +574,63 @@ export default function App() {
     setAssistantId(id);
     localStorage.setItem(ASSISTANT_KEY, id);
     // 選んだらチャットへ戻る。選ぶために開いた画面なので、留まる理由がない
-    setAssistantForm(null);
+    closeAssistantForm();
     setView("chat");
     showToast(`アシスタントを「${name}」に切り替えました`);
   }
 
   function openAssistants() {
     setAssistantError("");
-    setAssistantForm(null);
+    closeAssistantForm();
     setView("assistants");
     closeSidebarOnMobile();
   }
 
+  function toggleFavoriteAssistant(item: Assistant) {
+    const adding = !favoriteAssistantIds.includes(item.id);
+    const next = adding
+      ? [...favoriteAssistantIds, item.id]
+      : favoriteAssistantIds.filter((id) => id !== item.id);
+    setFavoriteAssistantIds(next);
+    try {
+      localStorage.setItem(ASSISTANT_FAVORITES_KEY, JSON.stringify(next));
+    } catch {
+      // 保存できなくても、現在のタブではお気に入り状態を維持する。
+    }
+    showToast(adding
+      ? `「${item.name}」をお気に入りに追加しました`
+      : `「${item.name}」をお気に入りから外しました`);
+  }
+
+  function changeAssistantSort(value: string) {
+    const next = value === "name" || value === "author" ? value : "favorite";
+    setAssistantSort(next);
+    try {
+      localStorage.setItem(ASSISTANT_SORT_KEY, next);
+    } catch {
+      // 保存できなくても、現在のタブでは選んだ並び順を維持する。
+    }
+  }
+
+  function clearPendingIcon() {
+    setPendingIcon(null);
+    setIconPosition({ ...CENTER_ICON_POSITION });
+  }
+
+  function closeAssistantForm() {
+    clearPendingIcon();
+    setAssistantForm(null);
+  }
+
   function startCreate() {
+    clearPendingIcon();
     setAssistantDraft(emptyDraft);
     setAssistantError("");
     setAssistantForm({ editing: null });
   }
 
   function startEdit(item: Assistant) {
+    clearPendingIcon();
     setAssistantDraft({
       id: item.id,
       name: item.name,
@@ -551,20 +649,26 @@ export default function App() {
     setAssistantError("");
     const editing = assistantForm?.editing ?? null;
     try {
+      // 位置調整は保存時の正方形画像へ焼き込む。表示側やFirestoreに
+      // 別の位置情報を持たせないため、どこに出しても同じ切り抜きになる。
+      const draft = pendingIcon
+        ? { ...assistantDraft, icon: await toIconDataURL(pendingIcon.file, iconPosition) }
+        : assistantDraft;
       if (editing) {
-        const saved = await updateAssistant(editing, assistantDraft);
+        const saved = await updateAssistant(editing, draft);
         setAssistants((current) => current.map((item) => (item.id === editing ? saved : item)));
-        setAssistantForm(null);
+        closeAssistantForm();
         showToast(`「${saved.name}」を保存しました`);
         return;
       }
       const created = await createAssistant({
-        ...assistantDraft,
+        ...draft,
         // 日本語名だとslugがほぼ空になるので、そのときは時刻から作る
-        id: assistantDraft.id || slugify(assistantDraft.name) || `assistant-${Date.now().toString(36)}`,
+        id: draft.id || slugify(draft.name) || `assistant-${Date.now().toString(36)}`,
       });
       setAssistants((current) => [...current, created]);
       setAssistantDraft(emptyDraft);
+      clearPendingIcon();
       chooseAssistant(created.id);
       showToast(`「${created.name}」を作成しました`);
     } catch (error) {
@@ -577,6 +681,15 @@ export default function App() {
     try {
       await deleteAssistant(target.id);
       setAssistants((current) => current.filter((item) => item.id !== target.id));
+      if (favoriteAssistantIds.includes(target.id)) {
+        const nextFavorites = favoriteAssistantIds.filter((id) => id !== target.id);
+        setFavoriteAssistantIds(nextFavorites);
+        try {
+          localStorage.setItem(ASSISTANT_FAVORITES_KEY, JSON.stringify(nextFavorites));
+        } catch {
+          // 削除そのものは成功しているため、端末の設定保存に失敗しても続行する。
+        }
+      }
       if (assistantId === target.id) chooseAssistant("");
       showToast(`「${target.name}」を削除しました`);
     } catch (error) {
@@ -590,9 +703,10 @@ export default function App() {
     if (!file) return;
     setAssistantError("");
     try {
-      setAssistantDraft((d) => ({ ...d, icon: undefined }));
       const icon = await toIconDataURL(file);
       setAssistantDraft((d) => ({ ...d, icon }));
+      setIconPosition({ ...CENTER_ICON_POSITION });
+      setPendingIcon({ file, url: URL.createObjectURL(file) });
     } catch (error) {
       setAssistantError(error instanceof Error ? error.message : "画像を読み込めませんでした");
     }
@@ -600,6 +714,7 @@ export default function App() {
 
   /** 他人のアシスタントは編集できない。複製してから直す（編集権の調整を発生させないため）。 */
   function duplicateAssistant(source: Assistant) {
+    clearPendingIcon();
     setAssistantDraft({
       id: "",
       name: `${source.name}のコピー`,
@@ -950,30 +1065,63 @@ export default function App() {
                   <h2>{assistantForm.editing ? "アシスタントを編集" : "アシスタントを作る"}</h2>
                   <p className="muted">
                     書けるのは<strong>口調・書き方・参照範囲</strong>だけです。
+                    <br />
                     出典の一覧と参照範囲はサーバー側で決まるため、指示では変えられません。
                   </p>
                 </header>
-                <div className="assistant-identity">
+                <div className="assistant-icon-editor">
                   <div className="assistant-icon-pick">
                     {/* 画像が無くても頭文字で成立させる。用意しないと見栄えが悪い状態にすると、
                         結局だれもアシスタントを作らなくなる */}
-                    <AssistantAvatar name={assistantDraft.name || "?"} icon={assistantDraft.icon} size={72} />
+                    {pendingIcon
+                      ? (
+                        <img
+                          className="avatar assistant-icon-preview"
+                          src={pendingIcon.url}
+                          alt="アイコンの切り抜きプレビュー"
+                          width={72}
+                          height={72}
+                          style={{ objectPosition: `${iconPosition.x}% ${iconPosition.y}%` }}
+                        />
+                      )
+                      : <AssistantAvatar name={assistantDraft.name || "?"} icon={assistantDraft.icon} size={72} />}
                     <label className="assistant-icon-button">
                       <span>{assistantDraft.icon ? "変更" : "画像を選ぶ"}</span>
                       <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void handlePickIcon(event)} />
                     </label>
                     {assistantDraft.icon && (
-                      <button type="button" className="linkish" onClick={() => setAssistantDraft((d) => ({ ...d, icon: undefined }))}>
+                      <button type="button" className="linkish" onClick={() => {
+                        clearPendingIcon();
+                        setAssistantDraft((d) => ({ ...d, icon: undefined }));
+                      }}>
                         画像を外す
                       </button>
                     )}
                   </div>
-                  <label>
-                    <span>名前</span>
-                    <input value={assistantDraft.name} maxLength={40} required
-                      onChange={(event) => setAssistantDraft((d) => ({ ...d, name: event.target.value }))} />
-                  </label>
+                  {pendingIcon && (
+                    <fieldset className="assistant-icon-position">
+                      <legend>画像の位置</legend>
+                      <label>
+                        <span>左右</span>
+                        <input type="range" min="0" max="100" value={iconPosition.x}
+                          onChange={(event) => setIconPosition((current) => ({ ...current, x: Number(event.target.value) }))} />
+                      </label>
+                      <label>
+                        <span>上下</span>
+                        <input type="range" min="0" max="100" value={iconPosition.y}
+                          onChange={(event) => setIconPosition((current) => ({ ...current, y: Number(event.target.value) }))} />
+                      </label>
+                      <button type="button" className="linkish" onClick={() => setIconPosition({ ...CENTER_ICON_POSITION })}>
+                        中央に戻す
+                      </button>
+                    </fieldset>
+                  )}
                 </div>
+                <label>
+                  <span>名前</span>
+                  <input value={assistantDraft.name} maxLength={40} required
+                    onChange={(event) => setAssistantDraft((d) => ({ ...d, name: event.target.value }))} />
+                </label>
                 <label>
                   <span>説明（一覧に出ます）</span>
                   <input value={assistantDraft.description} maxLength={120}
@@ -1013,7 +1161,7 @@ export default function App() {
                 </div>
                 {assistantError && <p className="assistant-error" role="alert">{assistantError}</p>}
                 <div className="assistant-actions">
-                  <button type="button" onClick={() => setAssistantForm(null)}>戻る</button>
+                  <button type="button" onClick={closeAssistantForm}>戻る</button>
                   <button type="submit" className="primary" disabled={!assistantDraft.name.trim() || !assistantDraft.instruction.trim()}>
                     {assistantForm.editing ? "保存する" : "作成する"}
                   </button>
@@ -1031,24 +1179,51 @@ export default function App() {
                   <button type="button" className="primary" onClick={startCreate}>新しく作る</button>
                 </header>
                 {assistantError && <p className="assistant-error" role="alert">{assistantError}</p>}
+                <div className="assistant-list-tools">
+                  <span>{assistants.length + 1}件</span>
+                  <div className="assistant-sort">
+                    <span>並べ替え</span>
+                    <SelectMenu
+                      label="アシスタントの並べ替え"
+                      value={assistantSort}
+                      options={ASSISTANT_SORT_OPTIONS}
+                      onChange={changeAssistantSort}
+                    />
+                  </div>
+                </div>
                 <ul className="assistant-grid">
                   <li>
-                    <button type="button" className={`assistant-card ${assistantId === "" ? "on" : ""}`} onClick={() => chooseAssistant("")}>
+                    <button type="button" className={`assistant-card assistant-card-default ${assistantId === "" ? "on" : ""}`} onClick={() => chooseAssistant("")}>
                       <DefaultAvatar size={64} />
-                      <span className="assistant-name">汎用</span>
-                      <span className="assistant-desc">資料全体から、ふつうの口調で答えます</span>
+                      <span className="assistant-card-copy">
+                        <span className="assistant-name">汎用</span>
+                        <span className="assistant-desc">資料全体から、ふつうの口調で答えます</span>
+                        <span className="assistant-meta">標準アシスタント</span>
+                      </span>
                     </button>
                   </li>
-                  {assistants.map((item) => (
+                  {sortedAssistants.map((item) => (
                     <li key={item.id}>
                       <button type="button" className={`assistant-card ${assistantId === item.id ? "on" : ""}`} onClick={() => chooseAssistant(item.id)}>
                         <AssistantAvatar name={item.name} icon={item.icon} size={64} />
-                        <span className="assistant-name">{item.name}</span>
-                        {item.description && <span className="assistant-desc">{item.description}</span>}
-                        <span className="assistant-meta">
-                          {item.author}
-                          {item.scope && <><br />{item.scope}</>}
+                        <span className="assistant-card-copy">
+                          <span className="assistant-name">{item.name}</span>
+                          <span className="assistant-desc">{item.description || "説明はありません"}</span>
+                          <span className="assistant-meta">
+                            作成: {item.author}
+                            {item.scope && <><br />{item.scope}</>}
+                          </span>
                         </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="assistant-favorite"
+                        aria-label={`「${item.name}」をお気に入り${favoriteAssistantIds.includes(item.id) ? "から外す" : "に追加"}`}
+                        aria-pressed={favoriteAssistantIds.includes(item.id)}
+                        title={favoriteAssistantIds.includes(item.id) ? "お気に入りから外す" : "お気に入りに追加"}
+                        onClick={() => toggleFavoriteAssistant(item)}
+                      >
+                        <span aria-hidden="true">{favoriteAssistantIds.includes(item.id) ? "★" : "☆"}</span>
                       </button>
                       <div className="assistant-card-actions">
                         {/* 他人のものは編集ではなく複製。編集権をめぐる調整を起こさないため */}
@@ -1221,7 +1396,12 @@ export default function App() {
           </form>
         </div>
       )}
-      {toast && <div className="toast" role="status">{toast}</div>}
+      {toast && (
+        <div className="toast">
+          <span role="status">{toast}</span>
+          <button type="button" onClick={hideToast} aria-label="通知を閉じる">×</button>
+        </div>
+      )}
     </div>
   );
 }

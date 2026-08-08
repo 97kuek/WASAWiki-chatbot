@@ -1006,6 +1006,9 @@ button:disabled {
   bottom: 24px;
   left: 50%;
   max-width: calc(100vw - 32px);
+  display: flex;
+  align-items: center;
+  gap: 10px;
   padding: 10px 14px;
   transform: translateX(-50%);
   border-radius: 8px;
@@ -1013,6 +1016,24 @@ button:disabled {
   color: var(--surface);
   box-shadow: var(--shadow);
   font-size: 13px;
+}
+
+.toast button {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.toast button:hover {
+  background: rgb(255 255 255 / 15%);
 }
 
 /* ---- 回答本文（Markdown / TeX） ---- */
@@ -1567,6 +1588,28 @@ button:disabled {
   list-style: none;
 }
 
+.assistant-list-tools {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.assistant-sort {
+  width: min(220px, 100%);
+  display: grid;
+  gap: 4px;
+}
+
+.assistant-sort .select-menu-trigger {
+  min-height: 38px;
+  padding-block: 6px;
+  font-size: 12px;
+}
+
 .assistant-grid li {
   position: relative;
   display: flex;
@@ -1575,15 +1618,21 @@ button:disabled {
 .assistant-card {
   flex: 1;
   display: grid;
-  justify-items: center;
-  align-content: start;
-  gap: 6px;
-  padding: 16px 12px 12px;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: start;
+  gap: 14px;
+  min-height: 150px;
+  padding: 16px 46px 42px 16px;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface);
-  text-align: center;
+  text-align: left;
   cursor: pointer;
+}
+
+.assistant-card-default {
+  padding-right: 16px;
+  padding-bottom: 16px;
 }
 
 .assistant-card:hover { border-color: var(--line-strong); }
@@ -1595,6 +1644,12 @@ button:disabled {
 
 .assistant-name { font-size: 14px; font-weight: 600; color: var(--text); }
 
+.assistant-card-copy {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
 .assistant-desc {
   font-size: 12px;
   line-height: 1.5;
@@ -1605,11 +1660,38 @@ button:disabled {
    頼らずに済ませている仕組みそのもの（docs/03-画面・認証仕様.md） */
 .assistant-meta { font-size: 11px; line-height: 1.5; color: var(--muted); }
 
+.assistant-favorite {
+  position: absolute;
+  z-index: 1;
+  top: 8px;
+  right: 8px;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #8b8275;
+  font-size: 21px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.assistant-favorite:hover {
+  background: var(--surface-soft);
+}
+
+.assistant-favorite[aria-pressed="true"] {
+  color: #b27400;
+}
+
 /* カードの上に重ねる。並びを崩さずに操作を出す */
 .assistant-card-actions {
   position: absolute;
-  top: 6px;
-  right: 6px;
+  right: 8px;
+  bottom: 8px;
   display: flex;
   gap: 4px;
   opacity: 0;
@@ -1637,21 +1719,30 @@ button:disabled {
 
 /* ---- 作成フォームのアイコン欄 ---- */
 
-.assistant-identity {
+.assistant-icon-editor {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 20px;
+  min-height: 112px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
 }
 
-.assistant-identity > label { flex: 1; }
-
 .assistant-icon-pick {
+  width: 104px;
+  flex: none;
   display: grid;
   justify-items: center;
   gap: 5px;
 }
 
-.assistant-icon-button {
+.assistant-icon-preview {
+  object-fit: cover;
+}
+
+.assistant-form .assistant-icon-button {
   display: inline-block;
   padding: 3px 9px;
   border: 1px solid var(--line);
@@ -1661,7 +1752,48 @@ button:disabled {
   cursor: pointer;
 }
 
-.assistant-icon-button input { display: none; }
+.assistant-form .assistant-icon-button input { display: none; }
+
+.assistant-icon-position {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.assistant-icon-position legend {
+  margin-bottom: 3px;
+  padding: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.assistant-form .assistant-icon-position label {
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  font-size: 11px;
+}
+
+.assistant-form .assistant-icon-position input[type="range"] {
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.assistant-icon-position > button {
+  justify-self: start;
+  padding: 0;
+  font-size: 11px;
+}
 
 .assistant-form {
   display: grid;
@@ -1833,4 +1965,20 @@ button:disabled {
 @media (max-width: 700px) {
   .assistant-grid { grid-template-columns: 1fr; }
   .assistant-scope { grid-template-columns: 1fr; }
+
+  .assistant-icon-editor {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .assistant-icon-pick { width: auto; }
+}
+
+@media (max-width: 420px) {
+  .assistant-list-tools {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .assistant-sort { width: 100%; }
 }
