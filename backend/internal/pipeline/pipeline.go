@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/97kuek/wasa-chat/backend/internal/index"
 	"github.com/97kuek/wasa-chat/backend/internal/llm"
@@ -31,6 +32,8 @@ const (
 type Event struct {
 	Type    string   `json:"type"` // status | pages | delta | done | error
 	Message string   `json:"message,omitempty"`
+	Code    string   `json:"code,omitempty"`
+	RetryAt string   `json:"retry_at,omitempty"`
 	Pages   []Source `json:"pages,omitempty"`
 	Text    string   `json:"text,omitempty"`
 }
@@ -117,8 +120,21 @@ const answerPrompt = `あなたは早稲田大学の鳥人間サークル WASA �
 // Run は質問に答え、進行状況を emit に流す。
 func (p *Pipeline) Run(ctx context.Context, question string, emit func(Event)) error {
 	emit(Event{Type: "status", Message: "目次から関連ページを探しています"})
+	onWait := func(info llm.WaitInfo) {
+		message := "Geminiへの送信間隔を調整しています"
+		if info.Reason == "retry" {
+			message = "Geminiの一時的な利用制限を待っています"
+		} else if info.Reason == "queue" {
+			message = "ほかの質問を処理しています。順番に回答します"
+		}
+		retryAt := ""
+		if !info.Until.IsZero() {
+			retryAt = info.Until.Format(time.RFC3339)
+		}
+		emit(Event{Type: "status", Message: message, RetryAt: retryAt})
+	}
 
-	pages, err := p.selectPages(ctx, question)
+	pages, err := p.selectPages(ctx, question, onWait)
 	if err != nil {
 		return fmt.Errorf("ページ選択: %w", err)
 	}
@@ -145,7 +161,7 @@ func (p *Pipeline) Run(ctx context.Context, question string, emit func(Event)) e
 	}
 	emit(Event{Type: "pages", Pages: sources})
 
-	chunks, err := p.selectChunks(ctx, question, pages)
+	chunks, err := p.selectChunks(ctx, question, pages, onWait)
 	if err != nil {
 		return fmt.Errorf("節の絞り込み: %w", err)
 	}
@@ -172,6 +188,7 @@ func (p *Pipeline) Run(ctx context.Context, question string, emit func(Event)) e
 		Cached:    p.ix.TOC,
 		Prompt:    fmt.Sprintf(answerPrompt, strings.Join(blocks, "\n\n---\n\n"), question),
 		MaxTokens: 1500,
+		OnWait:    onWait,
 	}, func(text string) {
 		emit(Event{Type: "delta", Text: text})
 	})
@@ -182,12 +199,13 @@ func (p *Pipeline) Run(ctx context.Context, question string, emit func(Event)) e
 	return nil
 }
 
-func (p *Pipeline) selectPages(ctx context.Context, question string) ([]*index.Page, error) {
+func (p *Pipeline) selectPages(ctx context.Context, question string, onWait func(llm.WaitInfo)) ([]*index.Page, error) {
 	raw, err := p.llm.Complete(ctx, llm.Request{
 		Cached:    p.ix.TOC, // 目次は必ず先頭固定。キャッシュが効く条件
 		Prompt:    selectPrompt + question,
 		Schema:    selectSchema,
 		MaxTokens: 300,
+		OnWait:    onWait,
 	})
 	if err != nil {
 		return nil, err
@@ -260,7 +278,7 @@ func (p *Pipeline) fallbackPages(question string) []*index.Page {
 	return out
 }
 
-func (p *Pipeline) selectChunks(ctx context.Context, question string, pages []*index.Page) ([]string, error) {
+func (p *Pipeline) selectChunks(ctx context.Context, question string, pages []*index.Page, onWait func(llm.WaitInfo)) ([]string, error) {
 	var ids []string
 	total := 0
 	for _, pg := range pages {
@@ -288,6 +306,7 @@ func (p *Pipeline) selectChunks(ctx context.Context, question string, pages []*i
 			catalog.String(), question, maxChunks),
 		Schema:    chunkSchema,
 		MaxTokens: 400,
+		OnWait:    onWait,
 	})
 	if err != nil {
 		return truncate(ids, maxChunks), nil // 絞れなければ先頭から詰める

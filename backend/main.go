@@ -36,6 +36,20 @@ func envInt(key string, fallback int) int {
 	return fallback
 }
 
+func envNonNegativeInt(key string, fallback int) int {
+	if v, err := strconv.Atoi(os.Getenv(key)); err == nil && v >= 0 {
+		return v
+	}
+	return fallback
+}
+
+func envSeconds(key string, fallback float64) time.Duration {
+	if v, err := strconv.ParseFloat(os.Getenv(key), 64); err == nil && v >= 0 {
+		return time.Duration(v * float64(time.Second))
+	}
+	return time.Duration(fallback * float64(time.Second))
+}
+
 func main() {
 	// リポジトリ直下の .env を読む。測定用のPython側と同じ設定を使えるようにするため。
 	// 既に環境変数が設定されていればそちらが優先される
@@ -56,16 +70,25 @@ func main() {
 	log.Printf("インデックス読み込み完了: %dページ / %dチャンク / 目次%d字", pages, chunks, len([]rune(ix.TOC)))
 
 	var client llm.Client
-	switch env("LLM_PROVIDER", "ollama") {
+	provider := env("LLM_PROVIDER", "ollama")
+	switch provider {
 	case "claude":
 		client = llm.NewClaude(os.Getenv("CLAUDE_MODEL"))
 	case "gemini":
 		// ⚠️ 無料枠は送信内容が学習に使われる場合がある。対象は非公開Wikiの本文
+		if os.Getenv("K_SERVICE") != "" && os.Getenv("GEMINI_PAID_TIER") != "true" {
+			log.Fatal("Cloud RunでGeminiを使うには、課金有効プロジェクトを確認してGEMINI_PAID_TIER=trueを設定してください")
+		}
 		key := env("GEMINI_API_KEY", os.Getenv("GOOGLE_API_KEY"))
 		if key == "" {
 			log.Fatal("GEMINI_API_KEY が未設定です")
 		}
-		client = llm.NewGemini(key, env("GEMINI_MODEL", "gemini-flash-latest"))
+		client = llm.NewGemini(
+			key,
+			env("GEMINI_MODEL", "gemini-flash-latest"),
+			envSeconds("GEMINI_MIN_INTERVAL", 4),
+			envNonNegativeInt("GEMINI_MAX_RETRIES", 2),
+		)
 	case "compat", "grok", "groq", "openrouter", "mistral":
 		client = llm.NewCompat(os.Getenv("LLM_BASE_URL"), os.Getenv("LLM_API_KEY"), os.Getenv("LLM_MODEL"))
 	default:
@@ -82,19 +105,28 @@ func main() {
 
 	secret := os.Getenv("SESSION_SECRET")
 	if secret == "" {
+		if os.Getenv("K_SERVICE") != "" {
+			log.Fatal("Cloud RunではSESSION_SECRETの固定値が必須です")
+		}
 		// 未設定でも起動はする。ただし再起動で全員ログアウトになる点は警告する
 		buf := make([]byte, 32)
 		if _, err := rand.Read(buf); err != nil {
 			log.Fatalf("セッション鍵の生成に失敗: %v", err)
 		}
 		secret = base64.RawStdEncoding.EncodeToString(buf)
-		log.Println("警告: SESSION_SECRET が未設定のため一時鍵を生成しました。再起動で全員ログアウトになります")
+		log.Println("警告: SESSION_SECRET が未設定のため一時鍵を生成しました。再起動で全員ログアウトし、当日の質問回数も復元できません")
+	} else if len(secret) < 32 {
+		log.Fatal("SESSION_SECRETは32文字以上で設定してください")
+	}
+	allowOrigin := os.Getenv("ALLOW_ORIGIN")
+	if os.Getenv("K_SERVICE") != "" && allowOrigin == "" {
+		log.Fatal("Cloud RunではCloudflare PagesのURLをALLOW_ORIGINに設定してください")
 	}
 
 	srv := server.New(server.Config{
 		SessionSecret: secret,
 		DailyLimit:    envInt("DAILY_LIMIT", 30),
-		AllowOrigin:   os.Getenv("ALLOW_ORIGIN"),
+		AllowOrigin:   allowOrigin,
 		SPADir:        os.Getenv("SPA_DIR"),
 	}, ix, pipeline.New(ix, client), wiki.New(wikiAPI))
 

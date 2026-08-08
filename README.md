@@ -77,7 +77,8 @@ Docker で通しで動かす場合:
 docker compose up --build   # → http://localhost:8080
 ```
 
-本番モデル（Claude）に切り替えるには `LLM_PROVIDER=claude` と `ANTHROPIC_API_KEY` を設定する。
+Geminiに切り替えるには `LLM_PROVIDER=gemini` と `GEMINI_API_KEY` を設定する。
+無料枠は送信内容がGoogleの製品改善に使われるため、非公開Wikiを送る運用はデータ管理者の承認前には行わない。
 
 ### チャット画面
 
@@ -86,6 +87,8 @@ docker compose up --build   # → http://localhost:8080
 - 入力欄は画面下部に固定し、`Enter` で送信、`Shift + Enter` で改行する
 - チャット履歴は現在のタブ内だけに保存し、タブを閉じたときとログアウト時に消去する
 - PCは履歴と会話の2カラムで、履歴欄は折りたためる。狭い画面では重ねて開く
+- 履歴は今日、昨日、過去7日間、年月で分け、各履歴からピン留め、タイトル変更、共有、削除ができる
+- ベルからリポジトリ管理のお知らせ、利用者アイコンからWikiとログアウトを開く
 - サポートリンクは案内先が決まるまで表示しない
 
 ### 環境変数
@@ -95,9 +98,16 @@ docker compose up --build   # → http://localhost:8080
 | `WIKI_API` | 本Wikiのapi.php | Wiki取得とログイン時の照合先 |
 | `WIKI_USER` | (なし) | Wiki取得と実Wiki認証テストに使う通常アカウントの利用者名 |
 | `WIKI_PASS` | (なし) | 上記通常アカウントのパスワード。`.env` だけに置く |
-| `SESSION_SECRET` | 自動生成 | Cookie署名鍵。未設定だと再起動で全員ログアウト |
+| `SESSION_SECRET` | 自動生成 | Cookie署名鍵。本番では固定値が必須。未設定だと再起動で全員ログアウトし、当日の回数も復元できない |
 | `DAILY_LIMIT` | 30 | 利用者ひとりあたり・日本時間1日の質問数。API費用の安全弁 |
+| `ALLOW_ORIGIN` | (なし) | 本番のCloudflare Pages URL。Cloud Runでは必須で、許可外OriginのPOSTを拒否する |
 | `LLM_PROVIDER` | `ollama` | `claude` にすると本番モデルを使う |
+| `GEMINI_API_KEY` | (なし) | WASAで共有するGeminiプロジェクトのAPIキー。サーバーの`.env`だけに置く |
+| `GEMINI_MODEL` | `gemini-flash-latest` | Geminiのモデル名 |
+| `GEMINI_PAID_TIER` | `false` | 課金有効プロジェクトの確認フラグ。Cloud RunでGeminiを使う場合は確認後に`true`が必須 |
+| `GEMINI_MIN_INTERVAL` | 4 | Goバックエンド全体でGeminiリクエスト間に空ける秒数 |
+| `GEMINI_MAX_RETRIES` | 2 | 短時間の429、503、通信失敗時の追加試行回数。日次上限は再試行しない |
+| `VITE_WIKI_URL` | 本Wiki | プロフィールメニューから開くWiki |
 | `CLAUDE_MODEL` | `claude-opus-5` | 費用優先なら `claude-sonnet-5` |
 | `DATA_DIR` | `data` | index.json と toc.md の置き場所 |
 | `SPA_DIR` | (なし) | 指定するとビルド済みSPAも同じサーバーから配る |

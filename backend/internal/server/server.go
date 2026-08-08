@@ -18,18 +18,20 @@ import (
 	"time"
 
 	"github.com/97kuek/wasa-chat/backend/internal/index"
+	"github.com/97kuek/wasa-chat/backend/internal/llm"
 	"github.com/97kuek/wasa-chat/backend/internal/pipeline"
 	"github.com/97kuek/wasa-chat/backend/internal/wiki"
 )
 
 const (
-	cookieName    = "wasa_session"
-	sessionMaxAge = 30 * 24 * time.Hour
+	cookieName      = "wasa_session"
+	usageCookieName = "wasa_daily_usage"
+	sessionMaxAge   = 30 * 24 * time.Hour
 )
 
 type Config struct {
 	SessionSecret string // Cookie署名用。未設定なら起動時に生成する
-	DailyLimit    int    // 1セッションあたりの1日の質問数上限
+	DailyLimit    int    // 利用者1人あたりの1日の質問数上限
 	AllowOrigin   string // 開発時にViteのdev serverから叩くためのCORS設定
 	SPADir        string // 指定するとビルド済みSPAも同じサーバーから配る
 }
@@ -115,6 +117,67 @@ func (s *Server) verify(token string) (string, bool) {
 	return string(user), true
 }
 
+// signUsage は日次の使用回数を改ざんできないCookieにする。
+// サーバーのメモリだけではCloud Runのコールドスタートで回数が消えるため、
+// 個人情報を含まない最小限の状態を利用者のブラウザにも持たせる。
+func (s *Server) signUsage(user, day string, used int) string {
+	encoded := base64.RawURLEncoding.EncodeToString([]byte(user))
+	body := fmt.Sprintf("%s|%s|%d", encoded, day, used)
+	mac := hmac.New(sha256.New, []byte(s.cfg.SessionSecret))
+	fmt.Fprintf(mac, "usage|%s", body)
+	return body + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func (s *Server) verifyUsage(token, expectedUser string) (string, int, bool) {
+	body, signature, ok := strings.Cut(token, ".")
+	if !ok {
+		return "", 0, false
+	}
+	parts := strings.Split(body, "|")
+	if len(parts) != 3 {
+		return "", 0, false
+	}
+	user, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil || string(user) != expectedUser {
+		return "", 0, false
+	}
+	used, err := strconv.Atoi(parts[2])
+	if err != nil || used < 0 || used > s.cfg.DailyLimit {
+		return "", 0, false
+	}
+	expected := strings.TrimPrefix(s.signUsage(string(user), parts[1], used), body+".")
+	if !hmac.Equal([]byte(expected), []byte(signature)) {
+		return "", 0, false
+	}
+	return parts[1], used, true
+}
+
+func (s *Server) restoreUsage(r *http.Request, user string) {
+	cookie, err := r.Cookie(usageCookieName)
+	if err != nil {
+		return
+	}
+	day, used, ok := s.verifyUsage(cookie.Value, user)
+	if ok {
+		s.limit.restore(user, day, used)
+	}
+}
+
+func (s *Server) setUsageCookie(w http.ResponseWriter, user string) {
+	day, used := s.limit.usage(user)
+	http.SetCookie(w, appCookie(usageCookieName, s.signUsage(user, day, used), int(sessionMaxAge.Seconds())))
+}
+
+func appCookie(name, value string, maxAge int) *http.Cookie {
+	return &http.Cookie{
+		Name: name, Value: value, Path: "/", MaxAge: maxAge,
+		HttpOnly: true, Secure: true, SameSite: http.SameSiteNoneMode,
+		// Cloudflare PagesとCloud Runが別サイトでも、対応ブラウザでは
+		// Cookieをトップレベルサイト単位に分離してログインを維持できる。
+		Partitioned: true,
+	}
+}
+
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Username string `json:"username"`
@@ -139,15 +202,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.SetCookie(w, &http.Cookie{
-		Name:     cookieName,
-		Value:    s.sign(user, time.Now().Add(sessionMaxAge).Unix()),
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteNoneMode, // フロントを別オリジン(Cloudflare Pages)に置くため
-		MaxAge:   int(sessionMaxAge.Seconds()),
-	})
+	http.SetCookie(w, appCookie(
+		cookieName,
+		s.sign(user, time.Now().Add(sessionMaxAge).Unix()),
+		int(sessionMaxAge.Seconds()),
+	))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "username": user})
 }
 
@@ -155,17 +214,16 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.currentUser(r)
 	remaining := 0
 	if ok {
+		s.restoreUsage(r, user)
 		remaining = s.limit.remaining(user)
+		s.setUsageCookie(w, user)
 	}
 	writeJSON(w, http.StatusOK,
 		map[string]any{"authenticated": ok, "username": user, "remaining": remaining})
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, _ *http.Request) {
-	http.SetCookie(w, &http.Cookie{
-		Name: cookieName, Value: "", Path: "/", MaxAge: -1,
-		HttpOnly: true, Secure: true, SameSite: http.SameSiteNoneMode,
-	})
+	http.SetCookie(w, appCookie(cookieName, "", -1))
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -207,11 +265,20 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 	// レート制限。本当の費用リスクはインフラではなく
 	// API従量課金である（docs/01-設計方針.md §7）。これが実質的な上限装置になる。
 	user, _ := s.currentUser(r)
+	s.restoreUsage(r, user)
 	if !s.limit.take(user) {
+		s.setUsageCookie(w, user)
 		writeJSON(w, http.StatusTooManyRequests,
-			map[string]string{"error": "本日の質問回数の上限に達しました"})
+			map[string]string{
+				"error":    "本日の質問回数の上限に達しました。日本時間の0時以降にもう一度お試しください",
+				"code":     "user_daily_limit",
+				"retry_at": nextJapanMidnight().Format(time.RFC3339),
+			})
 		return
 	}
+	// SSE開始後はCookieヘッダーを書き換えられないため、確保した時点で保存する。
+	// Gemini都合で返却した場合は、処理後にフロントが呼ぶ /api/session で訂正される。
+	s.setUsageCookie(w, user)
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -238,7 +305,27 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.pipe.Run(r.Context(), question, emit); err != nil {
 		log.Printf("質問の処理に失敗: %v", err)
-		emit(pipeline.Event{Type: "error", Message: "回答の生成に失敗しました"})
+		message := "回答の生成に失敗しました"
+		code := ""
+		retryAt := ""
+		if errors.Is(err, llm.ErrDailyQuota) {
+			s.limit.refund(user)
+			code = "daily_quota"
+			message = "Gemini無料枠の本日分を使い切りました。Google側の上限がリセットされてからお試しください"
+		} else if errors.Is(err, llm.ErrRateLimited) {
+			s.limit.refund(user)
+			code = "rate_limit"
+			message = "アクセスが集中し、Geminiの短時間の利用上限に達しました。数分後にもう一度お試しください"
+		} else if errors.Is(err, llm.ErrUnavailable) {
+			// 利用者ではなくGemini側の都合で失敗した質問は、個人の利用回数へ含めない。
+			s.limit.refund(user)
+			code = "unavailable"
+			message = "現在Geminiを利用できません。時間を置いてからもう一度お試しください"
+		}
+		if at, ok := llm.RetryAt(err); ok {
+			retryAt = at.Format(time.RFC3339)
+		}
+		emit(pipeline.Event{Type: "error", Message: message, Code: code, RetryAt: retryAt})
 	}
 }
 
@@ -246,6 +333,18 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self' https:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+		// CORSヘッダーだけでは、レスポンスを読めなくするだけでPOST自体は届く。
+		// CookieをSameSite=Noneで使うため、本番ではOriginも照合してCSRFを防ぐ。
+		if origin := r.Header.Get("Origin"); origin != "" && s.cfg.AllowOrigin != "" && origin != s.cfg.AllowOrigin {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "許可されていない送信元です"})
+			return
+		}
 		if s.cfg.AllowOrigin != "" {
 			w.Header().Set("Access-Control-Allow-Origin", s.cfg.AllowOrigin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
@@ -268,10 +367,8 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 }
 
 // limiter は利用者ごとの1日の質問数を数える。
-//
-// メモリ上に持つため、Cloud Run が min-instances=0 でコールドスタートすると
-// カウンタは失われる。上限を厳密に守る仕組みではなく、暴走を止める安全弁である。
-// 厳密さが必要になったら外部ストアに移すこと。
+// メモリを主に使い、署名付きCookieから復元する。Cookieは端末単位で削除できるため
+// 厳密な課金制御ではなく、1人による意図しない使い過ぎを防ぐ安全弁である。
 type limiter struct {
 	mu    sync.Mutex
 	limit int
@@ -287,6 +384,11 @@ func newLimiter(limit int) *limiter {
 var japanTime = time.FixedZone("JST", 9*60*60)
 
 func today() string { return time.Now().In(japanTime).Format("2006-01-02") }
+
+func nextJapanMidnight() time.Time {
+	now := time.Now().In(japanTime)
+	return time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, japanTime)
+}
 
 func (l *limiter) rollover() {
 	if d := today(); d != l.day {
@@ -313,4 +415,31 @@ func (l *limiter) remaining(key string) int {
 		return r
 	}
 	return 0
+}
+
+func (l *limiter) usage(key string) (string, int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.rollover()
+	return l.day, l.used[key]
+}
+
+// restore は同じ日のCookieの方が多いときだけ採用する。
+// 複数タブや古いレスポンスで、使用回数が巻き戻ることを防ぐため。
+func (l *limiter) restore(key, day string, used int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.rollover()
+	if day == l.day && used > l.used[key] {
+		l.used[key] = min(used, l.limit)
+	}
+}
+
+func (l *limiter) refund(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.rollover()
+	if l.used[key] > 0 {
+		l.used[key]--
+	}
 }
