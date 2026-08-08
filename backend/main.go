@@ -19,6 +19,7 @@ import (
 	"github.com/97kuek/WASAWiki-chatbot/backend/internal/llm"
 	"github.com/97kuek/WASAWiki-chatbot/backend/internal/pipeline"
 	"github.com/97kuek/WASAWiki-chatbot/backend/internal/server"
+	"github.com/97kuek/WASAWiki-chatbot/backend/internal/wiki"
 )
 
 func env(key, fallback string) string {
@@ -75,10 +76,10 @@ func main() {
 	}
 	log.Printf("モデル: %s", client.Name())
 
-	password := os.Getenv("SHARED_PASSWORD")
-	if password == "" {
-		log.Fatal("SHARED_PASSWORD が未設定です。部内で配る共有パスワードを設定してください")
-	}
+	// 認証はWikiのアカウントに委ねる。共有パスワードを配らずに済み、
+	// 利用者名が取れるので履歴を個人ごとに分けられる（docs/01-設計方針.md §8-1）
+	wikiAPI := env("WIKI_API", "https://wasabirdman.sakura.ne.jp/wbwiki/w/api.php")
+
 	secret := os.Getenv("SESSION_SECRET")
 	if secret == "" {
 		// 未設定でも起動はする。ただし再起動で全員ログアウトになる点は警告する
@@ -91,12 +92,11 @@ func main() {
 	}
 
 	srv := server.New(server.Config{
-		SharedPassword: password,
-		SessionSecret:  secret,
-		DailyLimit:     envInt("DAILY_LIMIT", 30),
-		AllowOrigin:    os.Getenv("ALLOW_ORIGIN"),
-		SPADir:         os.Getenv("SPA_DIR"),
-	}, ix, pipeline.New(ix, client))
+		SessionSecret: secret,
+		DailyLimit:    envInt("DAILY_LIMIT", 30),
+		AllowOrigin:   os.Getenv("ALLOW_ORIGIN"),
+		SPADir:        os.Getenv("SPA_DIR"),
+	}, ix, pipeline.New(ix, client), wiki.New(wikiAPI))
 
 	addr := ":" + env("PORT", "8080") // Cloud Run は PORT を渡してくる
 	log.Printf("起動: http://localhost%s", addr)

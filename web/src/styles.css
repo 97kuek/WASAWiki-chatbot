@@ -133,6 +133,25 @@ header h1 {
   margin: 0;
   font-size: 17px;
   font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+/* ロゴは白背景の画像なので、面に溶けるよう角丸だけ付ける */
+.logo {
+  width: 30px;
+  height: 30px;
+  object-fit: contain;
+  border-radius: 6px;
+}
+.logo-large {
+  width: 72px;
+  height: 72px;
+  object-fit: contain;
+  border-radius: 10px;
+}
+.gate .logo-large {
+  justify-self: center;
 }
 
 main {
@@ -421,5 +440,49 @@ main {
 .composer button:disabled {
   background: #dedbd7;
   color: #7c7772;
+  cursor: not-allowed;
+}
+
+/* --- アカウント表示（ヘッダ右） --- */
+.account {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.linkish {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 14px;
+  color: var(--muted);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.linkish:hover {
+  color: var(--text);
+}
+
+/* ログイン画面の補足。14px を下限とする（読めない文字は置かない） */
+.gate .note {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--muted);
+  text-align: left;
+  margin: 4px 0 0;
+}
+
+.gate .note code {
+  font-size: 13.5px;
+  padding: 1px 5px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.gate button[disabled] {
+  opacity: 0.5;
   cursor: not-allowed;
 }

@@ -85,7 +85,7 @@ OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q8_0 OLLAMA_CONTEXT_LENGTH=32768 \
 | バックエンド | Go on Cloud Run（`min-instances=0` 固定） |
 | フロントエンド | TypeScript + React (Vite) on Cloudflare Pages |
 | データストア | **なし**（JSONファイル。830KB） |
-| 認証 | 共有パスワード + 署名付きCookie |
+| 認証 | **Wikiのアカウント**（`action=clientlogin` に中継）+ 利用者名を載せた署名付きCookie |
 | 更新反映 | **手動 rebuild**（定期バッチは一人保守の方針と噛み合わない） |
 
 **段階的に作ること。** L0〜L4を初期版から全部入れない。各層は前段の実測で不足が

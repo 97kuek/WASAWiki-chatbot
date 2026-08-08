@@ -16,19 +16,34 @@ export type Event =
 
 const base = import.meta.env.VITE_API_ORIGIN ?? "";
 
-export async function login(password: string): Promise<boolean> {
+export type Session = { authenticated: boolean; username: string; remaining: number };
+
+/**
+ * Wikiのアカウントでログインする。
+ *
+ * パスワードはサーバーがWikiに中継して検証するだけで、保存もログ出力もしない。
+ * 成功すると利用者名を載せた署名付きCookieが返る。
+ * 失敗理由はサーバーの文言をそのまま出す（Wiki接続失敗と認証失敗を区別するため）。
+ */
+export async function login(username: string, password: string): Promise<string | null> {
   const res = await fetch(`${base}/api/login`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password }),
+    body: JSON.stringify({ username, password }),
   });
-  return res.ok;
+  if (res.ok) return null;
+  const body = await res.json().catch(() => ({}));
+  return body.error ?? "ログインできませんでした";
 }
 
-export async function session(): Promise<{ authenticated: boolean; remaining: number }> {
+export async function logout(): Promise<void> {
+  await fetch(`${base}/api/logout`, { method: "POST", credentials: "include" });
+}
+
+export async function session(): Promise<Session> {
   const res = await fetch(`${base}/api/session`, { credentials: "include" });
-  if (!res.ok) return { authenticated: false, remaining: 0 };
+  if (!res.ok) return { authenticated: false, username: "", remaining: 0 };
   return res.json();
 }
 
