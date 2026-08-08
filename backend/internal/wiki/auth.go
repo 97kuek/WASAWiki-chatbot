@@ -1,16 +1,17 @@
 // Package wiki は MediaWiki のアカウントで本人確認を行う。
 //
-// 共有パスワード1本だと全員が同じ利用者として扱われ、チャット履歴を
+// 共有パスワード1本だと全員が同じ利用者として扱われ、レート制限を
 // 分けられない。Wikiのアカウントをそのまま使えば、
 //   - 新しいパスワードを配らなくてよい
 //   - 部員でなくなればWiki側でアカウントを止めるだけで締め出せる
-//   - 利用者名が取れるので履歴を個人ごとに分けられる
+//   - 利用者名が取れるのでレート制限を個人ごとに分けられる
 //
 // ⚠️ この方式はアプリがWikiのパスワードを一度受け取る。したがって
 //   - パスワードは保存しない。ログにも出さない。認証に使って捨てる
 //   - Cookieに載せるのは利用者名と有効期限だけ
-//   - 利用者が望むなら 特別:BotPasswords で発行した
-//     「本アカウント名@ボット名」形式のものを使える（本パスワードを渡さずに済む）
+//
+// 認証経路を一つに保つため、BotPasswords 用の action=login は扱わない。
+// 普段WASA Wikiに入る利用者名とパスワードだけを action=clientlogin へ中継する。
 package wiki
 
 import (
@@ -54,11 +55,6 @@ func (a *Authenticator) Login(ctx context.Context, username, password string) (s
 		return "", err
 	}
 
-	// 「名前@ボット名」は BotPasswords。旧来の action=login でしか通らない。
-	// 通常のアカウントは現行の action=clientlogin を使う
-	if strings.Contains(username, "@") {
-		return a.legacyLogin(ctx, client, username, password, token)
-	}
 	return a.clientLogin(ctx, client, username, password, token)
 }
 
@@ -125,34 +121,6 @@ func (a *Authenticator) clientLogin(ctx context.Context, client *http.Client,
 	name := out.ClientLogin.Username
 	if name == "" {
 		name = username
-	}
-	return name, nil
-}
-
-func (a *Authenticator) legacyLogin(ctx context.Context, client *http.Client,
-	username, password, token string) (string, error) {
-	var out struct {
-		Login struct {
-			Result     string `json:"result"`
-			LgUsername string `json:"lgusername"`
-		} `json:"login"`
-	}
-	form := url.Values{
-		"action":     {"login"},
-		"lgname":     {username},
-		"lgpassword": {password},
-		"lgtoken":    {token},
-	}
-	if err := a.post(ctx, client, form, &out); err != nil {
-		return "", err
-	}
-	if out.Login.Result != "Success" {
-		return "", ErrBadCredentials
-	}
-	name := out.Login.LgUsername
-	if name == "" {
-		// BotPasswords の「本名@ボット名」から本名だけ取る
-		name, _, _ = strings.Cut(username, "@")
 	}
 	return name, nil
 }

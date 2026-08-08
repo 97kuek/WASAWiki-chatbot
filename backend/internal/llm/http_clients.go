@@ -34,11 +34,12 @@ func (g *Gemini) Name() string { return "gemini/" + g.model }
 // ListModels は generateContent が使えるモデル名を返す。
 // モデル名は変わりやすいため、固定せず問い合わせて確かめられるようにしている。
 func (g *Gemini) ListModels(ctx context.Context) ([]string, error) {
-	url := fmt.Sprintf("%s/models?key=%s&pageSize=200", geminiBase, g.key)
+	url := fmt.Sprintf("%s/models?pageSize=200", geminiBase)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("x-goog-api-key", g.key)
 	resp, err := g.http.Do(req)
 	if err != nil {
 		return nil, err
@@ -123,15 +124,19 @@ func (g *Gemini) do(ctx context.Context, method string, body map[string]any) (*h
 	if err != nil {
 		return nil, err
 	}
-	url := fmt.Sprintf("%s/models/%s:%s?key=%s", geminiBase, g.model, method, g.key)
+	// APIキーはクエリ文字列ではなくヘッダで渡す。
+	// クエリに載せると、通信エラー時の *url.Error にURLごと鍵が入り、
+	// サーバーログ（log.Printf("%v", err)）にそのまま残ってしまう
+	url := fmt.Sprintf("%s/models/%s:%s", geminiBase, g.model, method)
 	if method == "streamGenerateContent" {
-		url += "&alt=sse"
+		url += "?alt=sse"
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(raw))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-goog-api-key", g.key)
 	resp, err := g.http.Do(req)
 	if err != nil {
 		return nil, err

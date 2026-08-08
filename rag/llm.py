@@ -36,6 +36,15 @@ def strip_thinking(text: str) -> str:
     return text.strip()
 
 
+# GeminiはAPIキーをクエリ文字列で渡す。例外メッセージにURLをそのまま載せると
+# 測定ログやスタックトレースに鍵が残り、それを共有した時点で漏れる。
+API_KEY_IN_URL = re.compile(r"([?&]key=)[^&\s]+")
+
+
+def redact(text: str) -> str:
+    return API_KEY_IN_URL.sub(r"\1［伏字］", text)
+
+
 def post(url: str, payload: dict, headers: dict | None = None, timeout: int = 300,
          retries: int = 5) -> dict:
     """POSTしてJSONを返す。429（レート制限）は待って再試行する。
@@ -59,7 +68,7 @@ def post(url: str, payload: dict, headers: dict | None = None, timeout: int = 30
                 print(f"    レート制限。{wait}秒待って再試行 ({attempt + 1}/{retries - 1})", flush=True)
                 time.sleep(wait + 1)
                 continue
-            raise RuntimeError(f"{url} が {err.code}: {detail[:400]}") from err
+            raise RuntimeError(f"{redact(url)} が {err.code}: {redact(detail)[:400]}") from err
     raise RuntimeError("再試行の上限に達しました")
 
 
@@ -171,7 +180,9 @@ class GeminiLLM(Base):
         return f"gemini/{self.model}"
 
     def list_models(self) -> list[str]:
-        with urllib.request.urlopen(f"{self.BASE}/models?key={self.key}&pageSize=200", timeout=30) as r:
+        req = urllib.request.Request(f"{self.BASE}/models?pageSize=200",
+                                     headers={"x-goog-api-key": self.key})
+        with urllib.request.urlopen(req, timeout=30) as r:
             data = json.load(r)
         return [
             m["name"].removeprefix("models/")
@@ -221,8 +232,11 @@ class GeminiLLM(Base):
 
         started = time.time()
         result = post(
-            f"{self.BASE}/models/{self.model}:generateContent?key={self.key}",
+            # APIキーはクエリではなくヘッダで渡す。クエリに載せると、429などの
+            # 例外メッセージにURLごと鍵が入り、測定ログを共有した時点で漏れる
+            f"{self.BASE}/models/{self.model}:generateContent",
             {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": config},
+            headers={"x-goog-api-key": self.key},
             timeout=self.timeout,
         )
         self._record(started)

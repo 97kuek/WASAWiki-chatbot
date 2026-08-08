@@ -17,6 +17,7 @@ BM25ベースライン（docs/02-測定結果.md M1）と**ページ単位で**�
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from collections import defaultdict
@@ -25,9 +26,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from dotenv import load_dotenv  # noqa: E402
 from rag.llm import make_llm  # noqa: E402
+from rag.pipeline import resolve_title  # noqa: E402
 
 INDEX = Path("data/index.json")
-TOC = Path("data/toc.md")
+# 目次を差し替えて A/B を測れるようにしておく（例: 公式サイトを含む/含まない）。
+# 設問29問では1問=3.4ポイント動くため、1回の実行だけで優劣を語ってはいけない
+TOC = Path(os.getenv("TOC_PATH", "data/toc.md"))
 GOLDEN = Path("eval/golden.json")
 
 TOP_N = 3  # 選ばせるページ数。BM25の Page Recall@3 と比較する
@@ -67,7 +71,10 @@ def main() -> None:
 
     load_dotenv()
     llm = make_llm()
+    # 本番と同じ照合を使う。評価側だけ生の文字列で突き合わせると、
+    # 本番では解決できているものを「存在しないページ名」と数えてしまう
     known = {p["title"] for p in index["pages"]}
+    aliases = {a: p["title"] for p in index["pages"] for a in p["aliases"]}
     chunks_of = {p["title"]: len(p["chunks"]) for p in index["pages"]}
     chars_of = {p["title"]: p["chars"] for p in index["pages"]}
 
@@ -87,12 +94,17 @@ def main() -> None:
     for q in questions:
         result, dt = select(llm, toc, q["question"])
         elapsed += dt
-        titles = [t.strip() for t in result.get("titles", []) if t.strip()]
+        raw_titles = [t.strip() for t in result.get("titles", []) if t.strip()]
 
-        # 目次に無いタイトルを返していないか（ハルシネーション）
-        for t in titles:
-            if t not in known:
+        # 本番と同じ解決をかけてから採点する。解決できなかったものだけが
+        # 実際に捨てられる＝ハルシネーションである
+        titles = []
+        for t in raw_titles:
+            hit = resolve_title(t, known, aliases)
+            if hit is None:
                 hallucinated.append((q["id"], t))
+            elif hit not in titles:
+                titles.append(hit)
 
         # answerable の判定が合っているか
         if result.get("answerable") == q["answerable"]:

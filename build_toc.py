@@ -24,6 +24,20 @@ OUT = Path("data/toc.md")
 LEAD_CHARS = 90  # リード文の長さ。目次全体のサイズはほぼここで決まる
 MAX_HEADINGS = 10  # 1ページあたりに載せる見出しの数
 
+# 公式サイトの活動報告（投稿）は479件あり、公式サイトの本文の94%を占める。
+# ただし1件あたりは1,000字程度の作業記録で、Wikiのページほどの情報量はない。
+#
+# 載せ方を実測で比べた（v0=Wikiのみ 15,030字を1.00とする）:
+#   A 固定ページのみ                    19,442字 (1.29倍)
+#   B A + 投稿を年別・タイトルのみ        27,235字 (1.81倍)  ← 採用
+#   C A + 投稿を1行・リード付き           53,278字 (3.54倍)
+#
+# Cは費用が3.5倍になるうえ、ローカル測定用の32kコンテキストに収まらず
+# 測れなくなる。かといって投稿を落とすと、公式サイトを取り込む意味がほぼ消える。
+# タイトル（「第七回試験飛行報告」など）だけで選べる程度に自己説明的なので、
+# Bを既定とする。M2aで検索精度への影響を測ったうえでの判断（docs/02 §M6）。
+INCLUDE_POSTS = True
+
 # 班の並び順。技術班を先、運営系を後ろに置く
 TEAM_ORDER = [
     "空力", "構造", "翼", "駆動・フレーム", "プロペラ", "フェアリング",
@@ -33,6 +47,24 @@ TEAM_ORDER = [
 
 def clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit].rstrip() + "…"
+
+
+def render_posts(posts: list[dict]) -> list[str]:
+    """活動報告は年ごとにまとめ、タイトルだけを並べる。
+
+    1件ずつリード文を付けると目次が3.5倍に膨らむ。タイトルが
+    「第七回試験飛行報告」「全組試験および回転試験実施報告」のように
+    自己説明的なので、選ぶだけならタイトルで足りる。
+    """
+    by_year: dict[str, list[str]] = {}
+    for page in posts:
+        by_year.setdefault(page["last_edited"][:4] or "年不明", []).append(page["title"])
+
+    lines = ["各記事は1,000字程度の作業・試験の記録。タイトルをそのまま指定して開く。", ""]
+    for year in sorted(by_year, reverse=True):
+        titles = sorted(by_year[year])
+        lines.append(f"- **{year}年**（{len(titles)}件）: " + " / ".join(titles))
+    return lines
 
 
 def render_page(page: dict) -> list[str]:
@@ -59,7 +91,9 @@ def render_page(page: dict) -> list[str]:
 
 
 def main() -> None:
-    pages = json.loads(INDEX.read_text(encoding="utf-8"))["pages"]
+    all_pages = json.loads(INDEX.read_text(encoding="utf-8"))["pages"]
+    pages = [p for p in all_pages if p.get("source", "wiki") == "wiki"]
+    site = [p for p in all_pages if p.get("source") == "site"]
 
     order = {team: i for i, team in enumerate(TEAM_ORDER)}
     pages.sort(
@@ -71,9 +105,15 @@ def main() -> None:
     )
 
     lines = [
-        "# WASA Wiki 目次",
+        "# WASA 資料の目次",
         "",
-        f"全{len(pages)}ページ。「中身なし」はページは存在するが本文がほぼ無いもの。",
+        "出所が2つある。**引き継ぎWiki**（部内限定・作業手順や設計の詳細）と、",
+        "**公式サイト**（一般公開・団体紹介や活動報告）。",
+        "対外的な説明や歴代機体は公式サイト、作り方や反省点はWikiにある。",
+        "",
+        f"## 引き継ぎWiki（部内限定）全{len(pages)}ページ",
+        "",
+        "「中身なし」はページは存在するが本文がほぼ無いもの。",
         "代の「?」は本文からの推定で、そのページ自体の代とは限らない。",
         "",
     ]
@@ -81,8 +121,21 @@ def main() -> None:
     for page in pages:
         if page["team"] != current_team:
             current_team = page["team"]
-            lines += ["", f"## {current_team or 'その他'}", ""]
+            lines += ["", f"### {current_team or 'その他'}", ""]
         lines += render_page(page)
+
+    if site:
+        fixed = [p for p in site if p.get("kind") == "固定ページ"]
+        posts = [p for p in site if p.get("kind") != "固定ページ"]
+        shown = len(site) if INCLUDE_POSTS else len(fixed)
+        lines += ["", f"## 公式サイト（一般公開 wasa-birdman.com）全{shown}ページ", ""]
+        if fixed:
+            lines += ["### 団体紹介・機体一覧など", ""]
+            for page in sorted(fixed, key=lambda p: p["title"]):
+                lines += render_page(page)
+        if posts and INCLUDE_POSTS:
+            lines += ["", "### 活動報告（ブログ・新しい年から）", ""]
+            lines += render_posts(posts)
 
     toc = "\n".join(lines) + "\n"
     OUT.parent.mkdir(exist_ok=True)
@@ -93,10 +146,10 @@ def main() -> None:
     chars = len(toc)
     print("=" * 56)
     print(f"目次を生成      : {OUT}")
-    print(f"ページ数        : {len(pages)}")
+    print(f"ページ数        : {len(pages) + len(site)}（Wiki {len(pages)} / 公式サイト {len(site)}）")
     print(f"文字数          : {chars:,} 字")
     print(f"推定トークン数  : {int(chars / 1.5):,} 〜 {chars:,}")
-    print(f"1ページあたり   : {chars // len(pages)} 字")
+    print(f"1ページあたり   : {chars // max(1, len(pages) + len(site))} 字")
 
     # プロンプトキャッシュに載る前提での概算（Sonnet 5 / 1時間TTL、$1=150円）
     tokens = chars  # 上振れ側で見積もる

@@ -11,28 +11,29 @@ type Turn = {
   streaming: boolean;
 };
 
+type Chat = {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  turns: Turn[];
+};
+
+const MAX_CHATS = 30;
+
 /**
  * 回答末尾の「出典: ページ名（最終更新: YYYY-MM）」を落とす。
- *
- * 同じ情報を pages イベントで構造化データとして受け取っており、
- * そちらはリンクにできる。本文の平文と二重に出す意味がない。
- * 鮮度の注記（※〜）は情報として残す。
+ * 同じ情報を構造化された出典カードでも表示するため、本文との重複だけを除く。
  */
 function stripCitation(text: string): string {
   const lines = text.split("\n");
-  const start = lines.findIndex((l) => /^\s*(\*\*)?出典[:：]/.test(l));
+  const start = lines.findIndex((line) => /^\s*(\*\*)?出典[:：]/.test(line));
   if (start === -1) return text.trim();
-  // 出典は末尾に書かせているので、それ以降はまとめて出典ブロックとみなす。
-  // 複数ページを箇条書きで並べることがあり、行単位の除去では取り切れない。
-  // ただし鮮度の注記（※〜）は本文として意味があるので残す
-  const notes = lines.slice(start).filter((l) => /^\s*[※注]/.test(l));
+  const notes = lines.slice(start).filter((line) => /^\s*[※注]/.test(line));
   return [...lines.slice(0, start), ...notes].join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
-/**
- * 質問候補。新入生や代替わり直後の人は「何を聞けばいいか」が分からないので、
- * 入口を用意しておく。title は一覧で拾える短さ、body が実際に送る質問文。
- */
+/** 新入生や代替わり直後でも質問を始められるよう、具体的な入口を用意する。 */
 const SUGGESTIONS: { title: string; body: string }[] = [
   { title: "空力設計の手順", body: "空力設計の設計手順について、詳しく分かりやすく説明してください" },
   { title: "荷重試験の申請", body: "荷重試験の申請方法を教えてください。申請先のメールアドレスも知りたいです" },
@@ -40,7 +41,49 @@ const SUGGESTIONS: { title: string; body: string }[] = [
   { title: "鳥コンまでの流れ", body: "鳥人間コンテストまでにやっておくべきことを教えてください" },
   { title: "代ごとの違い", body: "空力設計は38代から41代にかけて何が変化しましたか？" },
   { title: "テストフライト", body: "テストフライトの申請方法と、TF前日までにやるべきことを教えてください" },
+  // 公式サイト側にしかない情報。Wikiだけでは答えられない問いも入口に置く。
+  { title: "WASAの成り立ち", body: "WASAはどんなサークルですか？設立年や歴代の機体名も教えてください" },
 ];
+
+const storageKey = (username: string) => `wasa-chat-history:${encodeURIComponent(username)}`;
+const makeId = () => crypto.randomUUID();
+const chatTitle = (question: string) =>
+  Array.from(question.trim()).slice(0, 28).join("") + (Array.from(question.trim()).length > 28 ? "…" : "");
+
+/**
+ * 非公開Wikiの内容を端末へ恒久保存しないよう、履歴は現在のタブだけに置く。
+ * 読み込み時には途中だったストリーミング状態を解除し、再送信と誤認させない。
+ */
+function loadChats(username: string): Chat[] {
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(storageKey(username)) ?? "[]") as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (chat): chat is Chat =>
+          typeof chat === "object" &&
+          chat !== null &&
+          typeof (chat as Chat).id === "string" &&
+          typeof (chat as Chat).title === "string" &&
+          Array.isArray((chat as Chat).turns),
+      )
+      .slice(0, MAX_CHATS)
+      .map((chat) => ({
+        ...chat,
+        turns: chat.turns.map((turn) => ({ ...turn, status: "", streaming: false })),
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function HistoryIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 5.5h16v11H8l-4 3v-14Z" />
+    </svg>
+  );
+}
 
 export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null);
@@ -50,238 +93,362 @@ export default function App() {
   const [loginError, setLoginError] = useState("");
   const [busy, setBusy] = useState(false);
   const [question, setQuestion] = useState("");
-  const [turns, setTurns] = useState<Turn[]>([]);
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
 
+  const activeChat = chats.find((chat) => chat.id === activeChatId);
+  const streaming = chats.some((chat) => chat.turns.some((turn) => turn.streaming));
+
+  function restoreHistory(user: string) {
+    const saved = loadChats(user);
+    setChats(saved);
+    setActiveChatId(saved[0]?.id ?? null);
+  }
+
   useEffect(() => {
-    session().then((s) => {
-      setAuthed(s.authenticated);
-      setUsername(s.username);
-      setRemaining(s.remaining);
+    session().then((current) => {
+      setAuthed(current.authenticated);
+      setUsername(current.username);
+      setRemaining(current.remaining);
+      if (current.authenticated) restoreHistory(current.username);
     });
   }, []);
 
   useEffect(() => {
-    bottom.current?.scrollIntoView({ behavior: "smooth" });
-  }, [turns]);
+    bottom.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [activeChat?.turns]);
 
-  async function handleLogin(e: React.FormEvent) {
-    e.preventDefault();
+  useEffect(() => {
+    if (!authed || !username || streaming) return;
+    const timer = window.setTimeout(() => {
+      try {
+        sessionStorage.setItem(storageKey(username), JSON.stringify(chats.slice(0, MAX_CHATS)));
+      } catch {
+        // ブラウザ設定でストレージが無効でも、現在の画面内では会話を続けられる。
+      }
+    }, 200);
+    return () => window.clearTimeout(timer);
+  }, [authed, chats, streaming, username]);
+
+  async function handleLogin(event: React.FormEvent) {
+    event.preventDefault();
     setLoginError("");
     setBusy(true);
     const error = await login(form.username, form.password);
     setBusy(false);
-    // 成否にかかわらずパスワードは即座に画面から消す
-    setForm((f) => ({ ...f, password: "" }));
+    // 成否にかかわらず、入力したWikiパスワードは即座に画面から消す。
+    setForm((current) => ({ ...current, password: "" }));
     if (error) {
       setLoginError(error);
       return;
     }
-    const s = await session();
+    const current = await session();
     setAuthed(true);
-    setUsername(s.username);
-    setRemaining(s.remaining);
+    setUsername(current.username);
+    setRemaining(current.remaining);
+    restoreHistory(current.username);
   }
 
   async function handleLogout() {
     await logout();
+    sessionStorage.removeItem(storageKey(username));
     setAuthed(false);
     setUsername("");
-    setTurns([]); // 共用端末で次の人に会話が残らないようにする
+    setChats([]);
+    setActiveChatId(null);
+  }
+
+  function handleNewChat() {
+    if (streaming) return;
+    setActiveChatId(null);
+    setQuestion("");
+  }
+
+  function handleClearHistory() {
+    if (streaming || !window.confirm("このタブのチャット履歴をすべて削除しますか？")) return;
+    sessionStorage.removeItem(storageKey(username));
+    setChats([]);
+    setActiveChatId(null);
   }
 
   async function handleAsk(text: string) {
     const q = text.trim();
-    if (!q || turns.some((t) => t.streaming)) return;
+    if (!q || streaming) return;
     setQuestion("");
 
-    // 楽観的UI: 送信した瞬間に自分の質問を表示する
-    const index = turns.length;
-    setTurns((prev) => [
-      ...prev,
-      { question: q, answer: "", sources: [], status: "送信中", streaming: true },
-    ]);
+    const now = new Date().toISOString();
+    const chatId = activeChat?.id ?? makeId();
+    const turnIndex = activeChat?.turns.length ?? 0;
+    const turn: Turn = {
+      question: q,
+      answer: "",
+      sources: [],
+      status: "送信中",
+      streaming: true,
+    };
 
-    const patch = (fn: (t: Turn) => Turn) =>
-      setTurns((prev) => prev.map((t, i) => (i === index ? fn(t) : t)));
+    // 送信した瞬間に質問の吹き出しを出し、過去の会話への追質問なら履歴の先頭へ戻す。
+    setChats((current) => {
+      const existing = current.find((chat) => chat.id === chatId);
+      const updated: Chat = existing
+        ? { ...existing, updatedAt: now, turns: [...existing.turns, turn] }
+        : {
+            id: chatId,
+            title: chatTitle(q),
+            createdAt: now,
+            updatedAt: now,
+            turns: [turn],
+          };
+      return [updated, ...current.filter((chat) => chat.id !== chatId)].slice(0, MAX_CHATS);
+    });
+    setActiveChatId(chatId);
+
+    const patch = (update: (turn: Turn) => Turn) =>
+      setChats((current) =>
+        current.map((chat) =>
+          chat.id === chatId
+            ? {
+                ...chat,
+                turns: chat.turns.map((item, index) => (index === turnIndex ? update(item) : item)),
+              }
+            : chat,
+        ),
+      );
 
     await ask(q, (event) => {
       switch (event.type) {
         case "status":
-          patch((t) => ({ ...t, status: event.message }));
+          patch((current) => ({ ...current, status: event.message }));
           break;
         case "pages":
-          patch((t) => ({ ...t, sources: event.pages }));
+          patch((current) => ({ ...current, sources: event.pages }));
           break;
         case "delta":
-          patch((t) => ({ ...t, answer: t.answer + event.text, status: "" }));
+          patch((current) => ({ ...current, answer: current.answer + event.text, status: "" }));
           break;
         case "error":
-          patch((t) => ({ ...t, error: event.message, streaming: false, status: "" }));
+          patch((current) => ({ ...current, error: event.message, streaming: false, status: "" }));
           break;
         case "done":
-          patch((t) => ({ ...t, streaming: false, status: "" }));
+          patch((current) => ({ ...current, streaming: false, status: "" }));
           break;
       }
     });
-    patch((t) => ({ ...t, streaming: false }));
-    setRemaining((n) => Math.max(0, n - 1));
+    patch((current) => ({ ...current, streaming: false }));
+    setRemaining((count) => Math.max(0, count - 1));
   }
 
   if (authed === null) return <div className="center muted">読み込み中…</div>;
 
   if (!authed) {
     return (
-      <div className="center">
+      <div className="center login-page">
         <form className="card gate" onSubmit={handleLogin}>
           <img src="/assets/wasa-logo.jpeg" alt="WASA 鳥人間プロジェクト" className="logo-large" />
-          <h1>WASA Wiki チャット</h1>
-          <p className="muted">WASA Wiki と同じ利用者名・パスワードでログインしてください。</p>
-          <input
-            type="text"
-            name="username"
-            autoComplete="username"
-            value={form.username}
-            onChange={(e) => setForm({ ...form, username: e.target.value })}
-            placeholder="利用者名"
-            autoFocus
-          />
-          <input
-            type="password"
-            name="password"
-            autoComplete="current-password"
-            value={form.password}
-            onChange={(e) => setForm({ ...form, password: e.target.value })}
-            placeholder="パスワード"
-          />
-          {loginError && <p className="error">{loginError}</p>}
+          <div className="login-heading">
+            <p className="eyebrow">WASA 鳥人間プロジェクト</p>
+            <h1>Wiki チャット</h1>
+            <p className="muted">WASA Wiki と同じ利用者名・パスワードでログインしてください。</p>
+          </div>
+          <label>
+            <span>利用者名</span>
+            <input
+              type="text"
+              name="username"
+              autoComplete="username"
+              value={form.username}
+              onChange={(event) => setForm({ ...form, username: event.target.value })}
+              autoFocus
+            />
+          </label>
+          <label>
+            <span>パスワード</span>
+            <input
+              type="password"
+              name="password"
+              autoComplete="current-password"
+              value={form.password}
+              onChange={(event) => setForm({ ...form, password: event.target.value })}
+            />
+          </label>
+          {loginError && <p className="error" role="alert">{loginError}</p>}
           <button type="submit" disabled={busy || !form.username || !form.password}>
-            {busy ? "確認中…" : "ログイン"}
+            {busy ? "Wikiで確認中…" : "ログイン"}
           </button>
-          <p className="note">
-            パスワードは Wiki で確認するためだけに使い、保存もしません。
-            パスワードを渡したくない場合は、Wikiの「特別:BotPasswords」で発行した
-            <code>利用者名@ボット名</code> でもログインできます。
-          </p>
+          <p className="note">パスワードはWikiで本人確認するためだけに使い、保存やログ出力はしません。</p>
         </form>
       </div>
     );
   }
 
   return (
-    <div className="app">
-      <header>
-        <h1>
+    <div className="app-shell">
+      <aside className="history-panel" aria-label="チャット履歴">
+        <div className="brand">
           <img src="/assets/wasa-logo.jpeg" alt="" className="logo" />
-          WASA Wiki チャット
-        </h1>
-        <div className="account">
-          <span className="muted">{username}</span>
-          <span className="muted">本日あと{remaining}回</span>
-          <button type="button" className="linkish" onClick={handleLogout}>
-            ログアウト
-          </button>
+          <span>WASA Wiki</span>
         </div>
-      </header>
 
-      <main>
-        {turns.length === 0 && (
-          <div className="intro">
-            <img src="/assets/wasa-logo.jpeg" alt="" className="logo-large" />
-            <h2>WASA Wiki チャット</h2>
-            <p className="muted">
-              引き継ぎ資料Wikiの内容に答えます。回答には必ず出典ページを示し、
-              Wikiに書かれていないことは「記載がありません」と答えます。
-            </p>
-            <div className="suggestions">
-              {SUGGESTIONS.map((s) => (
-                <button key={s.title} className="suggestion" onClick={() => handleAsk(s.body)}>
-                  <span className="suggestion-title">{s.title}</span>
-                  <span className="suggestion-body">{s.body}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {turns.map((turn, i) => (
-          <article key={i} className="turn">
-            <div className="question">{turn.question}</div>
-
-            {/* 進捗表示。無言で待たされる数秒と、何をしているか見える数秒では体感が違う */}
-            {turn.status && (
-              <div className="status">
-                <span className="dot" />
-                {turn.status}
-              </div>
-            )}
-
-            {turn.answer && (
-              <div>
-                <Markdown text={stripCitation(turn.answer)} />
-                {turn.streaming && <span className="caret" />}
-              </div>
-            )}
-            {turn.error && <div className="error">{turn.error}</div>}
-
-            {turn.sources.length > 0 && (
-              <section className="sources">
-                <h2>{turn.streaming ? "参照中の資料" : "出典"}</h2>
-                <ul>
-                  {turn.sources.map((s) => (
-                    <li key={s.url}>
-                      <a href={s.url} target="_blank" rel="noreferrer noopener">
-                        <span className="source-title">{s.title}</span>
-                        <span className="source-meta">最終更新 {s.last_edited}</span>
-                        <span className="source-arrow" aria-hidden="true">↗</span>
-                      </a>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
-          </article>
-        ))}
-        <div ref={bottom} />
-      </main>
-
-      <form
-        className="composer"
-        onSubmit={(e) => {
-          e.preventDefault();
-          handleAsk(question);
-        }}
-      >
-        <input
-          value={question}
-          onChange={(e) => setQuestion(e.target.value)}
-          placeholder="引き継ぎ資料について質問する"
-          maxLength={500}
-          disabled={turns.some((t) => t.streaming)}
-        />
-        <button
-          type="submit"
-          className="send"
-          aria-label="送信"
-          title="送信"
-          disabled={!question.trim() || turns.some((t) => t.streaming)}
-        >
-          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-            <path
-              d="M21.5 2.5 2.5 10.2l7.3 2.8m11.7-10.5-7.6 19-2.9-7.3m10.5-11.7L9.8 13"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
+        <button type="button" className="new-chat" onClick={handleNewChat} disabled={streaming}>
+          <span aria-hidden="true">＋</span> 新しいチャット
         </button>
-      </form>
 
-      <p className="disclaimer">
-        生成AIの回答には誤りが含まれることがあります。重要な判断の前に出典ページをご確認ください。
-      </p>
+        <div className="history-heading">
+          <span>チャット履歴</span>
+          {chats.length > 0 && (
+            <button type="button" onClick={handleClearHistory} disabled={streaming}>すべて削除</button>
+          )}
+        </div>
+        <nav className="history-list">
+          {chats.length === 0 ? (
+            <p className="history-empty">このタブの履歴はまだありません</p>
+          ) : (
+            chats.map((chat) => (
+              <button
+                type="button"
+                key={chat.id}
+                className={chat.id === activeChatId ? "active" : ""}
+                aria-current={chat.id === activeChatId ? "page" : undefined}
+                onClick={() => setActiveChatId(chat.id)}
+              >
+                <HistoryIcon />
+                <span>{chat.title}</span>
+                {chat.turns.some((turn) => turn.streaming) && <i aria-label="回答中" />}
+              </button>
+            ))
+          )}
+        </nav>
+
+        <div className="account-card">
+          <div>
+            <span className="account-name">{username}</span>
+            <span>本日あと{remaining}回</span>
+          </div>
+          <button type="button" className="linkish" onClick={handleLogout}>ログアウト</button>
+        </div>
+      </aside>
+
+      <section className="chat-panel">
+        <header className="chat-header">
+          <div>
+            <span className="header-kicker">WASA Wiki チャット</span>
+            <h1>{activeChat?.title ?? "新しいチャット"}</h1>
+          </div>
+          <span className="header-remaining">本日あと{remaining}回</span>
+        </header>
+
+        <main className="conversation" aria-live="polite">
+          {!activeChat && (
+            <div className="intro">
+              <img src="/assets/wasa-logo.jpeg" alt="" className="logo-large" />
+              <h2>引き継ぎ資料を、会話で探す</h2>
+              <p className="muted">
+                部内Wikiと公式サイトを横断して回答し、参照した資料を示します。
+                資料にない内容は推測せず「記載がありません」と答えます。
+              </p>
+              <div className="suggestions">
+                {SUGGESTIONS.map((suggestion) => (
+                  <button
+                    type="button"
+                    key={suggestion.title}
+                    className="suggestion"
+                    onClick={() => handleAsk(suggestion.body)}
+                  >
+                    <span className="suggestion-title">{suggestion.title}</span>
+                    <span className="suggestion-body">{suggestion.body}</span>
+                    <span className="suggestion-arrow" aria-hidden="true">→</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {activeChat?.turns.map((turn, index) => (
+            <article key={index} className="turn">
+              <div className="user-row">
+                <div className="question">{turn.question}</div>
+              </div>
+
+              <div className="assistant-row">
+                <img src="/assets/wasa-logo.jpeg" alt="" className="assistant-avatar" />
+                <div className="assistant-content">
+                  {turn.status && (
+                    <div className="status"><span className="dot" />{turn.status}</div>
+                  )}
+                  {turn.answer && (
+                    <div>
+                      <Markdown text={stripCitation(turn.answer)} />
+                      {turn.streaming && <span className="caret" />}
+                    </div>
+                  )}
+                  {turn.error && <div className="error" role="alert">{turn.error}</div>}
+
+                  {turn.sources.length > 0 && (
+                    <section className="sources">
+                      <h2>{turn.streaming ? "参照中の資料" : "出典"}</h2>
+                      <ul>
+                        {turn.sources.map((source) => (
+                          <li key={source.url}>
+                            <a href={source.url} target="_blank" rel="noreferrer noopener">
+                              <span className={`source-origin ${source.origin === "site" ? "public" : ""}`}>
+                                {source.origin === "site" ? "公式サイト" : "Wiki"}
+                              </span>
+                              <span className="source-title">{source.title}</span>
+                              <span className="source-meta">最終更新 {source.last_edited}</span>
+                              <span className="source-arrow" aria-hidden="true">↗</span>
+                            </a>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  )}
+                </div>
+              </div>
+            </article>
+          ))}
+          <div ref={bottom} />
+        </main>
+
+        <div className="composer-area">
+          <form
+            className="composer"
+            onSubmit={(event) => {
+              event.preventDefault();
+              handleAsk(question);
+            }}
+          >
+            <textarea
+              value={question}
+              onChange={(event) => setQuestion(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                  event.preventDefault();
+                  handleAsk(question);
+                }
+              }}
+              aria-label="質問"
+              placeholder="引き継ぎ資料について質問する"
+              maxLength={500}
+              rows={1}
+              disabled={streaming}
+            />
+            <button
+              type="submit"
+              className="send"
+              aria-label="送信"
+              title="送信"
+              disabled={!question.trim() || streaming}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m4 12 16-8-5.5 16-3-6.5L4 12Zm7.5 1.5L20 4" />
+              </svg>
+            </button>
+          </form>
+          <p className="composer-hint">Enterで送信・Shift + Enterで改行</p>
+          <p className="disclaimer">生成AIの回答には誤りが含まれることがあります。重要な判断の前に出典をご確認ください。</p>
+        </div>
+      </section>
     </div>
   );
 }

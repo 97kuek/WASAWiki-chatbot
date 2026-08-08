@@ -1,6 +1,6 @@
 """WASA Wiki を API 経由で丸ごとローカルに落とし、規模を実測する。
 
-前提: .env に WIKI_API / WIKI_BOT_USER / WIKI_BOT_PASS を設定済み。
+前提: .env に WIKI_API / WIKI_USER / WIKI_PASS を設定済み。
 
   python -m venv .venv && source .venv/bin/activate
   pip install requests python-dotenv
@@ -26,13 +26,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 API = os.environ["WIKI_API"]
-USER = os.environ["WIKI_BOT_USER"]
-PASSWORD = os.environ["WIKI_BOT_PASS"]
+USER = os.environ["WIKI_USER"]
+PASSWORD = os.environ["WIKI_PASS"]
 
 OUT = Path("dump")
 # さくらのレンタルサーバ相手なので、リクエスト間隔を空けて負荷をかけない
 DELAY_SEC = 1.0
-# revisions は一度に 50 ページまでまとめて取れる（bot 権限があれば 500）
+# revisions は通常アカウントで確実に通る50ページずつ取得する
 BATCH = 50
 
 session = requests.Session()
@@ -55,33 +55,21 @@ def call(params: dict, method: str = "GET") -> dict:
 
 
 def login() -> str:
-    """通常アカウントなら clientlogin、Botパスワード（名前に @）なら login を使う。"""
+    """WASA Wikiの通常アカウントをclientloginで認証する。"""
     token = call({"action": "query", "meta": "tokens", "type": "login"})
     token = token["query"]["tokens"]["logintoken"]
 
-    if "@" in USER:
-        result = call(
-            {
-                "action": "login",
-                "lgname": USER,
-                "lgpassword": PASSWORD,
-                "lgtoken": token,
-            },
-            method="POST",
-        )["login"]
-        ok, reason = result["result"] == "Success", result.get("reason", "")
-    else:
-        result = call(
-            {
-                "action": "clientlogin",
-                "username": USER,
-                "password": PASSWORD,
-                "loginreturnurl": "https://example.org/",  # 使われないが必須
-                "logintoken": token,
-            },
-            method="POST",
-        )["clientlogin"]
-        ok, reason = result["status"] == "PASS", result.get("message", "")
+    result = call(
+        {
+            "action": "clientlogin",
+            "username": USER,
+            "password": PASSWORD,
+            "loginreturnurl": "https://example.org/",  # 使われないが必須
+            "logintoken": token,
+        },
+        method="POST",
+    )["clientlogin"]
+    ok, reason = result["status"] == "PASS", result.get("message", "")
 
     if not ok:
         raise SystemExit(f"ログイン失敗: {reason}")
