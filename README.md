@@ -40,14 +40,9 @@ python build_index.py   # 整形・チャンク化   → data/index.json
 python build_toc.py     # 目次を生成        → data/toc.md
 ```
 
-`dump_wiki.py` はさくらインターネットのレンタルサーバ上のWikiを叩くため、
-リクエスト間に1秒の間隔を入れている。全ページの取得には数分かかる。
-
-`dump_site.py` は一般公開の公式サイト（wasa-birdman.com）を取り込む。
-Wikiは「作り方」に詳しい一方、団体の成り立ちや歴代機体といった**対外的な説明**が
-薄く、新入生や外部への説明を求められると答えられなかった。こちらも1秒間隔で、
-sitemap から519ページを辿る（10分ほどかかる）。`dump/site.jsonl` が無ければ
-`build_index.py` はWikiだけで索引を作るので、省略しても動く。
+- `dump_wiki.py` はさくらインターネットのレンタルサーバ上のWikiを叩くため、リクエスト間に1秒の間隔を入れている。全ページの取得には数分かかる。
+- `dump_site.py` は一般公開の公式サイト（wasa-birdman.com）を取り込む。
+- Wikiは「作り方」に詳しい一方、団体の成り立ちや歴代機体といった**対外的な説明**が薄く、新入生や外部への説明を求められると答えられなかった。こちらも1秒間隔で、sitemap から519ページを辿る（10分ほどかかる）。`dump/site.jsonl` が無ければ`build_index.py` はWikiだけで索引を作るので、省略しても動く。
 
 ## 2. 精度を測る
 
@@ -78,8 +73,7 @@ Docker で通しで動かす場合:
 docker compose up --build   # → http://localhost:8080
 ```
 
-Geminiに切り替えるには `LLM_PROVIDER=gemini` と `GEMINI_API_KEY` を設定する。
-無料枠は送信内容がGoogleの製品改善に使われるため、非公開Wikiを送る運用はデータ管理者の承認前には行わない。
+- Geminiに切り替えるには `LLM_PROVIDER=gemini` と `GEMINI_API_KEY` を設定する。
 
 ### チャット画面
 
