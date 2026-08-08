@@ -14,6 +14,7 @@ import {
   type Assistant,
   type AssistantDraft,
   type Chat,
+  type Team,
   type Turn,
 } from "./api";
 import { AssistantAvatar, DefaultAvatar, toIconDataURL } from "./avatar";
@@ -200,7 +201,7 @@ export default function App() {
   const [toast, setToast] = useState("");
   const [clock, setClock] = useState(Date.now());
   const [assistants, setAssistants] = useState<Assistant[]>([]);
-  const [teams, setTeams] = useState<string[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
   // 選んだアシスタントは端末に覚える。毎回選び直させると、結局
   // 誰も使わない機能になる（サーバーに持つほどの情報でもない）
   const [assistantId, setAssistantId] = useState(() => localStorage.getItem(ASSISTANT_KEY) ?? "");
@@ -971,11 +972,11 @@ export default function App() {
                     </select>
                   </label>
                   <label>
-                    <span>参照する班</span>
+                    <span>参照する区分</span>
                     <select value={assistantDraft.team ?? ""}
                       onChange={(event) => setAssistantDraft((d) => ({ ...d, team: event.target.value || undefined }))}>
                       <option value="">すべて</option>
-                      {teams.map((team) => <option key={team} value={team}>{team}班</option>)}
+                      {teams.map((team) => <option key={team.value} value={team.value}>{team.label}</option>)}
                     </select>
                   </label>
                 </div>

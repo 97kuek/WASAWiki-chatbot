@@ -93,10 +93,14 @@ export type Assistant = {
   canEdit: boolean;
 };
 
-export async function listAssistants(): Promise<{ assistants: Assistant[]; teams: string[] }> {
+/** 参照範囲に使える区分。呼び方はサーバー側が持つ（「空力班」のような
+ *  存在しない呼び方を画面で組み立てないため）。 */
+export type Team = { value: string; label: string };
+
+export async function listAssistants(): Promise<{ assistants: Assistant[]; teams: Team[] }> {
   const res = await fetch(`${base}/api/assistants`, { credentials: "include" });
   if (!res.ok) throw new Error("アシスタントを読み込めませんでした");
-  const body = await res.json() as { assistants?: Assistant[]; teams?: string[] };
+  const body = await res.json() as { assistants?: Assistant[]; teams?: Team[] };
   return { assistants: body.assistants ?? [], teams: body.teams ?? [] };
 }
 

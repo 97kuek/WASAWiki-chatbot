@@ -18,7 +18,7 @@ func TestValidate(t *testing.T) {
 		wantErr bool
 	}{
 		{"最小限", func(*state.Assistant) {}, false},
-		{"班の絞り込み", func(a *state.Assistant) { a.Team = "翼" }, false},
+		{"区分の絞り込み", func(a *state.Assistant) { a.Team = "翼" }, false},
 		{"出所の絞り込み", func(a *state.Assistant) { a.Origin = "site" }, false},
 		{"名前が空", func(a *state.Assistant) { a.Name = "  " }, true},
 		{"指示が空", func(a *state.Assistant) { a.Instruction = "" }, true},
@@ -27,7 +27,9 @@ func TestValidate(t *testing.T) {
 		// 別のドキュメントを指せてしまう
 		{"IDにスラッシュ", func(a *state.Assistant) { a.ID = "a/b" }, true},
 		{"IDに親ディレクトリ", func(a *state.Assistant) { a.ID = ".." }, true},
-		{"存在しない班", func(a *state.Assistant) { a.Team = "宇宙" }, true},
+		{"存在しない区分", func(a *state.Assistant) { a.Team = "宇宙" }, true},
+		// TF・大会 は分類としては残っているが、絞り込みの選択肢からは外した
+		{"選択肢から外した区分", func(a *state.Assistant) { a.Team = "TF・大会" }, true},
 		{"存在しない出所", func(a *state.Assistant) { a.Origin = "wikipedia" }, true},
 		{"指示が長すぎる", func(a *state.Assistant) { a.Instruction = strings.Repeat("あ", MaxInstruction+1) }, true},
 	}
@@ -92,12 +94,13 @@ func TestScopeLabel(t *testing.T) {
 	}{
 		{nil, ""},
 		{&state.Assistant{}, ""},
-		{&state.Assistant{Team: "電装"}, "電装班のページのみ"},
-		// Teams には班ではない区分も混ざる。「TF・大会班」にしない
-		{&state.Assistant{Team: "TF・大会"}, "TF・大会の資料のみ"},
+		{&state.Assistant{Team: "電装"}, "電装班の資料のみ"},
+		// 機械的に「班」を足さない。実データ上「空力班」は存在せず「空力設計」である
+		{&state.Assistant{Team: "空力"}, "空力設計の資料のみ"},
+		{&state.Assistant{Team: "構造"}, "構造設計の資料のみ"},
 		{&state.Assistant{Team: "運営"}, "運営の資料のみ"},
 		{&state.Assistant{Origin: "site"}, "公式サイトのみ（部外に出せる情報だけ）"},
-		{&state.Assistant{Origin: "wiki", Team: "翼"}, "引き継ぎWikiのみ / 翼班のページのみ"},
+		{&state.Assistant{Origin: "wiki", Team: "翼"}, "引き継ぎWikiのみ / 翼班の資料のみ"},
 	}
 	for _, c := range cases {
 		if got := ScopeLabel(c.assistant); got != c.want {

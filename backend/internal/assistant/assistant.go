@@ -44,23 +44,49 @@ const (
 	MaxIDLength    = 64
 )
 
-// 参照範囲の絞り込みに使える班。index.json の team と一致させる
-// （build_index.py の TEAM_RULES が正本）。
-var Teams = []string{
-	"空力", "構造", "翼", "駆動・フレーム", "プロペラ", "フェアリング",
-	"電装", "パイロット", "TF・大会", "運営",
+// Team は参照範囲の絞り込みに使える区分。
+//
+// Value は index.json の team と一致させる（build_index.py の TEAM_RULES が正本）。
+// Label は画面とプロンプトに出す呼び方で、**機械的に「班」を足さない**。
+// 実データ上、ページ名に「班」が付くのは翼・プロペラ・フェアリング・電装・
+// 駆動だけで、空力と構造は「空力設計」「構造設計」である。
+// 「空力班」「TF・大会班」は存在しない呼び方になる。
+type Team struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+}
+
+var Teams = []Team{
+	{"空力", "空力設計"},
+	{"構造", "構造設計"},
+	{"翼", "翼班"},
+	{"駆動・フレーム", "駆動・フレーム班"},
+	{"プロペラ", "プロペラ班"},
+	{"フェアリング", "フェアリング班"},
+	{"電装", "電装班"},
+	{"パイロット", "パイロット"},
+	{"運営", "運営"},
 }
 
 var origins = map[string]bool{"": true, "wiki": true, "site": true}
 
-// 班ではない区分。呼び方を機械的に「〜班」にしないための例外。
-var notTeams = map[string]bool{"TF・大会": true, "運営": true, "パイロット": true}
+// TeamLabel は区分の呼び方を返す。未知の値はそのまま返す
+// （build_index.py 側の分類が増えても画面が壊れないようにするため）。
+func TeamLabel(value string) string {
+	label, _ := lookupTeam(value)
+	return label
+}
 
-func teamSuffix(team string) string {
-	if notTeams[team] {
-		return "の資料のみ"
+// lookupTeam は呼び方と、選択肢に含まれるかどうかを返す。
+// **「呼び方が値と同じか」で存在判定をしないこと。** パイロットと運営は
+// 呼び方が値と同じなので、それを未知の扱いにすると弾かれる。
+func lookupTeam(value string) (string, bool) {
+	for _, team := range Teams {
+		if team.Value == value {
+			return team.Label, true
+		}
 	}
-	return "班のページのみ"
+	return value, false
 }
 
 // Validate は保存前の検査。ここを通ったものだけが Store に入る。
@@ -86,8 +112,8 @@ func Validate(a *state.Assistant) error {
 		return fmt.Errorf("参照範囲の指定が不正です")
 	}
 	if a.Team != "" {
-		if !slicesContains(Teams, a.Team) {
-			return fmt.Errorf("班の指定が不正です")
+		if _, ok := lookupTeam(a.Team); !ok {
+			return fmt.Errorf("参照する区分の指定が不正です")
 		}
 	}
 	if err := validateIcon(a.Icon); err != nil {
@@ -212,9 +238,7 @@ func ScopeLabel(a *state.Assistant) string {
 		parts = append(parts, "公式サイトのみ（部外に出せる情報だけ）")
 	}
 	if a.Team != "" {
-		// Teams には班ではない区分も混ざる。機械的に「班」を足すと
-		// 「TF・大会班」「運営班」という存在しない呼び方になる
-		parts = append(parts, a.Team+teamSuffix(a.Team))
+		parts = append(parts, TeamLabel(a.Team)+"の資料のみ")
 	}
 	return strings.Join(parts, " / ")
 }

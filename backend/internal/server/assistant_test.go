@@ -125,7 +125,10 @@ func TestListAssistantsReportsPermission(t *testing.T) {
 			Author  string `json:"author"`
 			CanEdit bool   `json:"canEdit"`
 		} `json:"assistants"`
-		Teams []string `json:"teams"`
+		Teams []struct {
+			Value string `json:"value"`
+			Label string `json:"label"`
+		} `json:"teams"`
 	}
 	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
 		t.Fatalf("応答を解析できない: %v", err)
