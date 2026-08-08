@@ -1,0 +1,28 @@
+# Git履歴とローカル設定はビルドデーモンへ送らない。
+.git/
+.env
+.env.*
+!.env.example
+.DS_Store
+.claude/
+.codex/
+.agents/
+
+# 非公開Wikiの取得元と評価回答は、本番イメージに不要かつ機密性がある。
+dump/
+eval/
+
+# Python・Node・Goのローカル生成物。
+.venv/
+**/__pycache__/
+**/*.pyc
+**/node_modules/
+web/dist/
+backend/server
+**/*.tsbuildinfo
+
+# 本番実行に必要な索引だけをビルドコンテキストへ入れる。
+# data/ 自体を除外すると否定パターンが効かないため、直下を個別に除外する。
+data/*
+!data/index.json
+!data/toc.md

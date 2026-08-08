@@ -21,6 +21,7 @@ Python側の `rag/pipeline.py` と Go側の `backend/internal/pipeline` は、
 - 設計の詳細と判断の根拠: [docs/01-設計方針.md](docs/01-設計方針.md)
 - 実測値: [docs/02-測定結果.md](docs/02-測定結果.md)
 - 画面・履歴・認証の現行仕様: [docs/03-画面・認証仕様.md](docs/03-画面・認証仕様.md)
+- 本番へのデプロイと更新手順: [docs/04-デプロイ手順.md](docs/04-デプロイ手順.md)
 
 ## セットアップ
 
@@ -100,8 +101,8 @@ Geminiに切り替えるには `LLM_PROVIDER=gemini` と `GEMINI_API_KEY` を設
 | `WIKI_PASS` | (なし) | 上記通常アカウントのパスワード。`.env` だけに置く |
 | `SESSION_SECRET` | 自動生成 | Cookie署名鍵。本番では固定値が必須。未設定だと再起動で全員ログアウトし、当日の回数も復元できない |
 | `DAILY_LIMIT` | 30 | 利用者ひとりあたり・日本時間1日の質問数。API費用の安全弁 |
-| `ALLOW_ORIGIN` | (なし) | 本番のCloudflare Pages URL。Cloud Runでは必須で、許可外OriginのPOSTを拒否する |
-| `LLM_PROVIDER` | `ollama` | `claude` にすると本番モデルを使う |
+| `ALLOW_ORIGIN` | (なし) | 本番のCloudflare Pages URL。複数はカンマ区切り。Cloud Runでは必須で、許可外OriginのPOSTを拒否する |
+| `LLM_PROVIDER` | `ollama` | 本番でGeminiを使う場合は `gemini` |
 | `GEMINI_API_KEY` | (なし) | WASAで共有するGeminiプロジェクトのAPIキー。サーバーの`.env`だけに置く |
 | `GEMINI_MODEL` | `gemini-flash-latest` | Geminiのモデル名 |
 | `GEMINI_PAID_TIER` | `false` | 課金有効プロジェクトの確認フラグ。Cloud RunでGeminiを使う場合は確認後に`true`が必須 |
