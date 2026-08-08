@@ -1368,43 +1368,69 @@ button:disabled {
 
 /* ---------------------------------------------------------------- アシスタント */
 
-.assistant-chip {
-  display: inline-flex;
+/* 「新しいチャット」の直下に置く入口。名前・履歴と同じ縦の並びに入れる */
+.sidebar-assistant {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 6px;
-  flex: none;
-  max-width: 190px;
-  padding: 5px 10px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--muted);
-  font-size: 12px;
+  gap: 9px;
+  width: 100%;
+  min-height: 42px;
+  margin-top: -8px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
   cursor: pointer;
 }
 
-/* 選択中は色で分かるようにする。どの設定で答えているかが常に見えていないと、
-   口調が変わった理由が分からず不具合に見える */
-.assistant-chip.on {
-  border-color: var(--text);
-  color: var(--text);
+.sidebar-assistant:hover {
+  background: var(--surface);
 }
 
-.assistant-chip svg {
-  width: 15px;
-  height: 15px;
-  flex: none;
+.sidebar-assistant svg {
+  width: 20px;
   fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
+  stroke: var(--muted);
+  stroke-width: 1.7;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
-.assistant-chip span {
+.sidebar-assistant-label {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* 選択中の名前。ヘッダーから表示をなくした分、どの設定で答えているかが
+   分かる場所はここだけになる。汎用のときは目立たせない */
+.sidebar-assistant-current {
+  max-width: 96px;
+  overflow: hidden;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.sidebar-assistant.on svg {
+  stroke: var(--accent);
+}
+
+.sidebar-assistant.on .sidebar-assistant-current {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.sidebar-assistant.on:hover .sidebar-assistant-current {
+  background: var(--surface);
 }
 
 .assistant-dialog {
@@ -1554,5 +1580,4 @@ button:disabled {
 
 @media (max-width: 700px) {
   .assistant-scope { grid-template-columns: 1fr; }
-  .assistant-chip { max-width: 120px; }
 }

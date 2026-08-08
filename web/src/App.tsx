@@ -681,6 +681,19 @@ export default function App() {
           <span aria-hidden="true">＋</span> 新しいチャット
         </button>
 
+        {/* 選択中の名前をここに出す。ヘッダーの表示をやめた分、どのアシスタントで
+            答えているかが分かる場所がここだけになるため、入口と現在値を兼ねさせる */}
+        <button
+          type="button"
+          className={`sidebar-assistant ${activeAssistant ? "on" : ""}`}
+          onClick={() => { setAssistantError(""); setAssistantPanel("list"); }}
+          aria-haspopup="dialog"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v3M7 9h10a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2ZM9 14h.01M15 14h.01" /></svg>
+          <span className="sidebar-assistant-label">アシスタント</span>
+          <span className="sidebar-assistant-current">{activeAssistant?.name ?? "汎用"}</span>
+        </button>
+
         <div className="history-heading">
           <span>チャット履歴</span>
         </div>
@@ -754,15 +767,6 @@ export default function App() {
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
             </button>
             <h1>{activeChat?.title ?? "新しいチャット"}</h1>
-            <button
-              type="button"
-              className={`assistant-chip ${activeAssistant ? "on" : ""}`}
-              onClick={() => { setAssistantError(""); setAssistantPanel("list"); }}
-              title={activeAssistant ? `${activeAssistant.name}（${activeAssistant.author} 作成）` : "アシスタントを選ぶ"}
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v3M7 9h10a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2ZM9 14h.01M15 14h.01" /></svg>
-              <span>{activeAssistant?.name ?? "汎用"}</span>
-            </button>
           </div>
           <div className="header-actions" ref={headerMenus}>
             <span className="header-organization">WASA</span>
