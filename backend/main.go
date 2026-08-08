@@ -66,6 +66,32 @@ func envSeconds(key string, fallback float64) time.Duration {
 	return time.Duration(fallback * float64(time.Second))
 }
 
+// seedAssistants は assistants/*.json のうち未登録のものを登録する。
+//
+// ⚠️ **ADMIN_USERS が未設定でもアプリの起動は止めない。** 初期アシスタントは
+// 作成者を決められないので見送るが、アシスタント以外はすべて正常に動く。
+// ここで落とすと、設定を1つ書き忘れただけでチャットごと使えなくなる。
+func seedAssistants(ctx context.Context, store appstate.Store, dir string, admins []string) error {
+	seeds, err := assistant.LoadSeeds(dir)
+	if err != nil {
+		return err
+	}
+	if len(seeds) == 0 {
+		return nil
+	}
+	if len(admins) == 0 {
+		// 作成者不明のまま共有すると、誰に聞けばよいか分からないアシスタントになる
+		log.Printf("初期アシスタント%d件は登録しません（ADMIN_USERSが未設定で作成者を決められません）", len(seeds))
+		return nil
+	}
+	added, err := assistant.Apply(ctx, store, seeds, admins[0])
+	if err != nil {
+		return err
+	}
+	log.Printf("初期アシスタント: %d件中 %d件を新規登録（既存は上書きしない）", len(seeds), added)
+	return nil
+}
+
 func geminiDataUseApproved() bool {
 	return os.Getenv("GEMINI_PAID_TIER") == "true" ||
 		os.Getenv("GEMINI_FREE_TIER_APPROVED") == "true"
@@ -164,22 +190,10 @@ func main() {
 	// 明らかなゴミを片付けるための最小限の権限（docs/03-画面・認証仕様.md §5）
 	admins := splitList(os.Getenv("ADMIN_USERS"))
 	if len(admins) == 0 {
-		log.Println("警告: ADMIN_USERS が未設定です。アシスタントは作成者本人しか削除できません")
+		log.Println("警告: ADMIN_USERS が未設定です。アシスタントは作成者本人しか削除できず、初期アシスタントも登録されません")
 	}
-	seeds, err := assistant.LoadSeeds(env("ASSISTANT_SEED_DIR", "assistants"))
-	if err != nil {
-		log.Fatalf("初期アシスタントを読み込めません: %v", err)
-	}
-	if len(seeds) > 0 {
-		defaultAuthor := ""
-		if len(admins) > 0 {
-			defaultAuthor = admins[0]
-		}
-		added, err := assistant.Apply(context.Background(), sharedState, seeds, defaultAuthor)
-		if err != nil {
-			log.Fatalf("初期アシスタントの登録に失敗: %v", err)
-		}
-		log.Printf("初期アシスタント: %d件中 %d件を新規登録（既存は上書きしない）", len(seeds), added)
+	if err := seedAssistants(context.Background(), sharedState, env("ASSISTANT_SEED_DIR", "assistants"), admins); err != nil {
+		log.Fatalf("初期アシスタントの登録に失敗: %v", err)
 	}
 
 	srv := server.New(server.Config{
