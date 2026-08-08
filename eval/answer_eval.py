@@ -76,7 +76,10 @@ FAITHFUL_SCHEMA = {
 }
 
 
-def judge_faithfulness(llm, context: str, answer: str) -> dict:
+def judge_faithfulness(llm, context: str, answer: str, toc: str = "") -> dict:
+    # 出典行はメタデータであって主張ではない。判定対象から外さないと
+    # 「出典: X（最終更新: Y）」そのものを裏付け無しと指摘してくる
+    answer = re.sub(r"^出典[:：].*$", "", answer, flags=re.M)
     prompt = f"""以下の「資料」と「回答」を読み、回答の内容が資料だけで裏付けられるかを判定してください。
 
 手順:
@@ -89,6 +92,8 @@ def judge_faithfulness(llm, context: str, answer: str) -> dict:
 - 資料の要約・言い換えは faithful = true
 
 # 資料
+{toc}
+
 {context}
 
 # 回答
@@ -135,8 +140,8 @@ def main() -> None:
 
         # --- LLM-as-a-Judge（暫定） ---
         context = "\n\n".join(pipeline.chunks[c]["text"] for c in answer.chunk_ids)
-        verdict = judge_faithfulness(llm, context[:20000], answer.text) if answer.chunk_ids else \
-            {"faithful": True, "reason": "資料なし"}
+        verdict = judge_faithfulness(llm, context[:20000], answer.text, pipeline.toc) \
+            if answer.chunk_ids else {"faithful": True, "reason": "資料なし"}
         stats["faithful"] += verdict["faithful"]
 
         bucket = per_type[q["type"]]
