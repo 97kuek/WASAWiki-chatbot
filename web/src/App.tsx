@@ -20,7 +20,6 @@ type Chat = {
 };
 
 const MAX_CHATS = 30;
-const SUPPORT_URL = import.meta.env.VITE_SUPPORT_URL ?? "https://wasa-birdman.com/";
 
 /**
  * 回答末尾の「出典: ページ名（最終更新: YYYY-MM）」を落とす。
@@ -98,6 +97,7 @@ export default function App() {
   const [username, setUsername] = useState("");
   const [remaining, setRemaining] = useState(0);
   const [form, setForm] = useState({ username: "", password: "" });
+  const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState("");
   const [busy, setBusy] = useState(false);
   const [question, setQuestion] = useState("");
@@ -155,6 +155,7 @@ export default function App() {
     setBusy(false);
     // 成否にかかわらず、入力したWikiパスワードは即座に画面から消す。
     setForm((current) => ({ ...current, password: "" }));
+    setShowPassword(false);
     if (error) {
       setLoginError(error);
       return;
@@ -264,9 +265,8 @@ export default function App() {
         <form className="card gate" onSubmit={handleLogin}>
           <img src="/assets/wasa-logo.jpeg" alt="WASA 鳥人間プロジェクト" className="logo-large" />
           <div className="login-heading">
-            <p className="eyebrow">WASA 鳥人間プロジェクト</p>
             <h1>WASA Chat</h1>
-            <p className="muted">WASA Wiki と同じ利用者名・パスワードでログインしてください。</p>
+            <p className="muted">WASA Wikiと同じ利用者名・パスワードでログイン</p>
           </div>
           <label>
             <span>利用者名</span>
@@ -281,19 +281,39 @@ export default function App() {
           </label>
           <label>
             <span>パスワード</span>
-            <input
-              type="password"
-              name="password"
-              autoComplete="current-password"
-              value={form.password}
-              onChange={(event) => setForm({ ...form, password: event.target.value })}
-            />
+            <div className="password-field">
+              <input
+                type={showPassword ? "text" : "password"}
+                name="password"
+                autoComplete="current-password"
+                value={form.password}
+                onChange={(event) => setForm({ ...form, password: event.target.value })}
+              />
+              <button
+                type="button"
+                className="password-toggle"
+                onClick={() => setShowPassword((visible) => !visible)}
+                aria-label={showPassword ? "パスワードを隠す" : "パスワードを表示"}
+                aria-pressed={showPassword}
+              >
+                {showPassword ? (
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m3 3 18 18M10.6 10.7a2 2 0 0 0 2.7 2.7M9.9 5.2A10.8 10.8 0 0 1 12 5c5.5 0 9 7 9 7a16 16 0 0 1-2.2 3.2M6.2 6.2C4.2 7.6 3 10 3 12c0 0 3.5 7 9 7 1.2 0 2.3-.3 3.3-.7" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M3 12s3.5-7 9-7 9 7 9 7-3.5 7-9 7-9-7-9-7Z" />
+                    <circle cx="12" cy="12" r="2.5" />
+                  </svg>
+                )}
+              </button>
+            </div>
           </label>
           {loginError && <p className="error" role="alert">{loginError}</p>}
           <button type="submit" disabled={busy || !form.username || !form.password}>
             {busy ? "Wikiで確認中…" : "ログイン"}
           </button>
-          <p className="note">パスワードはWikiで本人確認するためだけに使い、保存やログ出力はしません。</p>
+          <p className="note">パスワードはWikiで本人確認をするためだけに使用します</p>
         </form>
       </div>
     );
@@ -369,10 +389,6 @@ export default function App() {
             </div>
           </div>
           <div className="header-actions">
-            <a className="support-link" href={SUPPORT_URL} target="_blank" rel="noreferrer noopener">
-              <span className="help-icon" aria-hidden="true">?</span>
-              <span>サポートサイト</span>
-            </a>
             <span className="header-organization">WASA</span>
             <button type="button" className="header-icon" aria-label="通知" title="通知はありません" disabled>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21h4" /></svg>

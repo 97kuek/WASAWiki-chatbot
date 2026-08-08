@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+
+	"github.com/joho/godotenv"
 )
 
 func TestLoginUsesClientLogin(t *testing.T) {
@@ -58,14 +60,22 @@ func TestLoginRejectsBadCredentials(t *testing.T) {
 	}
 }
 
-// 実際のWikiに繋いで確認する。通常アカウントの検証用情報が無い環境ではスキップする。
+// 実際のWikiに繋いで確認する。通常テストで非公開Wikiへ接続しないよう明示フラグを必須にする。
 //
-//	cd backend && set -a && . ../.env && set +a && go test ./internal/wiki -v
+//	cd backend && LIVE_WIKI_TEST=1 go test ./internal/wiki -run '^TestLoginSuccess$'
 func liveAuth(t *testing.T) *Authenticator {
 	t.Helper()
+	if os.Getenv("LIVE_WIKI_TEST") != "1" {
+		t.Skip("LIVE_WIKI_TEST=1 が未指定のため実Wiki認証をスキップ")
+	}
+	if os.Getenv("WIKI_API") == "" {
+		if err := godotenv.Load("../../../.env"); err != nil {
+			t.Fatalf("リポジトリ直下の.envを読み込めない: %v", err)
+		}
+	}
 	api := os.Getenv("WIKI_API")
 	if api == "" || os.Getenv("WIKI_USER") == "" {
-		t.Skip("WIKI_API / WIKI_USER が未設定のためスキップ")
+		t.Fatal("WIKI_API / WIKI_USER が未設定")
 	}
 	return New(api)
 }

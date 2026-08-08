@@ -86,7 +86,7 @@ docker compose up --build   # → http://localhost:8080
 - 入力欄は画面下部に固定し、`Enter` で送信、`Shift + Enter` で改行する
 - チャット履歴は現在のタブ内だけに保存し、タブを閉じたときとログアウト時に消去する
 - PCは履歴と会話の2カラムで、履歴欄は折りたためる。狭い画面では重ねて開く
-- 右上のサポート先は `VITE_SUPPORT_URL` で変更できる
+- サポートリンクは案内先が決まるまで表示しない
 
 ### 環境変数
 
@@ -97,7 +97,6 @@ docker compose up --build   # → http://localhost:8080
 | `WIKI_PASS` | (なし) | 上記通常アカウントのパスワード。`.env` だけに置く |
 | `SESSION_SECRET` | 自動生成 | Cookie署名鍵。未設定だと再起動で全員ログアウト |
 | `DAILY_LIMIT` | 30 | 利用者ひとりあたり・日本時間1日の質問数。API費用の安全弁 |
-| `VITE_SUPPORT_URL` | WASA公式サイト | 画面右上のサポートリンク |
 | `LLM_PROVIDER` | `ollama` | `claude` にすると本番モデルを使う |
 | `CLAUDE_MODEL` | `claude-opus-5` | 費用優先なら `claude-sonnet-5` |
 | `DATA_DIR` | `data` | index.json と toc.md の置き場所 |
@@ -120,4 +119,5 @@ cd web && npm run build
 
 ## ライセンス
 
-MIT License（コードのみ。Wikiの内容はWASA鳥人間プロジェクトに帰属する）
+- コードは [MIT License](LICENSE) で公開する
+- Wikiの内容と取得データはWASA鳥人間プロジェクトに帰属し、MIT Licenseの対象に含めない
