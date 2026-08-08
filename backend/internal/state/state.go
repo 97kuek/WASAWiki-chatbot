@@ -22,6 +22,11 @@ type Turn struct {
 	Error     string   `json:"error,omitempty" firestore:"error,omitempty"`
 	ErrorCode string   `json:"errorCode,omitempty" firestore:"error_code,omitempty"`
 	Streaming bool     `json:"streaming" firestore:"streaming"`
+	// どのアシスタントで答えたか。過去の回答を見たときに復元できないと、
+	// 口調が違う理由が分からない。画像は持たない（履歴が肥大するため、
+	// アイコンは現在の一覧から引き、消えていれば名前の頭文字で描く）
+	AssistantID   string `json:"assistantId,omitempty" firestore:"assistant_id,omitempty"`
+	AssistantName string `json:"assistantName,omitempty" firestore:"assistant_name,omitempty"`
 }
 
 type Chat struct {
@@ -78,6 +83,8 @@ type Store interface {
 	// 検査を通り、後勝ちで他人のアシスタントを上書きできてしまう。
 	// 「他人のものは編集できない」を守るには、書き込み自体を条件付きにするしかない。
 	CreateAssistant(context.Context, Assistant) error
+	// UpdateAssistant は既存を書き換える。IDは変えられない。
+	UpdateAssistant(context.Context, Assistant) error
 	DeleteAssistant(context.Context, string) error
 }
 

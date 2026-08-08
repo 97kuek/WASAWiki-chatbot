@@ -43,20 +43,20 @@ func TestValidate(t *testing.T) {
 	}
 }
 
-func TestCanDelete(t *testing.T) {
+func TestCanEdit(t *testing.T) {
 	item := state.Assistant{Author: "41 Hanako"}
 	admins := []string{"42 Wasa Taro"}
 
-	if !CanDelete(item, "41 Hanako", admins) {
+	if !CanEdit(item, "41 Hanako", admins) {
 		t.Error("作成者本人が削除できない")
 	}
-	if !CanDelete(item, "42 Wasa Taro", admins) {
+	if !CanEdit(item, "42 Wasa Taro", admins) {
 		t.Error("管理者が削除できない")
 	}
-	if CanDelete(item, "43 Taro", admins) {
+	if CanEdit(item, "43 Taro", admins) {
 		t.Error("第三者が削除できてしまう")
 	}
-	if CanDelete(item, "", nil) {
+	if CanEdit(item, "", nil) {
 		t.Error("利用者名が空で削除できてしまう")
 	}
 }
@@ -93,6 +93,9 @@ func TestScopeLabel(t *testing.T) {
 		{nil, ""},
 		{&state.Assistant{}, ""},
 		{&state.Assistant{Team: "電装"}, "電装班のページのみ"},
+		// Teams には班ではない区分も混ざる。「TF・大会班」にしない
+		{&state.Assistant{Team: "TF・大会"}, "TF・大会の資料のみ"},
+		{&state.Assistant{Team: "運営"}, "運営の資料のみ"},
 		{&state.Assistant{Origin: "site"}, "公式サイトのみ（部外に出せる情報だけ）"},
 		{&state.Assistant{Origin: "wiki", Team: "翼"}, "引き継ぎWikiのみ / 翼班のページのみ"},
 	}

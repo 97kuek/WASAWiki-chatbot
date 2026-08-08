@@ -18,6 +18,10 @@ export type Turn = {
   error?: string;
   errorCode?: "daily_quota" | "rate_limit" | "user_daily_limit" | "unavailable";
   streaming: boolean;
+  /** どのアシスタントで答えたか。過去の回答でも口調の理由が分かるように残す。
+   *  アイコンは持たない（履歴が肥大するため、現在の一覧から引く）。 */
+  assistantId?: string;
+  assistantName?: string;
 };
 
 export type Chat = {
@@ -85,8 +89,8 @@ export type Assistant = {
   updatedAt: string;
   /** 参照範囲の説明。サーバー側で組み立てた文言をそのまま出す。 */
   scope: string;
-  /** 作成者本人か管理者のときだけ true。判定はサーバーが持つ。 */
-  canDelete: boolean;
+  /** 作成者本人か管理者のときだけ true。編集と削除で同じ権限。 */
+  canEdit: boolean;
 };
 
 export async function listAssistants(): Promise<{ assistants: Assistant[]; teams: string[] }> {
@@ -115,6 +119,18 @@ export async function createAssistant(draft: AssistantDraft): Promise<Assistant>
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error ?? "アシスタントを作成できませんでした");
+  return body as Assistant;
+}
+
+export async function updateAssistant(id: string, draft: AssistantDraft): Promise<Assistant> {
+  const res = await fetch(`${base}/api/assistants/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(draft),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? "アシスタントを保存できませんでした");
   return body as Assistant;
 }
 

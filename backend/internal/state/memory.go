@@ -135,6 +135,13 @@ func (m *Memory) CreateAssistant(_ context.Context, assistant Assistant) error {
 	return nil
 }
 
+func (m *Memory) UpdateAssistant(_ context.Context, assistant Assistant) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.assistants[assistant.ID] = assistant
+	return nil
+}
+
 func (m *Memory) DeleteAssistant(_ context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

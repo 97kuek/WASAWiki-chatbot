@@ -121,9 +121,9 @@ func TestListAssistantsReportsPermission(t *testing.T) {
 	}
 	var body struct {
 		Assistants []struct {
-			ID        string `json:"id"`
-			Author    string `json:"author"`
-			CanDelete bool   `json:"canDelete"`
+			ID      string `json:"id"`
+			Author  string `json:"author"`
+			CanEdit bool   `json:"canEdit"`
 		} `json:"assistants"`
 		Teams []string `json:"teams"`
 	}
@@ -138,8 +138,8 @@ func TestListAssistantsReportsPermission(t *testing.T) {
 		if item.Author == "" {
 			t.Error("作成者名が空で返っている")
 		}
-		if want := item.ID == "mine"; item.CanDelete != want {
-			t.Errorf("%s の削除可否 = %v, want %v", item.ID, item.CanDelete, want)
+		if want := item.ID == "mine"; item.CanEdit != want {
+			t.Errorf("%s の編集可否 = %v, want %v", item.ID, item.CanEdit, want)
 		}
 	}
 }
@@ -207,5 +207,55 @@ func TestCreateAssistantConcurrentSameID(t *testing.T) {
 	list, _ := shared.ListAssistants(context.Background())
 	if len(list) != 1 {
 		t.Errorf("保存されたのが%d件", len(list))
+	}
+}
+
+// 編集できるのは作成者本人と管理者だけ。他人のものは複製して直す原則を守る。
+func TestUpdateAssistantPermission(t *testing.T) {
+	cases := []struct {
+		name string
+		user string
+		want int
+	}{
+		{"作成者本人", "41 Hanako", http.StatusOK},
+		{"管理者", "42 Wasa Taro", http.StatusOK},
+		{"第三者", "43 Taro", http.StatusForbidden},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv, shared := testServer(t, []string{"42 Wasa Taro"})
+			seedAssistant(t, shared, "target", "41 Hanako")
+
+			res := httptest.NewRecorder()
+			srv.Routes().ServeHTTP(res, srv.testRequest("PUT", "/api/assistants/target",
+				`{"name":"直した名前","instruction":"語尾を〜っすにする"}`, c.user))
+			if res.Code != c.want {
+				t.Fatalf("状態コード = %d, want %d（本文: %s）", res.Code, c.want, res.Body)
+			}
+
+			list, _ := shared.ListAssistants(context.Background())
+			changed := list[0].Name == "直した名前"
+			if changed != (c.want == http.StatusOK) {
+				t.Errorf("編集の結果が権限と一致しない: %+v", list[0])
+			}
+		})
+	}
+}
+
+// IDと作成者は編集で変えられない。IDが変わると選択中の設定が黙って外れ、
+// 作成者が変わると「誰が作ったか」を出すことによる抑止が消える。
+func TestUpdateAssistantKeepsIdentity(t *testing.T) {
+	srv, shared := testServer(t, nil)
+	seedAssistant(t, shared, "mine", "43 Taro")
+
+	res := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(res, srv.testRequest("PUT", "/api/assistants/mine",
+		`{"id":"stolen","name":"名前","instruction":"指示","author":"41 Hanako"}`, "43 Taro"))
+	if res.Code != http.StatusOK {
+		t.Fatalf("編集に失敗: %d %s", res.Code, res.Body)
+	}
+	list, _ := shared.ListAssistants(context.Background())
+	if len(list) != 1 || list[0].ID != "mine" || list[0].Author != "43 Taro" {
+		t.Fatalf("IDか作成者が書き換わった: %+v", list)
 	}
 }

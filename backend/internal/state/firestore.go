@@ -211,6 +211,11 @@ func (f *Firestore) CreateAssistant(ctx context.Context, assistant Assistant) er
 	return err
 }
 
+func (f *Firestore) UpdateAssistant(ctx context.Context, assistant Assistant) error {
+	_, err := f.assistantCollection().Doc(assistant.ID).Set(ctx, assistant)
+	return err
+}
+
 func (f *Firestore) DeleteAssistant(ctx context.Context, id string) error {
 	_, err := f.assistantCollection().Doc(id).Delete(ctx)
 	return err

@@ -863,6 +863,15 @@ button:disabled {
   object-fit: contain;
 }
 
+/* 誰が答えたかを本文の上に出す。口調が変わった理由が分かるようにする */
+.answer-author {
+  margin-bottom: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
 .assistant-content {
   min-width: 0;
   padding-top: 2px;
@@ -1346,6 +1355,7 @@ button:disabled {
   .question { max-width: 92%; }
   .assistant-row { grid-template-columns: 28px minmax(0, 1fr); gap: 10px; }
   .assistant-avatar { width: 28px; height: 28px; }
+  .assistant-row > .avatar { width: 28px !important; height: 28px !important; font-size: 12px !important; }
   .sources a { align-items: center; }
   .source-meta { display: none; }
   .composer-area { padding-inline: 12px; }
@@ -1429,6 +1439,64 @@ button:disabled {
   background: var(--surface);
 }
 
+/* ---- アシスタント一覧（画面ごと切り替える） ---- */
+
+.assistant-page {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px clamp(16px, 5vw, 48px) 40px;
+}
+
+.assistant-page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.assistant-page-head h2 {
+  margin: 0 0 6px;
+  font-size: 22px;
+}
+
+.assistant-page-head p {
+  max-width: 62ch;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.assistant-page-head > button {
+  flex: none;
+  padding: 9px 16px;
+  border: 1px solid var(--text);
+  border-radius: 8px;
+  background: var(--text);
+  color: var(--surface);
+  cursor: pointer;
+}
+
+.assistant-page .assistant-form {
+  max-width: 640px;
+}
+
+.assistant-page .assistant-form header h2 {
+  margin: 0 0 6px;
+  font-size: 22px;
+}
+
+.assistant-page .assistant-form header p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.sidebar-assistant.active {
+  background: var(--surface);
+}
+
 .assistant-dialog {
   width: min(560px, 100%);
   max-height: min(80vh, 720px);
@@ -1492,7 +1560,7 @@ button:disabled {
 
 .assistant-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   gap: 10px;
   margin: 0;
   padding: 0;

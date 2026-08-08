@@ -10,6 +10,7 @@ import {
   logout,
   saveChat,
   session,
+  updateAssistant,
   type Assistant,
   type AssistantDraft,
   type Chat,
@@ -203,7 +204,11 @@ export default function App() {
   // 選んだアシスタントは端末に覚える。毎回選び直させると、結局
   // 誰も使わない機能になる（サーバーに持つほどの情報でもない）
   const [assistantId, setAssistantId] = useState(() => localStorage.getItem(ASSISTANT_KEY) ?? "");
-  const [assistantPanel, setAssistantPanel] = useState<"closed" | "list" | "form">("closed");
+  // チャット画面とアシスタント一覧を切り替える。モーダルではなく画面ごと
+  // 差し替えるのは、一覧が「選ぶ場所」であって会話の付随物ではないため
+  const [view, setView] = useState<"chat" | "assistants">("chat");
+  // 一覧の中で作成／編集フォームを開いているか。editing にIDが入れば編集
+  const [assistantForm, setAssistantForm] = useState<{ editing: string | null } | null>(null);
   const [assistantDraft, setAssistantDraft] = useState<AssistantDraft>(emptyDraft);
   const [assistantError, setAssistantError] = useState("");
   const bottom = useRef<HTMLDivElement>(null);
@@ -398,6 +403,7 @@ export default function App() {
     if (streaming) return;
     setActiveChatId(null);
     setQuestion("");
+    setView("chat");
     if (window.matchMedia("(max-width: 900px)").matches) setSidebarOpen(false);
   }
 
@@ -484,24 +490,60 @@ export default function App() {
   function chooseAssistant(id: string) {
     setAssistantId(id);
     localStorage.setItem(ASSISTANT_KEY, id);
-    setAssistantPanel("closed");
+    // 選んだらチャットへ戻る。選ぶために開いた画面なので、留まる理由がない
+    setAssistantForm(null);
+    setView("chat");
   }
 
-  async function handleCreateAssistant(event: React.FormEvent) {
+  function openAssistants() {
+    setAssistantError("");
+    setAssistantForm(null);
+    setView("assistants");
+  }
+
+  function startCreate() {
+    setAssistantDraft(emptyDraft);
+    setAssistantError("");
+    setAssistantForm({ editing: null });
+  }
+
+  function startEdit(item: Assistant) {
+    setAssistantDraft({
+      id: item.id,
+      name: item.name,
+      description: item.description,
+      instruction: item.instruction,
+      team: item.team,
+      origin: item.origin,
+      icon: item.icon,
+    });
+    setAssistantError("");
+    setAssistantForm({ editing: item.id });
+  }
+
+  async function handleSubmitAssistant(event: React.FormEvent) {
     event.preventDefault();
     setAssistantError("");
-    const draft = {
-      ...assistantDraft,
-      id: assistantDraft.id || slugify(assistantDraft.name) || `assistant-${Date.now().toString(36)}`,
-    };
+    const editing = assistantForm?.editing ?? null;
     try {
-      const created = await createAssistant(draft);
+      if (editing) {
+        const saved = await updateAssistant(editing, assistantDraft);
+        setAssistants((current) => current.map((item) => (item.id === editing ? saved : item)));
+        setAssistantForm(null);
+        setToast(`「${saved.name}」を保存しました`);
+        return;
+      }
+      const created = await createAssistant({
+        ...assistantDraft,
+        // 日本語名だとslugがほぼ空になるので、そのときは時刻から作る
+        id: assistantDraft.id || slugify(assistantDraft.name) || `assistant-${Date.now().toString(36)}`,
+      });
       setAssistants((current) => [...current, created]);
       setAssistantDraft(emptyDraft);
       chooseAssistant(created.id);
       setToast(`「${created.name}」を作成しました`);
     } catch (error) {
-      setAssistantError(error instanceof Error ? error.message : "作成できませんでした");
+      setAssistantError(error instanceof Error ? error.message : "保存できませんでした");
     }
   }
 
@@ -543,7 +585,7 @@ export default function App() {
       icon: source.icon,
     });
     setAssistantError("");
-    setAssistantPanel("form");
+    setAssistantForm({ editing: null });
   }
 
   async function handleAsk(text: string) {
@@ -560,6 +602,9 @@ export default function App() {
       sources: [],
       status: "送信中",
       streaming: true,
+      // 後から一覧が変わっても、この回答を出したアシスタントを辿れるようにする
+      assistantId: activeAssistant?.id,
+      assistantName: activeAssistant?.name,
     };
 
     // 送信した瞬間に質問の吹き出しを出し、過去の会話への追質問なら履歴の先頭へ戻す。
@@ -725,9 +770,9 @@ export default function App() {
             答えているかが分かる場所がここだけになるため、入口と現在値を兼ねさせる */}
         <button
           type="button"
-          className={`sidebar-assistant ${activeAssistant ? "on" : ""}`}
-          onClick={() => { setAssistantError(""); setAssistantPanel("list"); }}
-          aria-haspopup="dialog"
+          className={`sidebar-assistant ${activeAssistant ? "on" : ""} ${view === "assistants" ? "active" : ""}`}
+          onClick={openAssistants}
+          aria-current={view === "assistants"}
         >
           {activeAssistant
             ? <AssistantAvatar name={activeAssistant.name} icon={activeAssistant.icon} size={22} />
@@ -755,6 +800,7 @@ export default function App() {
                       onClick={() => {
                         setActiveChatId(chat.id);
                         setHistoryMenuId(null);
+                        setView("chat");
                         if (window.matchMedia("(max-width: 900px)").matches) setSidebarOpen(false);
                       }}
                     >
@@ -808,7 +854,7 @@ export default function App() {
             <button type="button" className="sidebar-toggle" onClick={() => setSidebarOpen((open) => !open)} aria-label="チャット履歴を開く" aria-expanded={sidebarOpen}>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
             </button>
-            <h1>{activeChat?.title ?? "新しいチャット"}</h1>
+            <h1>{view === "assistants" ? "アシスタント" : activeChat?.title ?? "新しいチャット"}</h1>
           </div>
           <div className="header-actions" ref={headerMenus}>
             <span className="header-organization">WASA</span>
@@ -871,6 +917,125 @@ export default function App() {
           </div>
         </header>
 
+        {view === "assistants" ? (
+          <main className="assistant-page">
+            {assistantForm ? (
+              <form className="assistant-form" onSubmit={(event) => void handleSubmitAssistant(event)}>
+                <header>
+                  <h2>{assistantForm.editing ? "アシスタントを編集" : "アシスタントを作る"}</h2>
+                  <p className="muted">
+                    書けるのは<strong>口調・書き方・参照範囲</strong>だけです。
+                    出典の一覧と参照範囲はサーバー側で決まるため、指示では変えられません。
+                  </p>
+                </header>
+                <div className="assistant-identity">
+                  <div className="assistant-icon-pick">
+                    {/* 画像が無くても頭文字で成立させる。用意しないと見栄えが悪い状態にすると、
+                        結局だれもアシスタントを作らなくなる */}
+                    <AssistantAvatar name={assistantDraft.name || "?"} icon={assistantDraft.icon} size={72} />
+                    <label className="assistant-icon-button">
+                      <span>{assistantDraft.icon ? "変更" : "画像を選ぶ"}</span>
+                      <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void handlePickIcon(event)} />
+                    </label>
+                    {assistantDraft.icon && (
+                      <button type="button" className="linkish" onClick={() => setAssistantDraft((d) => ({ ...d, icon: undefined }))}>
+                        画像を外す
+                      </button>
+                    )}
+                  </div>
+                  <label>
+                    <span>名前</span>
+                    <input value={assistantDraft.name} maxLength={40} required
+                      onChange={(event) => setAssistantDraft((d) => ({ ...d, name: event.target.value }))} />
+                  </label>
+                </div>
+                <label>
+                  <span>説明（一覧に出ます）</span>
+                  <input value={assistantDraft.description} maxLength={120}
+                    onChange={(event) => setAssistantDraft((d) => ({ ...d, description: event.target.value }))} />
+                </label>
+                <label>
+                  <span>指示（口調・書き方）</span>
+                  <textarea value={assistantDraft.instruction} rows={8} maxLength={1500} required
+                    placeholder="例: 語尾を「〜しゅよ」にする。一人称は「ぼく」。明るくのんびりした調子で話す。"
+                    onChange={(event) => setAssistantDraft((d) => ({ ...d, instruction: event.target.value }))} />
+                </label>
+                <div className="assistant-scope">
+                  <label>
+                    <span>参照する出所</span>
+                    <select value={assistantDraft.origin ?? ""}
+                      onChange={(event) => setAssistantDraft((d) => ({ ...d, origin: (event.target.value || undefined) as AssistantDraft["origin"] }))}>
+                      <option value="">すべて</option>
+                      <option value="wiki">引き継ぎWikiのみ</option>
+                      <option value="site">公式サイトのみ（部外に出せる情報だけ）</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>参照する班</span>
+                    <select value={assistantDraft.team ?? ""}
+                      onChange={(event) => setAssistantDraft((d) => ({ ...d, team: event.target.value || undefined }))}>
+                      <option value="">すべて</option>
+                      {teams.map((team) => <option key={team} value={team}>{team}班</option>)}
+                    </select>
+                  </label>
+                </div>
+                {assistantError && <p className="assistant-error" role="alert">{assistantError}</p>}
+                <div className="assistant-actions">
+                  <button type="button" onClick={() => setAssistantForm(null)}>戻る</button>
+                  <button type="submit" className="primary" disabled={!assistantDraft.name.trim() || !assistantDraft.instruction.trim()}>
+                    {assistantForm.editing ? "保存する" : "作成する"}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <>
+                <header className="assistant-page-head">
+                  <div>
+                    <h2>アシスタント</h2>
+                    <p className="muted">
+                      口調や参照範囲を決めた設定です。誰でも作れて、全員が使えます。
+                      <strong>出典の一覧と参照範囲はサーバー側で決まるので、どれを選んでも同じ根拠から答えます。</strong>
+                    </p>
+                  </div>
+                  <button type="button" className="primary" onClick={startCreate}>新しく作る</button>
+                </header>
+                {assistantError && <p className="assistant-error" role="alert">{assistantError}</p>}
+                <ul className="assistant-grid">
+                  <li>
+                    <button type="button" className={`assistant-card ${assistantId === "" ? "on" : ""}`} onClick={() => chooseAssistant("")}>
+                      <DefaultAvatar size={64} />
+                      <span className="assistant-name">汎用</span>
+                      <span className="assistant-desc">資料全体から、ふつうの口調で答えます</span>
+                    </button>
+                  </li>
+                  {assistants.map((item) => (
+                    <li key={item.id}>
+                      <button type="button" className={`assistant-card ${assistantId === item.id ? "on" : ""}`} onClick={() => chooseAssistant(item.id)}>
+                        <AssistantAvatar name={item.name} icon={item.icon} size={64} />
+                        <span className="assistant-name">{item.name}</span>
+                        {item.description && <span className="assistant-desc">{item.description}</span>}
+                        <span className="assistant-meta">
+                          {item.author}
+                          {item.scope && <><br />{item.scope}</>}
+                        </span>
+                      </button>
+                      <div className="assistant-card-actions">
+                        {/* 他人のものは編集ではなく複製。編集権をめぐる調整を起こさないため */}
+                        {item.canEdit
+                          ? <button type="button" onClick={() => startEdit(item)}>編集</button>
+                          : <button type="button" onClick={() => duplicateAssistant(item)}>複製</button>}
+                        {item.canEdit && (
+                          <button type="button" className="danger" onClick={() => void handleDeleteAssistant(item)}>削除</button>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </main>
+        ) : (
+        <>
         <main className="conversation" aria-live="polite">
           {!activeChat && (
             <div className="intro">
@@ -903,8 +1068,13 @@ export default function App() {
               </div>
 
               <div className="assistant-row">
-                <img src="/assets/wasa-logo.jpeg" alt="" className="assistant-avatar" />
+                {/* 誰が答えたかを毎回出す。しゅよっくんに切り替えたのに
+                    WASAロゴのままだと、口調が変わった理由が画面から分からない */}
+                {turn.assistantName
+                  ? <AssistantAvatar name={turn.assistantName} icon={assistants.find((a) => a.id === turn.assistantId)?.icon} size={34} />
+                  : <img src="/assets/wasa-logo.jpeg" alt="" className="assistant-avatar" />}
                 <div className="assistant-content">
+                  <div className="answer-author">{turn.assistantName ?? "WASA Chat"}</div>
                   {turn.status && (
                     <div className="status">
                       <span className="dot" />
@@ -997,6 +1167,8 @@ export default function App() {
           <p className="composer-hint">Enterで送信・Shift + Enterで改行</p>
           <p className="disclaimer">生成AIの回答には誤りが含まれることがあります。</p>
         </div>
+        </>
+        )}
       </section>
       {renamingChatId && (
         <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => {
@@ -1016,129 +1188,6 @@ export default function App() {
               <button type="submit" className="primary" disabled={!renameTitle.trim()}>保存</button>
             </div>
           </form>
-        </div>
-      )}
-      {assistantPanel !== "closed" && (
-        <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => {
-          if (event.target === event.currentTarget) setAssistantPanel("closed");
-        }}>
-          <div className="assistant-dialog" role="dialog" aria-modal="true" aria-labelledby="assistant-title">
-            {assistantPanel === "list" ? (
-              <>
-                <header>
-                  <h2 id="assistant-title">アシスタント</h2>
-                  <p className="muted">
-                    口調や参照範囲を決めた設定です。誰でも作れて、全員が使えます。
-                    <strong>出典の一覧と参照範囲はサーバー側で決まるので、どれを選んでも同じ根拠から答えます。</strong>
-                  </p>
-                </header>
-                <ul className="assistant-grid">
-                  <li>
-                    <button type="button" className={`assistant-card ${assistantId === "" ? "on" : ""}`} onClick={() => chooseAssistant("")}>
-                      <DefaultAvatar size={56} />
-                      <span className="assistant-name">汎用</span>
-                      <span className="assistant-desc">資料全体から、ふつうの口調で答えます</span>
-                    </button>
-                  </li>
-                  {assistants.map((item) => (
-                    <li key={item.id}>
-                      <button type="button" className={`assistant-card ${assistantId === item.id ? "on" : ""}`} onClick={() => chooseAssistant(item.id)}>
-                        <AssistantAvatar name={item.name} icon={item.icon} size={56} />
-                        <span className="assistant-name">{item.name}</span>
-                        {item.description && <span className="assistant-desc">{item.description}</span>}
-                        <span className="assistant-meta">
-                          {item.author}
-                          {item.scope && <><br />{item.scope}</>}
-                        </span>
-                      </button>
-                      <div className="assistant-card-actions">
-                        {/* 他人のものは編集ではなく複製。編集権をめぐる調整を起こさないため */}
-                        <button type="button" onClick={() => duplicateAssistant(item)}>複製</button>
-                        {item.canDelete && (
-                          <button type="button" className="danger" onClick={() => void handleDeleteAssistant(item)}>削除</button>
-                        )}
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-                {assistantError && <p className="assistant-error" role="alert">{assistantError}</p>}
-                <div className="assistant-actions">
-                  <button type="button" onClick={() => setAssistantPanel("closed")}>閉じる</button>
-                  <button type="button" className="primary" onClick={() => { setAssistantDraft(emptyDraft); setAssistantError(""); setAssistantPanel("form"); }}>
-                    新しく作る
-                  </button>
-                </div>
-              </>
-            ) : (
-              <form className="assistant-form" onSubmit={(event) => void handleCreateAssistant(event)}>
-                <header>
-                  <h2 id="assistant-title">アシスタントを作る</h2>
-                  <p className="muted">
-                    書けるのは<strong>口調・書き方・参照範囲</strong>だけです。
-                    出典の一覧と参照範囲はサーバー側で決まるため、指示では変えられません。
-                  </p>
-                </header>
-                <div className="assistant-identity">
-                  <div className="assistant-icon-pick">
-                    {/* 画像が無くても頭文字で成立させる。用意しないと見栄えが悪い状態にすると、
-                        結局だれもアシスタントを作らなくなる */}
-                    <AssistantAvatar name={assistantDraft.name || "?"} icon={assistantDraft.icon} size={64} />
-                    <label className="assistant-icon-button">
-                      <span>{assistantDraft.icon ? "変更" : "画像を選ぶ"}</span>
-                      <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void handlePickIcon(event)} />
-                    </label>
-                    {assistantDraft.icon && (
-                      <button type="button" className="linkish" onClick={() => setAssistantDraft((d) => ({ ...d, icon: undefined }))}>
-                        画像を外す
-                      </button>
-                    )}
-                  </div>
-                  <label>
-                    <span>名前</span>
-                    <input value={assistantDraft.name} maxLength={40} required
-                      onChange={(event) => setAssistantDraft((d) => ({ ...d, name: event.target.value }))} />
-                  </label>
-                </div>
-                <label>
-                  <span>説明（一覧に出ます）</span>
-                  <input value={assistantDraft.description} maxLength={120}
-                    onChange={(event) => setAssistantDraft((d) => ({ ...d, description: event.target.value }))} />
-                </label>
-                <label>
-                  <span>指示（口調・書き方）</span>
-                  <textarea value={assistantDraft.instruction} rows={7} maxLength={1500} required
-                    placeholder="例: 語尾を「〜しゅよ」にする。一人称は「ぼく」。明るくのんびりした調子で話す。"
-                    onChange={(event) => setAssistantDraft((d) => ({ ...d, instruction: event.target.value }))} />
-                </label>
-                <div className="assistant-scope">
-                  <label>
-                    <span>参照する出所</span>
-                    <select value={assistantDraft.origin ?? ""}
-                      onChange={(event) => setAssistantDraft((d) => ({ ...d, origin: (event.target.value || undefined) as AssistantDraft["origin"] }))}>
-                      <option value="">すべて</option>
-                      <option value="wiki">引き継ぎWikiのみ</option>
-                      <option value="site">公式サイトのみ（部外に出せる情報だけ）</option>
-                    </select>
-                  </label>
-                  <label>
-                    <span>参照する班</span>
-                    <select value={assistantDraft.team ?? ""}
-                      onChange={(event) => setAssistantDraft((d) => ({ ...d, team: event.target.value || undefined }))}>
-                      <option value="">すべて</option>
-                      {teams.map((team) => <option key={team} value={team}>{team}班</option>)}
-                    </select>
-                  </label>
-                </div>
-                {assistantError && <p className="assistant-error" role="alert">{assistantError}</p>}
-                <div className="assistant-actions">
-                  <button type="button" onClick={() => setAssistantPanel("list")}>戻る</button>
-                  <button type="submit" className="primary" disabled={!assistantDraft.name.trim() || !assistantDraft.instruction.trim()}>
-                    作成する
-                  </button>
-                </div>
-              </form>
-            )}
-          </div>
         </div>
       )}
       {toast && <div className="toast" role="status">{toast}</div>}

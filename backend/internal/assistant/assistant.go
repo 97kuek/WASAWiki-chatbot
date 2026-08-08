@@ -30,7 +30,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -53,6 +52,16 @@ var Teams = []string{
 }
 
 var origins = map[string]bool{"": true, "wiki": true, "site": true}
+
+// 班ではない区分。呼び方を機械的に「〜班」にしないための例外。
+var notTeams = map[string]bool{"TF・大会": true, "運営": true, "パイロット": true}
+
+func teamSuffix(team string) string {
+	if notTeams[team] {
+		return "の資料のみ"
+	}
+	return "班のページのみ"
+}
 
 // Validate は保存前の検査。ここを通ったものだけが Store に入る。
 func Validate(a *state.Assistant) error {
@@ -143,11 +152,12 @@ func slicesContains(list []string, target string) bool {
 	return false
 }
 
-// CanDelete は削除権限。作成者本人と管理者だけが消せる。
+// CanEdit は編集・削除の権限。作成者本人と管理者だけが持つ。
 //
-// 他人のアシスタントは**編集できない**（複製して直す）。編集権をめぐる
-// 調整が起きないので、仲裁する人が要らなくなる。
-func CanDelete(a state.Assistant, user string, admins []string) bool {
+// **他人のものは編集できない**（複製して自分のものを直す）。編集権をめぐる
+// 調整が起きないので、仲裁する人が要らなくなる。自分が作ったものを直せる
+// ことは、この性質を壊さない。
+func CanEdit(a state.Assistant, user string, admins []string) bool {
 	return a.Author == user || slicesContains(admins, user)
 }
 
@@ -202,7 +212,9 @@ func ScopeLabel(a *state.Assistant) string {
 		parts = append(parts, "公式サイトのみ（部外に出せる情報だけ）")
 	}
 	if a.Team != "" {
-		parts = append(parts, a.Team+"班のページのみ")
+		// Teams には班ではない区分も混ざる。機械的に「班」を足すと
+		// 「TF・大会班」「運営班」という存在しない呼び方になる
+		parts = append(parts, a.Team+teamSuffix(a.Team))
 	}
 	return strings.Join(parts, " / ")
 }
@@ -221,7 +233,9 @@ type Seed struct {
 	AuthorFromAdmin bool `json:"author_from_admin"`
 }
 
-// LoadSeeds は dir 直下の *.json を読む。ディレクトリが無ければ空を返す。
+// LoadSeeds は dir 直下の *.json を**ファイル名順に**読む。
+// ファイル名が一覧の表示順になるため、接頭辞で並びを決められる。
+// ディレクトリが無ければ空を返す。
 func LoadSeeds(dir string) ([]Seed, error) {
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
@@ -245,7 +259,8 @@ func LoadSeeds(dir string) ([]Seed, error) {
 		}
 		seeds = append(seeds, seed)
 	}
-	sort.Slice(seeds, func(i, j int) bool { return seeds[i].ID < seeds[j].ID })
+	// os.ReadDir はファイル名順に返す。ここで並べ替え直さない
+	// （IDで並べると接頭辞での順序指定が効かなくなる）
 	return seeds, nil
 }
 
@@ -256,8 +271,11 @@ func LoadSeeds(dir string) ([]Seed, error) {
 // 判断して後勝ちで上書きする。
 func Apply(ctx context.Context, store state.Store, seeds []Seed, defaultAuthor string) (int, error) {
 	added := 0
-	now := time.Now().UTC().Format(time.RFC3339)
-	for _, seed := range seeds {
+	// 一覧は作成順に並ぶ。全件を同じ時刻にすると並びが不定になるので、
+	// **ファイル名の順**で1秒ずつずらす。表示順をファイル名で決められる
+	// （01-team-kuuriki.json … のように接頭辞を付ける）
+	now := time.Now().UTC()
+	for i, seed := range seeds {
 		assistant := seed.Assistant
 		if seed.AuthorFromAdmin || assistant.Author == "" {
 			assistant.Author = defaultAuthor
@@ -266,7 +284,8 @@ func Apply(ctx context.Context, store state.Store, seeds []Seed, defaultAuthor s
 			// 作成者不明のまま共有すると、誰に聞けばよいか分からなくなる
 			return added, fmt.Errorf("シード %s の作成者が決まりません（ADMIN_USERS を設定してください）", seed.ID)
 		}
-		assistant.CreatedAt, assistant.UpdatedAt = now, now
+		stamp := now.Add(time.Duration(i) * time.Second).Format(time.RFC3339)
+		assistant.CreatedAt, assistant.UpdatedAt = stamp, stamp
 		if err := Validate(&assistant); err != nil {
 			return added, fmt.Errorf("シード %s が不正: %w", seed.ID, err)
 		}

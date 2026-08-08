@@ -81,6 +81,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("DELETE /api/chats/{id}", s.requireAuth(s.handleDeleteChat))
 	mux.HandleFunc("GET /api/assistants", s.requireAuth(s.handleListAssistants))
 	mux.HandleFunc("POST /api/assistants", s.requireAuth(s.handleCreateAssistant))
+	mux.HandleFunc("PUT /api/assistants/{id}", s.requireAuth(s.handleUpdateAssistant))
 	mux.HandleFunc("DELETE /api/assistants/{id}", s.requireAuth(s.handleDeleteAssistant))
 	// Cloud Runでは末尾が z の一部パスがプラットフォーム側で処理され、
 	// アプリまで届かず404になるため、予約されない /health を使う。
@@ -324,7 +325,9 @@ func validateChat(chat *state.Chat, expectedID string) bool {
 		turn := &chat.Turns[i]
 		if strings.TrimSpace(turn.Question) == "" || len([]rune(turn.Question)) > 500 ||
 			len([]rune(turn.Answer)) > 300_000 || len([]rune(turn.Error)) > 2_000 ||
-			len(turn.Sources) > 100 {
+			len(turn.Sources) > 100 ||
+			// 画像を履歴へ入れさせない。1チャットで上限を超える
+			len(turn.AssistantID) > 64 || len([]rune(turn.AssistantName)) > 40 {
 			return false
 		}
 		for _, source := range turn.Sources {
@@ -384,8 +387,10 @@ const maxAssistants = 100
 // 画面側で作成者名を突き合わせる実装にすると、判定が2箇所に散る。
 type assistantView struct {
 	state.Assistant
-	Scope     string `json:"scope"`
-	CanDelete bool   `json:"canDelete"`
+	Scope string `json:"scope"`
+	// 編集と削除は同じ権限（作成者本人と管理者）。画面では別のボタンになるが、
+	// 判定を2つに分けると片方だけ直したときに食い違う
+	CanEdit bool `json:"canEdit"`
 }
 
 func (s *Server) assistantViews(list []state.Assistant, user string) []assistantView {
@@ -394,7 +399,7 @@ func (s *Server) assistantViews(list []state.Assistant, user string) []assistant
 		views = append(views, assistantView{
 			Assistant: item,
 			Scope:     assistant.ScopeLabel(&item),
-			CanDelete: assistant.CanDelete(item, user, s.cfg.AdminUsers),
+			CanEdit:   assistant.CanEdit(item, user, s.cfg.AdminUsers),
 		})
 	}
 	return views
@@ -459,6 +464,55 @@ func (s *Server) handleCreateAssistant(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, s.assistantViews([]state.Assistant{body}, user)[0])
 }
 
+// handleUpdateAssistant は作成者本人（と管理者）だけの編集を受け付ける。
+//
+// IDと作成者と作成日時は引き継ぐ。IDを変えられるようにすると、選択中の
+// 利用者の設定が黙って外れる。作成者を変えられるようにすると、
+// 「誰が作ったか」を出すことによる抑止が消える。
+func (s *Server) handleUpdateAssistant(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body state.Assistant
+	// アイコン画像（data URI・最大96KB）を含むので、他のAPIより大きく取る
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256<<10)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "リクエストが不正です"})
+		return
+	}
+	user, _ := s.currentUser(r)
+
+	list, err := s.state.ListAssistants(r.Context())
+	if err != nil {
+		log.Printf("アシスタントの読み込みに失敗: %v", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "アシスタントを読み込めませんでした"})
+		return
+	}
+	for _, current := range list {
+		if current.ID != id {
+			continue
+		}
+		if !assistant.CanEdit(current, user, s.cfg.AdminUsers) {
+			writeJSON(w, http.StatusForbidden,
+				map[string]string{"error": "作成者本人と管理者だけが編集できます"})
+			return
+		}
+		updated := current // 変えてよい項目だけを上書きする
+		updated.Name, updated.Description, updated.Instruction = body.Name, body.Description, body.Instruction
+		updated.Team, updated.Origin, updated.Icon = body.Team, body.Origin, body.Icon
+		updated.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		if err := assistant.Validate(&updated); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if err := s.state.UpdateAssistant(r.Context(), updated); err != nil {
+			log.Printf("アシスタントの更新に失敗: %v", err)
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "アシスタントを保存できませんでした"})
+			return
+		}
+		writeJSON(w, http.StatusOK, s.assistantViews([]state.Assistant{updated}, user)[0])
+		return
+	}
+	writeJSON(w, http.StatusNotFound, map[string]string{"error": "アシスタントが見つかりません"})
+}
+
 func (s *Server) handleDeleteAssistant(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	user, _ := s.currentUser(r)
@@ -472,7 +526,7 @@ func (s *Server) handleDeleteAssistant(w http.ResponseWriter, r *http.Request) {
 		if item.ID != id {
 			continue
 		}
-		if !assistant.CanDelete(item, user, s.cfg.AdminUsers) {
+		if !assistant.CanEdit(item, user, s.cfg.AdminUsers) {
 			writeJSON(w, http.StatusForbidden,
 				map[string]string{"error": "作成者本人と管理者だけが削除できます"})
 			return
