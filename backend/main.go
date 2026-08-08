@@ -50,6 +50,11 @@ func envSeconds(key string, fallback float64) time.Duration {
 	return time.Duration(fallback * float64(time.Second))
 }
 
+func geminiDataUseApproved() bool {
+	return os.Getenv("GEMINI_PAID_TIER") == "true" ||
+		os.Getenv("GEMINI_FREE_TIER_APPROVED") == "true"
+}
+
 func main() {
 	// リポジトリ直下の .env を読む。測定用のPython側と同じ設定を使えるようにするため。
 	// 既に環境変数が設定されていればそちらが優先される
@@ -75,9 +80,10 @@ func main() {
 	case "claude":
 		client = llm.NewClaude(os.Getenv("CLAUDE_MODEL"))
 	case "gemini":
-		// ⚠️ 無料枠は送信内容が学習に使われる場合がある。対象は非公開Wikiの本文
-		if os.Getenv("K_SERVICE") != "" && os.Getenv("GEMINI_PAID_TIER") != "true" {
-			log.Fatal("Cloud RunでGeminiを使うには、課金有効プロジェクトを確認してGEMINI_PAID_TIER=trueを設定してください")
+		// 無料枠への非公開Wiki送信はデータ取扱いの判断を伴う。2026-08-08の
+		// WASA会議で代表・PMが許可したため、有料枠とは別の明示フラグで起動を認める。
+		if os.Getenv("K_SERVICE") != "" && !geminiDataUseApproved() {
+			log.Fatal("Cloud RunでGeminiを使うには、GEMINI_PAID_TIER=true または GEMINI_FREE_TIER_APPROVED=true を設定してください")
 		}
 		key := env("GEMINI_API_KEY", os.Getenv("GOOGLE_API_KEY"))
 		if key == "" {
