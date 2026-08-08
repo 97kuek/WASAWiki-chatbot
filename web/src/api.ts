@@ -11,11 +11,11 @@ export type Source = {
 
 /** サーバーから流れてくる進捗イベント。pipeline.Event と対応する。 */
 export type Event =
-  | { type: "status"; message: string }
+  | { type: "status"; message: string; retry_at?: string }
   | { type: "pages"; pages: Source[] }
   | { type: "delta"; text: string }
   | { type: "done" }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string; code?: "daily_quota" | "rate_limit" | "user_daily_limit" | "unavailable"; retry_at?: string };
 
 const base = import.meta.env.VITE_API_ORIGIN ?? "";
 
@@ -71,8 +71,13 @@ export async function ask(
     signal,
   });
   if (!res.ok || !res.body) {
-    const body = await res.json().catch(() => ({ error: "通信に失敗しました" }));
-    onEvent({ type: "error", message: body.error ?? "通信に失敗しました" });
+    const body = await res.json().catch(() => ({ error: "通信に失敗しました", code: undefined }));
+    onEvent({
+      type: "error",
+      message: body.error ?? "通信に失敗しました",
+      code: body.code,
+      retry_at: body.retry_at,
+    });
     return;
   }
 

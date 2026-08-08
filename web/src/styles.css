@@ -205,8 +205,10 @@ button:disabled {
 
 .gate .note {
   color: var(--muted);
-  font-size: 14px;
-  line-height: 1.7;
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: center;
+  white-space: nowrap;
 }
 
 /* ---- アプリ全体 ---- */
@@ -344,7 +346,6 @@ button:disabled {
   letter-spacing: 0.04em;
 }
 
-.history-heading button,
 .linkish {
   padding: 0;
   border: 0;
@@ -356,7 +357,6 @@ button:disabled {
   cursor: pointer;
 }
 
-.history-heading button:hover:not(:disabled),
 .linkish:hover {
   color: var(--text);
 }
@@ -370,14 +370,35 @@ button:disabled {
   overflow-y: auto;
 }
 
-.history-list button {
+.history-section {
+  display: grid;
+  gap: 3px;
+}
+
+.history-section + .history-section {
+  margin-top: 10px;
+}
+
+.history-section > h2 {
+  margin: 0;
+  padding: 4px 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.history-item {
+  position: relative;
+}
+
+.history-select {
   width: 100%;
   min-height: 42px;
   display: grid;
   grid-template-columns: 19px minmax(0, 1fr) auto;
   align-items: center;
   gap: 9px;
-  padding: 8px 10px;
+  padding: 8px 42px 8px 10px;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -385,16 +406,13 @@ button:disabled {
   cursor: pointer;
 }
 
-.history-list button:hover,
-.history-list button.active {
+.history-select:hover,
+.history-select.active,
+.history-item.menu-open .history-select {
   background: var(--surface);
 }
 
-.history-list button.active {
-  box-shadow: inset 3px 0 0 var(--accent);
-}
-
-.history-list svg {
+.history-select svg {
   width: 18px;
   fill: none;
   stroke: var(--muted);
@@ -402,19 +420,92 @@ button:disabled {
   stroke-width: 1.7;
 }
 
-.history-list button > span {
+.history-select > span {
   overflow: hidden;
   font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.history-list i {
+.history-select i {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--accent);
   animation: pulse 1.2s ease-in-out infinite;
+}
+
+.history-more {
+  position: absolute;
+  top: 5px;
+  right: 4px;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  opacity: 0;
+  cursor: pointer;
+}
+
+.history-item:hover .history-more,
+.history-more:focus-visible,
+.history-item.menu-open .history-more {
+  opacity: 1;
+}
+
+.history-more:hover {
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+.history-more svg {
+  width: 19px;
+  fill: currentColor;
+}
+
+.history-menu {
+  position: absolute;
+  z-index: 35;
+  top: 38px;
+  right: 4px;
+  width: 178px;
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.history-menu button {
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.history-menu button:hover:not(:disabled) {
+  background: var(--surface-soft);
+}
+
+.history-menu button.danger {
+  color: #962f21;
+}
+
+.history-menu button:disabled {
+  opacity: 0.45;
 }
 
 .history-empty {
@@ -463,6 +554,7 @@ button:disabled {
 }
 
 .chat-header {
+  position: relative;
   min-height: 72px;
   display: flex;
   align-items: center;
@@ -516,6 +608,10 @@ button:disabled {
   white-space: nowrap;
 }
 
+.header-menu-wrap {
+  position: relative;
+}
+
 .header-organization {
   color: var(--muted);
   font-size: 13px;
@@ -523,14 +619,21 @@ button:disabled {
 }
 
 .header-icon {
+  position: relative;
   width: 36px;
   height: 36px;
   border-radius: 50%;
 }
 
-.header-icon:disabled {
-  cursor: default;
-  opacity: 0.65;
+.unread-dot {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 7px;
+  height: 7px;
+  border: 2px solid var(--surface);
+  border-radius: 50%;
+  background: var(--accent);
 }
 
 .profile-avatar {
@@ -539,12 +642,116 @@ button:disabled {
   display: grid;
   place-items: center;
   overflow: hidden;
+  padding: 0;
   border: 1px solid var(--line-strong);
   border-radius: 50%;
   background: var(--surface-soft);
   font-size: 14px;
   font-weight: 700;
   text-transform: uppercase;
+  cursor: pointer;
+}
+
+.profile-avatar:hover {
+  border-color: var(--muted);
+  background: var(--surface);
+}
+
+.header-popover {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 10px);
+  right: 0;
+  width: min(340px, calc(100vw - 24px));
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  white-space: normal;
+}
+
+.header-popover h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.popover-empty {
+  margin: 16px 0 4px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.announcement-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.announcement-list article + article {
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.announcement-list time,
+.announcement-list p,
+.profile-summary span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.announcement-list h3 {
+  margin: 3px 0 0;
+  font-size: 14px;
+}
+
+.announcement-list p {
+  margin: 5px 0 0;
+  line-height: 1.6;
+}
+
+.profile-popover {
+  width: 260px;
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+}
+
+.profile-summary {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 4px;
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.profile-summary strong {
+  overflow: hidden;
+  font-size: 14px;
+  text-overflow: ellipsis;
+}
+
+.profile-popover a,
+.profile-popover > button {
+  width: 100%;
+  display: block;
+  padding: 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.profile-popover a:hover,
+.profile-popover > button:hover {
+  background: var(--surface-soft);
 }
 
 .conversation {
@@ -676,6 +883,13 @@ button:disabled {
   font-size: 15px;
 }
 
+.status small {
+  margin-left: 2px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .dot {
   width: 7px;
   height: 7px;
@@ -697,6 +911,105 @@ button:disabled {
   background: var(--text);
   vertical-align: text-bottom;
   animation: pulse 1s step-end infinite;
+}
+
+.service-alert {
+  display: grid;
+  gap: 5px;
+  padding: 13px 15px;
+  border: 1px solid #e5b7aa;
+  border-radius: 10px;
+  background: #fff6f3;
+  color: #732a1e;
+}
+
+.service-alert strong {
+  font-size: 14px;
+}
+
+.service-alert span {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.service-alert small {
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.dialog-backdrop {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgb(35 31 28 / 32%);
+}
+
+.rename-dialog {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 16px;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.rename-dialog h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.rename-dialog input {
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  font: inherit;
+}
+
+.rename-dialog > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.rename-dialog button {
+  padding: 9px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.rename-dialog button.primary {
+  border-color: var(--text);
+  background: var(--text);
+  color: var(--surface);
+}
+
+.rename-dialog button:disabled {
+  opacity: 0.45;
+}
+
+.toast {
+  position: fixed;
+  z-index: 120;
+  bottom: 24px;
+  left: 50%;
+  max-width: calc(100vw - 32px);
+  padding: 10px 14px;
+  transform: translateX(-50%);
+  border-radius: 8px;
+  background: var(--text);
+  color: var(--surface);
+  box-shadow: var(--shadow);
+  font-size: 13px;
 }
 
 /* ---- 回答本文（Markdown / TeX） ---- */
@@ -877,24 +1190,23 @@ button:disabled {
 .composer-area {
   position: relative;
   z-index: 2;
-  padding: 12px clamp(20px, 6vw, 80px) 10px;
-  border-top: 1px solid var(--line);
-  background: rgb(255 255 255 / 96%);
-  box-shadow: 0 -12px 28px rgb(35 31 28 / 4%);
+  margin-top: -34px;
+  padding: 48px clamp(20px, 6vw, 80px) 10px;
+  background: linear-gradient(to bottom, rgb(255 255 255 / 0%), rgb(255 255 255 / 94%) 34px, #fff 54px);
 }
 
 .composer-area > * {
-  width: min(900px, 100%);
+  width: min(860px, 100%);
   margin-inline: auto;
 }
 
 .composer {
-  display: flex;
-  align-items: flex-end;
-  gap: 10px;
-  padding: 9px 9px 9px 14px;
-  border: 1px solid var(--line-strong);
-  border-radius: 13px;
+  display: grid;
+  gap: 3px;
+  min-height: 88px;
+  padding: 10px 11px 8px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 12px;
   background: var(--surface);
   box-shadow: 0 4px 16px rgb(35 31 28 / 5%);
 }
@@ -906,10 +1218,10 @@ button:disabled {
 
 .composer textarea {
   width: 100%;
-  min-height: 42px;
-  max-height: 130px;
-  resize: vertical;
-  padding: 7px 2px;
+  min-height: 38px;
+  max-height: 96px;
+  resize: none;
+  padding: 2px;
   overflow-y: auto;
   border: 0;
   outline: 0;
@@ -919,6 +1231,13 @@ button:disabled {
 }
 
 .composer textarea::placeholder { color: #8a8680; }
+
+.composer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
 
 .send {
   width: 42px;
@@ -999,6 +1318,21 @@ button:disabled {
   .conversation { padding-top: 28px; }
 }
 
+@media (max-width: 480px) {
+  .gate {
+    padding-inline: 24px;
+  }
+
+  .gate .note {
+    font-size: 10px;
+  }
+
+  .composer {
+    min-height: 82px;
+    padding-inline: 12px;
+  }
+}
+
 @media (max-width: 560px) {
   .gate { padding: 28px 22px; }
   .logo { width: 30px; height: 30px; }
@@ -1007,6 +1341,8 @@ button:disabled {
   .header-kicker { display: none; }
   .chat-header h1 { max-width: 48vw; font-size: 15px; }
   .header-actions { gap: 6px; }
+  .header-menu-wrap { position: static; }
+  .header-popover { top: calc(100% + 8px); right: 12px; }
   .profile-avatar { width: 32px; height: 32px; }
   .conversation { padding-inline: 16px; }
   .suggestions { grid-template-columns: 1fr; }
@@ -1020,6 +1356,10 @@ button:disabled {
   .composer-area { padding-inline: 12px; }
   .composer-hint { display: none; }
   .disclaimer { margin-top: 5px; }
+}
+
+@media (hover: none) {
+  .history-more { opacity: 0.55; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -18,9 +18,12 @@ services:
       # 認証はWikiのアカウントに委ねる（共有パスワードは廃止）
       WIKI_API: ${WIKI_API:-https://wasabirdman.sakura.ne.jp/wbwiki/w/api.php}
       # 未設定だと再起動のたびに全員ログアウトになる
-      SESSION_SECRET: ${SESSION_SECRET:-dev-secret-change-me}
+      SESSION_SECRET: ${SESSION_SECRET:-dev-only-session-secret-change-me-32}
       DAILY_LIMIT: ${DAILY_LIMIT:-30}
       LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-}
+      GEMINI_PAID_TIER: ${GEMINI_PAID_TIER:-false}
       OLLAMA_ENDPOINT: http://host.docker.internal:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:30b-a3b}
       # LLM_PROVIDER=claude のときだけ使う

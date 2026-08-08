@@ -7,7 +7,9 @@ type Turn = {
   answer: string;
   sources: Source[];
   status: string;
+  retryAt?: string;
   error?: string;
+  errorCode?: "daily_quota" | "rate_limit" | "user_daily_limit" | "unavailable";
   streaming: boolean;
 };
 
@@ -17,9 +19,19 @@ type Chat = {
   createdAt: string;
   updatedAt: string;
   turns: Turn[];
+  pinned?: boolean;
+};
+
+type Announcement = {
+  id: string;
+  title: string;
+  body: string;
+  date: string;
 };
 
 const MAX_CHATS = 30;
+const ANNOUNCEMENT_READ_KEY = "wasa-chat-read-announcements";
+const WIKI_URL = import.meta.env.VITE_WIKI_URL ?? "https://wasabirdman.sakura.ne.jp/wbwiki/w/index.php";
 
 /**
  * 回答末尾の「出典: ページ名（最終更新: YYYY-MM）」を落とす。
@@ -49,11 +61,79 @@ const makeId = () => crypto.randomUUID();
 const chatTitle = (question: string) =>
   Array.from(question.trim()).slice(0, 28).join("") + (Array.from(question.trim()).length > 28 ? "…" : "");
 
+type HistorySection = { label: string; chats: Chat[] };
+
+function groupChats(chats: Chat[]): HistorySection[] {
+  const ordered = [...chats].sort((a, b) => {
+    if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
+    return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+  });
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const sections = new Map<string, Chat[]>();
+
+  for (const chat of ordered) {
+    const updated = new Date(chat.updatedAt);
+    let label = "以前";
+    if (chat.pinned) {
+      label = "ピン留め";
+    } else if (!Number.isNaN(updated.getTime())) {
+      const day = new Date(updated);
+      day.setHours(0, 0, 0, 0);
+      const daysAgo = Math.round((today.getTime() - day.getTime()) / 86_400_000);
+      if (daysAgo === 0) label = "今日";
+      else if (daysAgo === 1) label = "昨日";
+      else if (daysAgo <= 7) label = "過去7日間";
+      else label = `${updated.getFullYear()}年${updated.getMonth() + 1}月`;
+    }
+    const section = sections.get(label) ?? [];
+    section.push(chat);
+    sections.set(label, section);
+  }
+  return Array.from(sections, ([label, grouped]) => ({ label, chats: grouped }));
+}
+
+function shareText(chat: Chat): string {
+  const turns = chat.turns.map((turn) => {
+    const sources = turn.sources.length > 0
+      ? `\n\n出典:\n${turn.sources.map((source) => `- ${source.title}: ${source.url}`).join("\n")}`
+      : "";
+    return `質問:\n${turn.question}\n\n回答:\n${turn.answer || turn.error || "回答なし"}${sources}`;
+  });
+  return `${chat.title}\n\n${turns.join("\n\n---\n\n")}`;
+}
+
+function retryLabel(value: string | undefined, now: number): string {
+  if (!value) return "";
+  const at = new Date(value);
+  const milliseconds = at.getTime() - now;
+  if (Number.isNaN(at.getTime())) return "";
+  if (milliseconds <= 0) return "まもなく再開予定です";
+  const seconds = Math.ceil(milliseconds / 1000);
+  const minutes = Math.ceil(milliseconds / 60_000);
+  const duration = seconds < 60
+    ? `約${seconds}秒後`
+    : minutes < 60
+      ? `約${minutes}分後`
+    : `約${Math.floor(minutes / 60)}時間${minutes % 60 ? `${minutes % 60}分` : ""}後`;
+  const clock = new Intl.DateTimeFormat("ja-JP", { hour: "2-digit", minute: "2-digit" }).format(at);
+  return `再開目安: ${duration}（${clock}頃）`;
+}
+
 function clearStoredChats(username: string) {
   try {
     sessionStorage.removeItem(storageKey(username));
   } catch {
     // ストレージが無効でも、React上の履歴消去とログアウトは続ける。
+  }
+}
+
+function loadReadAnnouncementIds(): string[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(ANNOUNCEMENT_READ_KEY) ?? "[]") as unknown;
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
   }
 }
 
@@ -77,6 +157,7 @@ function loadChats(username: string): Chat[] {
       .slice(0, MAX_CHATS)
       .map((chat) => ({
         ...chat,
+        pinned: chat.pinned === true,
         turns: chat.turns.map((turn) => ({ ...turn, status: "", streaming: false })),
       }));
   } catch {
@@ -104,10 +185,23 @@ export default function App() {
   const [chats, setChats] = useState<Chat[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.matchMedia("(min-width: 901px)").matches);
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [readAnnouncementIds, setReadAnnouncementIds] = useState(loadReadAnnouncementIds);
+  const [noticeOpen, setNoticeOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [historyMenuId, setHistoryMenuId] = useState<string | null>(null);
+  const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
+  const [renameTitle, setRenameTitle] = useState("");
+  const [toast, setToast] = useState("");
+  const [clock, setClock] = useState(Date.now());
   const bottom = useRef<HTMLDivElement>(null);
+  const headerMenus = useRef<HTMLDivElement>(null);
+  const historyArea = useRef<HTMLElement>(null);
 
   const activeChat = chats.find((chat) => chat.id === activeChatId);
   const streaming = chats.some((chat) => chat.turns.some((turn) => turn.streaming));
+  const unreadCount = announcements.filter((announcement) => !readAnnouncementIds.includes(announcement.id)).length;
+  const historySections = groupChats(chats);
 
   function restoreHistory(user: string) {
     const saved = loadChats(user);
@@ -123,6 +217,51 @@ export default function App() {
       if (current.authenticated) restoreHistory(current.username);
     });
   }, []);
+
+  useEffect(() => {
+    fetch("/announcements.json")
+      .then((response) => (response.ok ? response.json() : []))
+      .then((value: unknown) => {
+        if (!Array.isArray(value)) return;
+        setAnnouncements(
+          value.filter(
+            (item): item is Announcement =>
+              typeof item === "object" &&
+              item !== null &&
+              typeof (item as Announcement).id === "string" &&
+              typeof (item as Announcement).title === "string" &&
+              typeof (item as Announcement).body === "string" &&
+              typeof (item as Announcement).date === "string",
+          ),
+        );
+      })
+      .catch(() => setAnnouncements([]));
+  }, []);
+
+  useEffect(() => {
+    if (!noticeOpen && !profileOpen && !historyMenuId && !renamingChatId) return;
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!headerMenus.current?.contains(event.target as Node)) {
+        setNoticeOpen(false);
+        setProfileOpen(false);
+      }
+      if (!historyArea.current?.contains(event.target as Node)) setHistoryMenuId(null);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setNoticeOpen(false);
+        setProfileOpen(false);
+        setHistoryMenuId(null);
+        setRenamingChatId(null);
+      }
+    };
+    window.addEventListener("pointerdown", closeOnOutsideClick);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeOnOutsideClick);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [historyMenuId, noticeOpen, profileOpen, renamingChatId]);
 
   useEffect(() => {
     const wide = window.matchMedia("(min-width: 901px)");
@@ -147,6 +286,12 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [authed, chats, streaming, username]);
 
+  useEffect(() => {
+    if (!chats.some((chat) => chat.turns.some((turn) => turn.retryAt))) return;
+    const timer = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [chats]);
+
   async function handleLogin(event: React.FormEvent) {
     event.preventDefault();
     setLoginError("");
@@ -168,12 +313,29 @@ export default function App() {
   }
 
   async function handleLogout() {
+    setNoticeOpen(false);
+    setProfileOpen(false);
     await logout();
     clearStoredChats(username);
     setAuthed(false);
     setUsername("");
     setChats([]);
     setActiveChatId(null);
+  }
+
+  function handleNoticeToggle() {
+    const opening = !noticeOpen;
+    setNoticeOpen(opening);
+    setProfileOpen(false);
+    if (!opening || announcements.length === 0) return;
+    const ids = announcements.map((announcement) => announcement.id);
+    setReadAnnouncementIds(ids);
+    try {
+      // お知らせIDだけなので、非公開Wikiの内容を端末へ保存することにはならない。
+      localStorage.setItem(ANNOUNCEMENT_READ_KEY, JSON.stringify(ids));
+    } catch {
+      // 保存できなくても、現在の表示中は既読状態を維持する。
+    }
   }
 
   function handleNewChat() {
@@ -183,11 +345,58 @@ export default function App() {
     if (window.matchMedia("(max-width: 900px)").matches) setSidebarOpen(false);
   }
 
-  function handleClearHistory() {
-    if (streaming || !window.confirm("このタブのチャット履歴をすべて削除しますか？")) return;
-    clearStoredChats(username);
-    setChats([]);
-    setActiveChatId(null);
+  function handleTogglePin(chatId: string) {
+    setChats((current) => current.map((chat) => (
+      chat.id === chatId ? { ...chat, pinned: !chat.pinned } : chat
+    )));
+    setHistoryMenuId(null);
+  }
+
+  function handleRenameStart(chat: Chat) {
+    setRenameTitle(chat.title);
+    setRenamingChatId(chat.id);
+    setHistoryMenuId(null);
+  }
+
+  function handleRenameSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    const title = renameTitle.trim();
+    if (!title || !renamingChatId) return;
+    setChats((current) => current.map((chat) => (
+      chat.id === renamingChatId ? { ...chat, title } : chat
+    )));
+    setRenamingChatId(null);
+  }
+
+  async function handleShare(chat: Chat) {
+    setHistoryMenuId(null);
+    if (!window.confirm("このチャットには非公開Wikiの内容が含まれる可能性があります。共有してよいですか？")) return;
+    const text = shareText(chat);
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: chat.title, text });
+        return;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setToast("チャットをクリップボードにコピーしました");
+      window.setTimeout(() => setToast(""), 3000);
+    } catch {
+      setToast("共有できませんでした");
+      window.setTimeout(() => setToast(""), 3000);
+    }
+  }
+
+  function handleDeleteChat(chat: Chat) {
+    setHistoryMenuId(null);
+    if (chat.turns.some((turn) => turn.streaming)) return;
+    if (!window.confirm(`「${chat.title}」を削除しますか？`)) return;
+    const next = chats.filter((item) => item.id !== chat.id);
+    setChats(next);
+    if (activeChatId === chat.id) setActiveChatId(next[0]?.id ?? null);
   }
 
   async function handleAsk(text: string) {
@@ -237,24 +446,33 @@ export default function App() {
     await ask(q, (event) => {
       switch (event.type) {
         case "status":
-          patch((current) => ({ ...current, status: event.message }));
+          patch((current) => ({ ...current, status: event.message, retryAt: event.retry_at }));
           break;
         case "pages":
           patch((current) => ({ ...current, sources: event.pages }));
           break;
         case "delta":
-          patch((current) => ({ ...current, answer: current.answer + event.text, status: "" }));
+          patch((current) => ({ ...current, answer: current.answer + event.text, status: "", retryAt: undefined }));
           break;
         case "error":
-          patch((current) => ({ ...current, error: event.message, streaming: false, status: "" }));
+          patch((current) => ({
+            ...current,
+            error: event.message,
+            errorCode: event.code,
+            streaming: false,
+            status: "",
+            retryAt: event.retry_at,
+          }));
           break;
         case "done":
-          patch((current) => ({ ...current, streaming: false, status: "" }));
+          patch((current) => ({ ...current, streaming: false, status: "", retryAt: undefined }));
           break;
       }
     });
     patch((current) => ({ ...current, streaming: false }));
-    setRemaining((count) => Math.max(0, count - 1));
+    // Gemini側の制限などでサーバーが回数を返却する場合もあるため、推測で1回減らさない。
+    const current = await session();
+    setRemaining(current.remaining);
   }
 
   if (authed === null) return <div className="center muted">読み込み中…</div>;
@@ -338,29 +556,54 @@ export default function App() {
 
         <div className="history-heading">
           <span>チャット履歴</span>
-          {chats.length > 0 && (
-            <button type="button" onClick={handleClearHistory} disabled={streaming}>すべて削除</button>
-          )}
         </div>
-        <nav className="history-list">
+        <nav className="history-list" ref={historyArea}>
           {chats.length === 0 ? (
             <p className="history-empty">このタブの履歴はまだありません</p>
           ) : (
-            chats.map((chat) => (
-              <button
-                type="button"
-                key={chat.id}
-                className={chat.id === activeChatId ? "active" : ""}
-                aria-current={chat.id === activeChatId ? "page" : undefined}
-                onClick={() => {
-                  setActiveChatId(chat.id);
-                  if (window.matchMedia("(max-width: 900px)").matches) setSidebarOpen(false);
-                }}
-              >
-                <HistoryIcon />
-                <span>{chat.title}</span>
-                {chat.turns.some((turn) => turn.streaming) && <i aria-label="回答中" />}
-              </button>
+            historySections.map((section) => (
+              <section className="history-section" key={section.label}>
+                <h2>{section.label}</h2>
+                {section.chats.map((chat) => (
+                  <div className={`history-item ${historyMenuId === chat.id ? "menu-open" : ""}`} key={chat.id}>
+                    <button
+                      type="button"
+                      className={`history-select ${chat.id === activeChatId ? "active" : ""}`}
+                      aria-current={chat.id === activeChatId ? "page" : undefined}
+                      onClick={() => {
+                        setActiveChatId(chat.id);
+                        setHistoryMenuId(null);
+                        if (window.matchMedia("(max-width: 900px)").matches) setSidebarOpen(false);
+                      }}
+                    >
+                      <HistoryIcon />
+                      <span>{chat.title}</span>
+                      {chat.turns.some((turn) => turn.streaming) && <i aria-label="回答中" />}
+                    </button>
+                    <button
+                      type="button"
+                      className="history-more"
+                      aria-label={`「${chat.title}」のメニュー`}
+                      aria-expanded={historyMenuId === chat.id}
+                      onClick={() => setHistoryMenuId((current) => current === chat.id ? null : chat.id)}
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" />
+                      </svg>
+                    </button>
+                    {historyMenuId === chat.id && (
+                      <div className="history-menu" role="menu">
+                        <button type="button" role="menuitem" onClick={() => handleTogglePin(chat.id)}>
+                          {chat.pinned ? "ピン留めを解除" : "ピン留め"}
+                        </button>
+                        <button type="button" role="menuitem" onClick={() => handleRenameStart(chat)}>タイトル変更</button>
+                        <button type="button" role="menuitem" onClick={() => handleShare(chat)} disabled={chat.turns.some((turn) => turn.streaming)}>共有する</button>
+                        <button type="button" role="menuitem" className="danger" onClick={() => handleDeleteChat(chat)} disabled={chat.turns.some((turn) => turn.streaming)}>削除</button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </section>
             ))
           )}
         </nav>
@@ -388,14 +631,64 @@ export default function App() {
               <h1>{activeChat?.title ?? "新しいチャット"}</h1>
             </div>
           </div>
-          <div className="header-actions">
+          <div className="header-actions" ref={headerMenus}>
             <span className="header-organization">WASA</span>
-            <button type="button" className="header-icon" aria-label="通知" title="通知はありません" disabled>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21h4" /></svg>
-            </button>
-            <span className="profile-avatar" title={username} aria-label={`利用者: ${username}`}>
-              {Array.from(username)[0] ?? "W"}
-            </span>
+            <div className="header-menu-wrap">
+              <button
+                type="button"
+                className="header-icon"
+                aria-label={`お知らせ${unreadCount > 0 ? `、未読${unreadCount}件` : ""}`}
+                aria-expanded={noticeOpen}
+                aria-controls="announcement-popover"
+                onClick={handleNoticeToggle}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21h4" /></svg>
+                {unreadCount > 0 && <span className="unread-dot" aria-hidden="true" />}
+              </button>
+              {noticeOpen && (
+                <section className="header-popover announcement-popover" id="announcement-popover" aria-label="お知らせ">
+                  <h2>お知らせ</h2>
+                  {announcements.length === 0 ? (
+                    <p className="popover-empty">現在のお知らせはありません</p>
+                  ) : (
+                    <div className="announcement-list">
+                      {announcements.map((announcement) => (
+                        <article key={announcement.id}>
+                          <time dateTime={announcement.date}>{announcement.date}</time>
+                          <h3>{announcement.title}</h3>
+                          <p>{announcement.body}</p>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              )}
+            </div>
+            <div className="header-menu-wrap">
+              <button
+                type="button"
+                className="profile-avatar"
+                aria-label={`利用者メニュー: ${username}`}
+                aria-expanded={profileOpen}
+                aria-controls="profile-popover"
+                onClick={() => {
+                  setProfileOpen((open) => !open);
+                  setNoticeOpen(false);
+                }}
+              >
+                {Array.from(username)[0] ?? "W"}
+              </button>
+              {profileOpen && (
+                <section className="header-popover profile-popover" id="profile-popover" aria-label="利用者メニュー">
+                  <div className="profile-summary">
+                    <span>ログイン中</span>
+                    <strong>{username}</strong>
+                  </div>
+                  <a href={WIKI_URL} target="_blank" rel="noreferrer noopener">WASA Wikiを開く</a>
+                  <button type="button" onClick={handleLogout}>ログアウト</button>
+                </section>
+              )}
+            </div>
           </div>
         </header>
 
@@ -434,7 +727,11 @@ export default function App() {
                 <img src="/assets/wasa-logo.jpeg" alt="" className="assistant-avatar" />
                 <div className="assistant-content">
                   {turn.status && (
-                    <div className="status"><span className="dot" />{turn.status}</div>
+                    <div className="status">
+                      <span className="dot" />
+                      <span>{turn.status}</span>
+                      {turn.retryAt && <small>{retryLabel(turn.retryAt, clock)}</small>}
+                    </div>
                   )}
                   {turn.answer && (
                     <div>
@@ -442,7 +739,18 @@ export default function App() {
                       {turn.streaming && <span className="caret" />}
                     </div>
                   )}
-                  {turn.error && <div className="error" role="alert">{turn.error}</div>}
+                  {turn.error && (turn.errorCode ? (
+                    <div className="service-alert" role="alert">
+                      <strong>
+                        {turn.errorCode === "daily_quota" ? "本日の無料枠を使い切りました" :
+                          turn.errorCode === "rate_limit" ? "一時的な利用制限がかかっています" :
+                            turn.errorCode === "user_daily_limit" ? "本日の質問上限に達しました" :
+                            "Geminiに接続できません"}
+                      </strong>
+                      <span>{turn.error}</span>
+                      {turn.retryAt && <small>{retryLabel(turn.retryAt, clock)}</small>}
+                    </div>
+                  ) : <div className="error" role="alert">{turn.error}</div>)}
 
                   {turn.sources.length > 0 && (
                     <section className="sources">
@@ -493,22 +801,45 @@ export default function App() {
               rows={1}
               disabled={streaming}
             />
-            <button
-              type="submit"
-              className="send"
-              aria-label="送信"
-              title="送信"
-              disabled={!question.trim() || streaming}
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="m4 12 16-8-5.5 16-3-6.5L4 12Zm7.5 1.5L20 4" />
-              </svg>
-            </button>
+            <div className="composer-actions">
+              <button
+                type="submit"
+                className="send"
+                aria-label="送信"
+                title="送信"
+                disabled={!question.trim() || streaming}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m4 12 16-8-5.5 16-3-6.5L4 12Zm7.5 1.5L20 4" />
+                </svg>
+              </button>
+            </div>
           </form>
           <p className="composer-hint">Enterで送信・Shift + Enterで改行</p>
           <p className="disclaimer">生成AIの回答には誤りが含まれることがあります。重要な判断の前に出典をご確認ください。</p>
         </div>
       </section>
+      {renamingChatId && (
+        <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) setRenamingChatId(null);
+        }}>
+          <form className="rename-dialog" role="dialog" aria-modal="true" aria-labelledby="rename-title" onSubmit={handleRenameSubmit}>
+            <h2 id="rename-title">タイトルを変更</h2>
+            <input
+              value={renameTitle}
+              onChange={(event) => setRenameTitle(event.target.value)}
+              maxLength={80}
+              autoFocus
+              aria-label="新しいタイトル"
+            />
+            <div>
+              <button type="button" onClick={() => setRenamingChatId(null)}>キャンセル</button>
+              <button type="submit" className="primary" disabled={!renameTitle.trim()}>保存</button>
+            </div>
+          </form>
+        </div>
+      )}
+      {toast && <div className="toast" role="status">{toast}</div>}
     </div>
   );
 }

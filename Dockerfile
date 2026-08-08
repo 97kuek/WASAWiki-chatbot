@@ -11,7 +11,8 @@
 FROM node:24-alpine AS web
 WORKDIR /web
 COPY web/package.json web/package-lock.json* ./
-RUN npm ci --silent || npm install --silent
+# lockfileと一致しない依存関係を本番イメージへ混ぜない。
+RUN npm ci --silent
 COPY web/ ./
 RUN npm run build
 

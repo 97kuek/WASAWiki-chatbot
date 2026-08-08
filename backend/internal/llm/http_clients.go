@@ -8,7 +8,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
+	"time"
+	_ "time/tzdata"
 )
 
 // ---------------------------------------------------------------- Gemini
@@ -18,16 +22,50 @@ import (
 // ⚠️ 無料枠は送信内容がモデルの学習に使われる場合がある。
 // 対象は非公開Wikiの本文であることを承知のうえで選択すること。
 type Gemini struct {
-	key   string
-	model string
-	http  *http.Client
+	key          string
+	model        string
+	http         *http.Client
+	requestSlot  chan struct{}
+	lastRequest  time.Time
+	blockedUntil time.Time
+	blockedErr   error
+	minInterval  time.Duration
+	maxRetries   int
 }
 
 const geminiBase = "https://generativelanguage.googleapis.com/v1beta"
 
-func NewGemini(key, model string) *Gemini {
-	return &Gemini{key: key, model: model, http: &http.Client{}}
+func NewGemini(key, model string, minInterval time.Duration, maxRetries int) *Gemini {
+	if minInterval < 0 {
+		minInterval = 0
+	}
+	if maxRetries < 0 {
+		maxRetries = 0
+	}
+	return &Gemini{
+		key: key, model: model, http: &http.Client{}, requestSlot: make(chan struct{}, 1),
+		minInterval: minInterval, maxRetries: maxRetries,
+	}
 }
+
+func (g *Gemini) acquire(ctx context.Context, onWait func(WaitInfo)) error {
+	select {
+	case g.requestSlot <- struct{}{}:
+		return nil
+	default:
+		if onWait != nil {
+			onWait(WaitInfo{Reason: "queue"})
+		}
+	}
+	select {
+	case g.requestSlot <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (g *Gemini) release() { <-g.requestSlot }
 
 func (g *Gemini) Name() string { return "gemini/" + g.model }
 
@@ -119,7 +157,92 @@ func (g *Gemini) payload(req Request) map[string]any {
 	}
 }
 
-func (g *Gemini) do(ctx context.Context, method string, body map[string]any) (*http.Response, error) {
+var retryDelayPattern = regexp.MustCompile(`"retryDelay"\s*:\s*"([^"]+)"`)
+
+func retryDelay(resp *http.Response, detail []byte, fallback time.Duration) time.Duration {
+	if raw := resp.Header.Get("Retry-After"); raw != "" {
+		if seconds, err := strconv.Atoi(raw); err == nil && seconds >= 0 {
+			return time.Duration(seconds) * time.Second
+		}
+		if at, err := http.ParseTime(raw); err == nil {
+			if wait := time.Until(at); wait > 0 {
+				return wait
+			}
+		}
+	}
+	if match := retryDelayPattern.FindSubmatch(detail); len(match) == 2 {
+		if wait, err := time.ParseDuration(string(match[1])); err == nil && wait >= 0 {
+			return wait
+		}
+	}
+	return fallback
+}
+
+func clampDuration(value, minimum, maximum time.Duration) time.Duration {
+	if value < minimum {
+		return minimum
+	}
+	if value > maximum {
+		return maximum
+	}
+	return value
+}
+
+func isDailyQuota(detail []byte) bool {
+	lower := strings.ToLower(string(detail))
+	return strings.Contains(lower, "perday") ||
+		strings.Contains(lower, "per_day") ||
+		strings.Contains(lower, "requests per day") ||
+		strings.Contains(lower, "rpd")
+}
+
+func untilPacificMidnight(now time.Time) time.Duration {
+	location, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		return 24 * time.Hour
+	}
+	local := now.In(location)
+	next := time.Date(local.Year(), local.Month(), local.Day()+1, 0, 0, 0, 0, location)
+	return next.Sub(local)
+}
+
+// waitRequest は全利用者のGemini呼び出しを同じ間隔に整える。
+// 無料枠はプロジェクト単位なので、利用者ごとの待機だけでは同時送信を防げない。
+func (g *Gemini) waitRequest(ctx context.Context, retryWait time.Duration, onWait func(WaitInfo)) error {
+	wait := retryWait
+	reason := "retry"
+	if !g.lastRequest.IsZero() {
+		if intervalWait := g.minInterval - time.Since(g.lastRequest); intervalWait > wait {
+			wait = intervalWait
+			reason = "pace"
+		}
+	}
+	if wait > 0 {
+		if onWait != nil {
+			onWait(WaitInfo{Reason: reason, Until: time.Now().Add(wait)})
+		}
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	g.lastRequest = time.Now()
+	return nil
+}
+
+func (g *Gemini) do(ctx context.Context, method string, body map[string]any, onWait func(WaitInfo)) (*http.Response, error) {
+	if time.Now().Before(g.blockedUntil) {
+		blockedErr := g.blockedErr
+		if blockedErr == nil {
+			blockedErr = ErrRateLimited
+		}
+		return nil, fmt.Errorf("%w: Geminiの再試行待機中", withRetryAt(blockedErr, g.blockedUntil))
+	}
+	g.blockedUntil = time.Time{}
+	g.blockedErr = nil
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
@@ -131,22 +254,63 @@ func (g *Gemini) do(ctx context.Context, method string, body map[string]any) (*h
 	if method == "streamGenerateContent" {
 		url += "?alt=sse"
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(raw))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-goog-api-key", g.key)
-	resp, err := g.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 500))
+
+	var wait time.Duration
+	for attempt := 0; ; attempt++ {
+		if err := g.waitRequest(ctx, wait, onWait); err != nil {
+			return nil, err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(raw))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("x-goog-api-key", g.key)
+		resp, err := g.http.Do(req)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if attempt < g.maxRetries {
+				wait = time.Duration(1<<attempt) * time.Second
+				continue
+			}
+			return nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
+		}
+		if resp.StatusCode == http.StatusOK {
+			g.blockedUntil = time.Time{}
+			g.blockedErr = nil
+			return resp, nil
+		}
+
+		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		resp.Body.Close()
-		return nil, fmt.Errorf("gemini が %s を返した: %s", resp.Status, detail)
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
+			if resp.StatusCode == http.StatusTooManyRequests && isDailyQuota(detail) {
+				// 日次上限は短時間待っても回復しないため、再試行せず太平洋時間0時まで止める。
+				g.blockedUntil = time.Now().Add(untilPacificMidnight(time.Now()))
+				g.blockedErr = ErrDailyQuota
+				return nil, fmt.Errorf("%w: gemini が %s を返した", withRetryAt(ErrDailyQuota, g.blockedUntil), resp.Status)
+			}
+			if attempt < g.maxRetries {
+				wait = clampDuration(
+					retryDelay(resp, detail, time.Duration(1<<attempt)*time.Second),
+					0,
+					60*time.Second,
+				)
+				continue
+			}
+			if resp.StatusCode == http.StatusTooManyRequests {
+				// 短時間の上限は1〜15分だけ回路を開き、全利用者からの無駄な再送を止める。
+				cooldown := clampDuration(retryDelay(resp, detail, time.Minute), time.Minute, 15*time.Minute)
+				g.blockedUntil = time.Now().Add(cooldown)
+				g.blockedErr = ErrRateLimited
+				return nil, fmt.Errorf("%w: gemini が %s を返した", withRetryAt(ErrRateLimited, g.blockedUntil), resp.Status)
+			}
+			return nil, fmt.Errorf("%w: gemini が %s を返した", ErrUnavailable, resp.Status)
+		}
+		return nil, fmt.Errorf("gemini が %s を返した", resp.Status)
 	}
-	return resp, nil
 }
 
 type geminiResponse struct {
@@ -170,7 +334,11 @@ func (r geminiResponse) text() string {
 }
 
 func (g *Gemini) Complete(ctx context.Context, req Request) (string, error) {
-	resp, err := g.do(ctx, "generateContent", g.payload(req))
+	if err := g.acquire(ctx, req.OnWait); err != nil {
+		return "", err
+	}
+	defer g.release()
+	resp, err := g.do(ctx, "generateContent", g.payload(req), req.OnWait)
 	if err != nil {
 		return "", err
 	}
@@ -183,7 +351,11 @@ func (g *Gemini) Complete(ctx context.Context, req Request) (string, error) {
 }
 
 func (g *Gemini) Stream(ctx context.Context, req Request, onDelta Delta) (string, error) {
-	resp, err := g.do(ctx, "streamGenerateContent", g.payload(req))
+	if err := g.acquire(ctx, req.OnWait); err != nil {
+		return "", err
+	}
+	defer g.release()
+	resp, err := g.do(ctx, "streamGenerateContent", g.payload(req), req.OnWait)
 	if err != nil {
 		return "", err
 	}
@@ -206,7 +378,10 @@ func (g *Gemini) Stream(ctx context.Context, req Request, onDelta Delta) (string
 			onDelta(text)
 		}
 	}
-	return strings.TrimSpace(full.String()), scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return strings.TrimSpace(full.String()), fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	return strings.TrimSpace(full.String()), nil
 }
 
 // ---------------------------------------------------------------- OpenAI互換

@@ -7,6 +7,44 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"time"
+)
+
+// WaitInfo はGeminiへの再送や送信間隔調整で、回答開始が遅れる理由を画面へ伝える。
+type WaitInfo struct {
+	Reason string
+	Until  time.Time
+}
+
+type retryError struct {
+	kind  error
+	until time.Time
+}
+
+func (e *retryError) Error() string { return e.kind.Error() }
+func (e *retryError) Unwrap() error { return e.kind }
+
+func withRetryAt(kind error, until time.Time) error {
+	return &retryError{kind: kind, until: until}
+}
+
+// RetryAt は上流が通知した再開時刻、または安全側に見積もった再開時刻を返す。
+func RetryAt(err error) (time.Time, bool) {
+	var target *retryError
+	if !errors.As(err, &target) || target.until.IsZero() {
+		return time.Time{}, false
+	}
+	return target.until, true
+}
+
+var (
+	// ErrRateLimited はGemini側の短時間のRPM・TPM上限到達を表す。
+	ErrRateLimited = errors.New("LLMの利用上限に到達")
+	// ErrDailyQuota はGemini無料枠のRPD上限到達を表す。
+	ErrDailyQuota = errors.New("LLMの日次利用上限に到達")
+	// ErrUnavailable は一時的な通信障害や上流サービス障害を表す。
+	ErrUnavailable = errors.New("LLMへ一時的に接続できない")
 )
 
 // Request の Cached / Prompt の分割には理由がある。
@@ -24,6 +62,7 @@ type Request struct {
 	Prompt    string          // 質問ごとに変わる部分
 	Schema    json.RawMessage // 構造化出力のJSONスキーマ。nil なら自由形式
 	MaxTokens int
+	OnWait    func(WaitInfo) // nilなら待機状況を通知しない
 }
 
 // Delta はストリーミング中に届く差分。
