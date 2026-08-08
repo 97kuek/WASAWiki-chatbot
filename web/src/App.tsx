@@ -223,12 +223,23 @@ export default function App() {
   const headerMenus = useRef<HTMLDivElement>(null);
   const historyArea = useRef<HTMLElement>(null);
   const syncedChats = useRef<Map<string, string>>(new Map());
+  const toastTimer = useRef<number | null>(null);
 
   const activeAssistant = assistants.find((item) => item.id === assistantId);
   const activeChat = chats.find((chat) => chat.id === activeChatId);
   const streaming = chats.some((chat) => chat.turns.some((turn) => turn.streaming));
   const unreadCount = announcements.filter((announcement) => !readAnnouncementIds.includes(announcement.id)).length;
   const historySections = groupChats(chats);
+
+  /** 新しい通知が来たら古いタイマーを捨て、最後の通知を5秒間きちんと読めるようにする。 */
+  function showToast(message: string) {
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    setToast(message);
+    toastTimer.current = window.setTimeout(() => {
+      setToast("");
+      toastTimer.current = null;
+    }, 5000);
+  }
 
   async function restoreHistory(user: string) {
     const legacy = loadLegacyChats(user);
@@ -262,8 +273,7 @@ export default function App() {
       syncedChats.current = new Map();
       setChats(legacy);
       setActiveChatId(legacy[0]?.id ?? null);
-      setToast("チャット履歴を同期できませんでした");
-      window.setTimeout(() => setToast(""), 3000);
+      showToast("チャット履歴を同期できませんでした");
     }
   }
 
@@ -331,6 +341,10 @@ export default function App() {
     return () => wide.removeEventListener("change", followViewport);
   }, []);
 
+  useEffect(() => () => {
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+  }, []);
+
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [activeChat?.turns]);
@@ -346,8 +360,7 @@ export default function App() {
         syncedChats.current.set(chat.id, JSON.stringify(chat));
       })).then((results) => {
         if (results.some((result) => result.status === "rejected")) {
-          setToast("チャット履歴を同期できませんでした");
-          window.setTimeout(() => setToast(""), 3000);
+          showToast("チャット履歴を同期できませんでした");
         }
       });
     }, 400);
@@ -412,6 +425,10 @@ export default function App() {
     setActiveChatId(null);
     setQuestion("");
     setView("chat");
+    closeSidebarOnMobile();
+  }
+
+  function closeSidebarOnMobile() {
     if (window.matchMedia("(max-width: 900px)").matches) setSidebarOpen(false);
   }
 
@@ -452,11 +469,9 @@ export default function App() {
     }
     try {
       await navigator.clipboard.writeText(text);
-      setToast("チャットをクリップボードにコピーしました");
-      window.setTimeout(() => setToast(""), 3000);
+      showToast("チャットをクリップボードにコピーしました");
     } catch {
-      setToast("共有できませんでした");
-      window.setTimeout(() => setToast(""), 3000);
+      showToast("共有できませんでした");
     }
   }
 
@@ -471,8 +486,7 @@ export default function App() {
     try {
       await deleteChat(chat.id);
     } catch {
-      setToast("チャット履歴を削除できませんでした");
-      window.setTimeout(() => setToast(""), 3000);
+      showToast("チャット履歴を削除できませんでした");
       void restoreHistory(username);
     }
   }
@@ -496,17 +510,20 @@ export default function App() {
   }
 
   function chooseAssistant(id: string) {
+    const name = assistants.find((item) => item.id === id)?.name ?? "汎用";
     setAssistantId(id);
     localStorage.setItem(ASSISTANT_KEY, id);
     // 選んだらチャットへ戻る。選ぶために開いた画面なので、留まる理由がない
     setAssistantForm(null);
     setView("chat");
+    showToast(`アシスタントを「${name}」に切り替えました`);
   }
 
   function openAssistants() {
     setAssistantError("");
     setAssistantForm(null);
     setView("assistants");
+    closeSidebarOnMobile();
   }
 
   function startCreate() {
@@ -538,7 +555,7 @@ export default function App() {
         const saved = await updateAssistant(editing, assistantDraft);
         setAssistants((current) => current.map((item) => (item.id === editing ? saved : item)));
         setAssistantForm(null);
-        setToast(`「${saved.name}」を保存しました`);
+        showToast(`「${saved.name}」を保存しました`);
         return;
       }
       const created = await createAssistant({
@@ -549,7 +566,7 @@ export default function App() {
       setAssistants((current) => [...current, created]);
       setAssistantDraft(emptyDraft);
       chooseAssistant(created.id);
-      setToast(`「${created.name}」を作成しました`);
+      showToast(`「${created.name}」を作成しました`);
     } catch (error) {
       setAssistantError(error instanceof Error ? error.message : "保存できませんでした");
     }
@@ -561,7 +578,7 @@ export default function App() {
       await deleteAssistant(target.id);
       setAssistants((current) => current.filter((item) => item.id !== target.id));
       if (assistantId === target.id) chooseAssistant("");
-      setToast(`「${target.name}」を削除しました`);
+      showToast(`「${target.name}」を削除しました`);
     } catch (error) {
       setAssistantError(error instanceof Error ? error.message : "削除できませんでした");
     }
@@ -809,7 +826,7 @@ export default function App() {
                         setActiveChatId(chat.id);
                         setHistoryMenuId(null);
                         setView("chat");
-                        if (window.matchMedia("(max-width: 900px)").matches) setSidebarOpen(false);
+                        closeSidebarOnMobile();
                       }}
                     >
                       <HistoryIcon />
