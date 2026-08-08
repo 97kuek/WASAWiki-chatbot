@@ -379,12 +379,43 @@ def outline(text: str) -> tuple[str, list[str]]:
     headings = [s["heading"] for s in sections if s["level"] == top and s["heading"]]
 
     # リード文は本文の書き出し。表・図・箇条書き記号は目次では邪魔になる
-    lines = [
-        ln.strip().lstrip("*#:;").strip()
-        for ln in sections[0]["body"].split("\n")
-        if ln.strip() and not ln.lstrip().startswith(("|", "［図:", "---"))
-    ]
-    lead = re.sub(r"\s+", " ", " ".join(lines)).strip()
+    def readable(text: str) -> str:
+        """目次に載せる形に整える。
+
+        URLは目次では場所を食うだけで判別の役に立たない。実測では
+        「代表資料」のリード文がGoogleドキュメントのURLだけで90字を使い切り、
+        本文にある「鳥コン資料」という語が見えなくなっていた（M2b-2 の q24）。
+        リンクはラベルだけ残す。
+        """
+        text = re.sub(r"\[([^\]]*)\]\((https?://[^)]*)\)", r"\1", text)  # [ラベル](url) → ラベル
+        text = re.sub(r"https?://\S+", "", text)                         # 裸のURL
+        return re.sub(r"\s+", " ", text).strip()
+
+    def collect(body: str, with_tables: bool) -> str:
+        keep = []
+        for line in body.split("\n"):
+            stripped = line.strip()
+            if not stripped or stripped.startswith(("［図:", "---")):
+                continue
+            if stripped.startswith("|"):
+                if not with_tables or set(stripped) <= set("|- "):
+                    continue  # 区切り行は捨てる
+                stripped = " ".join(c.strip() for c in stripped.strip("|").split("|") if c.strip())
+            keep.append(stripped.lstrip("*#:;").strip())
+        return readable(" ".join(keep))
+
+    lead = collect(sections[0]["body"], with_tables=False)
+    # 表しか無いページ（40th の全体スケジュールなど）は上の除外で空になる。
+    # 表の中身まで拾えば「2023年4月 コンセプト会議」のような語が目次に出る
+    if len(lead) < 30:
+        lead = collect(sections[0]["body"], with_tables=True)
+    # リード文そのものが無いページ（合宿・メインページなど5件）は
+    # 最初の中身のある節から取る。目次エントリが空だと選ばれない
+    if len(lead) < 30:
+        for sec in sections[1:]:
+            if (candidate := collect(sec["body"], with_tables=True)):
+                lead = (f"{sec['heading']}: {candidate}" if sec["heading"] else candidate)
+                break
     return lead, headings
 
 
