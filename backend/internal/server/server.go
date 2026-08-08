@@ -80,8 +80,8 @@ func (s *Server) Routes() http.Handler {
 
 // ---------------------------------------------------------------- 認証
 //
-// Wikiのアカウントで本人確認する。共有パスワード1本だと全員が同じ利用者に
-// なってしまい、チャット履歴を個人ごとに分けられないため。
+// Wikiの通常アカウントで本人確認する。共有パスワード1本だと全員が同じ利用者に
+// なってしまい、レート制限を個人ごとに分けられないため。
 // パスワードは検証に使って捨て、Cookieには利用者名と有効期限だけを載せる。
 
 func (s *Server) sign(user string, expiry int64) string {
@@ -196,7 +196,7 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// レート制限。共有パスワードが漏れた場合、本当の費用リスクはインフラではなく
+	// レート制限。本当の費用リスクはインフラではなく
 	// API従量課金である（docs/01-設計方針.md §7）。これが実質的な上限装置になる。
 	user, _ := s.currentUser(r)
 	if !s.limit.take(user) {

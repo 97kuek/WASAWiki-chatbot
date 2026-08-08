@@ -25,12 +25,15 @@ type Chunk struct {
 }
 
 type Page struct {
-	ID         int      `json:"id"`
+	// IDは文字列。Wikiのページは pageid だが、公式サイトのページは "s1" 形式で
+	// 数値ではない。出所が2つある以上、数値型には固定できない
+	ID         string   `json:"id"`
 	Title      string   `json:"title"`
 	Aliases    []string `json:"aliases"`
 	URL        string   `json:"url"`
 	LastEdited string   `json:"last_edited"`
 	Team       string   `json:"team"`
+	Source     string   `json:"source"` // "wiki" | "site"。出典表示で出所を区別する
 	Gen        *int     `json:"gen"`
 	Chars      int      `json:"chars"`
 	IsStub     bool     `json:"is_stub"`

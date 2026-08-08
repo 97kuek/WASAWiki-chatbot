@@ -1,4 +1,4 @@
-"""dump/pages.jsonl を、検索・回答に使える index.json に変換する。
+"""dump/pages.jsonl と dump/site.jsonl を、検索・回答に使える index.json に変換する。
 
 設計方針は docs/01-設計方針.md §5-1「データ品質」に対応。
 
@@ -10,6 +10,7 @@
   - 全チャンクにパンくず（ページ名 > H2 > H3）を付与。検索精度に最も効く
   - タイトル＋本文から代（世代）を抽出し、根拠の強さを source で区別する
   - 短いページも検索対象に含める（98字の「作業場移転履歴」に答えが完結していた）
+  - 公式サイト（dump/site.jsonl）も同じ形に揃えて混ぜる。source で出所を区別する
 
   python build_index.py
 出力: data/index.json（Wiki本文を含むため .gitignore 対象）
@@ -25,6 +26,7 @@ from collections import Counter
 from pathlib import Path
 
 DUMP = Path("dump/pages.jsonl")
+SITE_DUMP = Path("dump/site.jsonl")  # 公式サイト。dump_site.py が作る（無ければWikiだけで作る）
 OUT = Path("data/index.json")
 PAGE_URL_BASE = "https://wasabirdman.sakura.ne.jp/wbwiki/w/index.php/"
 
@@ -475,7 +477,7 @@ def render(title: str, sections: list[dict]) -> tuple[str, str]:
     return "\n".join(lines).strip(), breadcrumb
 
 
-def build_chunks(page_id: int, title: str, text: str) -> list[dict]:
+def build_chunks(page_id: int | str, title: str, text: str) -> list[dict]:
     chunks: list[dict] = []
 
     for group in group_sections(split_sections(text)):
@@ -584,6 +586,57 @@ def extract_team(title: str, body: str) -> str | None:
 
 # ==========================================================================
 
+def load_site_pages(used_titles: set[str]) -> list[dict]:
+    """公式サイトのページを、Wikiのページと同じ形に揃える。
+
+    出所を混ぜてしまうと「引き継ぎ資料に書いてある」のか「対外的な紹介文」なのかが
+    区別できなくなる。source フィールドで区別し、出典表示でもそれが分かるようにする。
+
+    本文はすでに dump_site.py が「== 見出し ==」形式に整えてあるので、
+    wikitext の整形（clean）を通さずにそのままチャンク化の経路に乗せられる。
+    """
+    if not SITE_DUMP.exists():
+        return []
+
+    pages: list[dict] = []
+    for n, line in enumerate(SITE_DUMP.open(encoding="utf-8"), 1):
+        raw = json.loads(line)
+        body = mask_emails(raw["text"]) if MASK_PII else raw["text"]
+
+        # 同名ページがWikiにあると resolve() が引けなくなるので注記で分ける
+        title = raw["title"]
+        if title in used_titles:
+            title = f"{title}（公式サイト）"
+        used_titles.add(title)
+
+        lead, headings = outline(body)
+        pages.append(
+            {
+                "id": f"s{n}",
+                "source": "site",
+                "kind": raw.get("kind", "投稿"),  # 固定ページ / 投稿。目次の粒度を分ける
+                "title": title,
+                "aliases": [],
+                "url": raw["url"],
+                "revid": None,
+                "last_edited": raw.get("last_edited", "")[:10],
+                "team": None,
+                **extract_gen(title, body),
+                "categories": [],
+                "chars": len(body),
+                "is_stub": len(body) < STUB_CHARS,
+                "lead": lead,
+                "headings": headings,
+                "images": [],
+                "links": [],
+                "chunks": (
+                    build_chunks(f"s{n}", title, body) if len(body) >= MIN_INDEX_CHARS else []
+                ),
+            }
+        )
+    return pages
+
+
 def main() -> None:
     raw_pages = [json.loads(line) for line in DUMP.open(encoding="utf-8")]
     content = [p for p in raw_pages if p["ns"] == 0]
@@ -604,7 +657,9 @@ def main() -> None:
         lead, headings = outline(body)
         pages.append(
             {
-                "id": raw["pageid"],
+                # IDは文字列。Wikiは pageid、公式サイトは "s1" 形式で数値ではないため
+                "id": str(raw["pageid"]),
+                "source": "wiki",
                 "title": raw["title"],
                 "aliases": aliases.get(raw["title"], []),
                 "url": PAGE_URL_BASE + urllib.parse.quote(raw["title"].replace(" ", "_")),
@@ -626,6 +681,9 @@ def main() -> None:
                 ),
             }
         )
+
+    site_pages = load_site_pages({p["title"] for p in pages})
+    pages.extend(site_pages)
 
     OUT.parent.mkdir(exist_ok=True)
     OUT.write_text(json.dumps({"pages": pages}, ensure_ascii=False, indent=1), encoding="utf-8")

@@ -4,6 +4,9 @@ export type Source = {
   title: string;
   url: string;
   last_edited: string;
+  /** "wiki" = 部内限定の引き継ぎWiki、"site" = 一般公開の公式サイト。
+   *  部外に出せる情報かどうかの判断に要るので、出典に必ず出す。 */
+  origin?: "wiki" | "site";
 };
 
 /** サーバーから流れてくる進捗イベント。pipeline.Event と対応する。 */

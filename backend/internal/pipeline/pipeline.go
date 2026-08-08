@@ -39,6 +39,9 @@ type Source struct {
 	Title      string `json:"title"`
 	URL        string `json:"url"`
 	LastEdited string `json:"last_edited"`
+	// "wiki"（部内限定の引き継ぎ資料）か "site"（一般公開の公式サイト）か。
+	// 画面で見分けられないと、部外に出せる情報かどうかが判断できない
+	Origin string `json:"origin"`
 }
 
 type Pipeline struct {
@@ -51,8 +54,8 @@ func New(ix *index.Index, client llm.Client) *Pipeline {
 }
 
 const selectPrompt = `---
-上はWikiの目次です。次の質問に答えるために読むべきページを、目次のタイトルから
-最大4件選んでください。
+上は資料の目次です。引き継ぎWiki（部内限定）と公式サイト（一般公開）の2つが載っています。
+次の質問に答えるために読むべきページを、目次のタイトルから最大4件選んでください。
 
 厳守すること:
 - **目次に実在するページタイトルを、一字一句そのまま**書き写すこと
@@ -63,8 +66,10 @@ const selectPrompt = `---
 - **同じテーマで代（世代）違いのページが複数ある場合は、最新の代を必ず含めること**
   （例: 空力設計(38th) / (40th) / (41st) があるなら 41st は外さない）。
   引き継ぎ資料では最新代が最も重要であり、古い代だけを挙げるのは誤り
+- サークルの成り立ち・歴代機体・対外的な説明を問われたら**公式サイト側も候補に入れる**。
+  逆に作業手順や設計の詳細は引き継ぎWiki側にある
 
-目次を見る限りWikiに答えが無いと判断できる場合は answerable を false にし、
+目次を見る限りどちらの資料にも答えが無いと判断できる場合は answerable を false にし、
 titles には最も近そうなページだけを挙げてください。
 
 質問: `
@@ -73,7 +78,8 @@ var selectSchema = json.RawMessage(`{"type":"object","properties":{"titles":{"ty
 
 var chunkSchema = json.RawMessage(`{"type":"object","properties":{"ids":{"type":"array","items":{"type":"string"},"maxItems":8}},"required":["ids"]}`)
 
-const answerPrompt = `あなたは早稲田大学の鳥人間サークル WASA の引き継ぎ資料Wikiに詳しいアシスタントです。
+const answerPrompt = `あなたは早稲田大学の鳥人間サークル WASA の資料に詳しいアシスタントです。
+資料は部内の引き継ぎWikiと一般公開の公式サイトの2つからなります。
 以下の資料を根拠に、質問に答えてください。
 
 **答えられることは答える。**
@@ -86,12 +92,17 @@ const answerPrompt = `あなたは早稲田大学の鳥人間サークル WASA �
 - 一部しか分からない場合は、**分かることを先に述べてから**、何が欠けているかを述べる
 - 質問の前提が資料と食い違う場合は、まず前提の誤りを指摘する
 
+**資料には2つの出所がある。**
+- **引き継ぎWiki**（部内限定）… 作業手順・設計の詳細・反省点。中身が濃いのはこちら
+- **公式サイト**（一般公開）… 団体紹介・歴代機体・活動報告。対外的な説明はこちら
+- 両方に書いてあって食い違う場合は、**引き継ぎWikiを優先**し、食い違い自体も述べる
+
 **書き方**
 - 必ず日本語で書く。思考の過程は書かず、結論から書く
-- 回答の最後に「出典: ページ名（最終更新: YYYY-MM）」を必ず挙げる
+- 回答の最後に「出典: ページ名（Wiki / 公式サイト、最終更新: YYYY-MM）」を必ず挙げる
 - 参照元が2年以上前なら、情報が古い可能性を添える
 
-なお、冒頭のWiki目次には**Wiki全体にどんなページがあるか**が載っている。
+なお、冒頭の目次には**どんなページが存在するか**が出所ごとに載っている。
 「どの分野の情報が薄いか」「そのページは存在するか」といった問いには、目次を根拠に答えてよい。
 
 # 資料
@@ -124,7 +135,13 @@ func (p *Pipeline) Run(ctx context.Context, question string, emit func(Event)) e
 
 	sources := make([]Source, 0, len(pages))
 	for _, pg := range pages {
-		sources = append(sources, Source{Title: pg.Title, URL: pg.URL, LastEdited: pg.LastEdited})
+		origin := pg.Source
+		if origin == "" {
+			origin = "wiki" // 旧い index.json には source が無い
+		}
+		sources = append(sources, Source{
+			Title: pg.Title, URL: pg.URL, LastEdited: pg.LastEdited, Origin: origin,
+		})
 	}
 	emit(Event{Type: "pages", Pages: sources})
 
@@ -140,8 +157,12 @@ func (p *Pipeline) Run(ctx context.Context, question string, emit func(Event)) e
 		if !ok {
 			continue
 		}
-		blocks = append(blocks, fmt.Sprintf("## %s\n（ページ: %s / 最終更新: %s）\n\n%s",
-			c.Breadcrumb, pg.Title, pg.LastEdited, c.Text))
+		origin := "Wiki"
+		if pg.Source == "site" {
+			origin = "公式サイト"
+		}
+		blocks = append(blocks, fmt.Sprintf("## %s\n（出所: %s / ページ: %s / 最終更新: %s）\n\n%s",
+			c.Breadcrumb, origin, pg.Title, pg.LastEdited, c.Text))
 	}
 
 	emit(Event{Type: "status", Message: "回答を作成しています"})

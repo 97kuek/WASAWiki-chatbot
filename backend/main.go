@@ -77,7 +77,7 @@ func main() {
 	log.Printf("モデル: %s", client.Name())
 
 	// 認証はWikiのアカウントに委ねる。共有パスワードを配らずに済み、
-	// 利用者名が取れるので履歴を個人ごとに分けられる（docs/01-設計方針.md §8-1）
+	// 利用者名が取れるのでレート制限を個人ごとに分けられる（docs/01-設計方針.md §8-1）
 	wikiAPI := env("WIKI_API", "https://wasabirdman.sakura.ne.jp/wbwiki/w/api.php")
 
 	secret := os.Getenv("SESSION_SECRET")

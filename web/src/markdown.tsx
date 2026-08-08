@@ -1,3 +1,6 @@
+import katex from "katex";
+import "katex/dist/katex.min.css";
+
 /**
  * 回答本文のMarkdownを描画する。
  *
@@ -8,7 +11,7 @@
  * 生のHTMLが通る経路が構造的に存在しない。
  *
  * 対応する記法は生成文に実際に出るものだけ:
- * 見出し / 箇条書き / 番号付き / 表 / 引用 / 水平線 / 強調 / コード / リンク。
+ * 見出し / 箇条書き / 番号付き / 表 / 引用 / 水平線 / 強調 / コード / リンク / TeX数式。
  */
 
 type Inline = { html: string };
@@ -22,8 +25,26 @@ const escapeHtml = (s: string) =>
 const safeHref = (url: string) => (/^https?:\/\//i.test(url) ? url : null);
 
 function inline(raw: string): Inline {
-  let html = escapeHtml(raw);
-  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+  const tokens: string[] = [];
+  const stash = (html: string) => {
+    const marker = `\uE000${tokens.length}\uE001`;
+    tokens.push(html);
+    return marker;
+  };
+
+  // コード中の $ は数式にしない。先にコードを退避してからTeXを探す。
+  let protectedText = raw.replace(/`([^`]+)`/g, (_, code: string) =>
+    stash(`<code>${escapeHtml(code)}</code>`),
+  );
+  protectedText = protectedText.replace(
+    /\\\(([\s\S]+?)\\\)|(?<!\\)\$([^$\n]+?)(?<!\\)\$/g,
+    (_, paren: string | undefined, dollar: string | undefined) =>
+      // 2つの選択肢のどちらか一方だけが一致するが、型の上では両方 undefined
+      // になりうる。空文字に落として renderMath の引数型を満たす
+      stash(renderMath(paren ?? dollar ?? "", false)),
+  );
+
+  let html = escapeHtml(protectedText);
   html = html.replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>");
   html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
   html = html.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
@@ -38,7 +59,56 @@ function inline(raw: string): Inline {
     /(^|[\s(])(https?:\/\/[^\s<)]+)/g,
     '$1<a href="$2" target="_blank" rel="noreferrer noopener">$2</a>',
   );
+  html = html.replace(/\uE000(\d+)\uE001/g, (_, index: string) => tokens[Number(index)] ?? "");
   return { html };
+}
+
+/** KaTeXは既定で危険なHTML命令を許可しない。失敗時もTeX原文を安全に表示する。 */
+function renderMath(source: string, displayMode: boolean): string {
+  return katex.renderToString(source.trim(), {
+    displayMode,
+    throwOnError: false,
+    strict: "warn",
+    trust: false,
+    output: "htmlAndMathml",
+  });
+}
+
+/** $$ ... $$ と \[ ... \] の複数行ブロックを1つの数式として取り出す。 */
+function blockMath(lines: string[], start: number): { html: string; next: number } | null {
+  const trimmed = lines[start].trim();
+  const delimiters = trimmed.startsWith("$$")
+    ? { open: "$$", close: "$$" }
+    : trimmed.startsWith("\\[")
+      ? { open: "\\[", close: "\\]" }
+      : null;
+  if (!delimiters) return null;
+
+  const first = trimmed.slice(delimiters.open.length);
+  if (first.endsWith(delimiters.close)) {
+    return {
+      html: `<div class="math-block">${renderMath(first.slice(0, -delimiters.close.length), true)}</div>`,
+      next: start + 1,
+    };
+  }
+
+  const formula = [first];
+  let i = start + 1;
+  while (i < lines.length) {
+    const end = lines[i].indexOf(delimiters.close);
+    if (end !== -1) {
+      formula.push(lines[i].slice(0, end));
+      return {
+        html: `<div class="math-block">${renderMath(formula.join("\n"), true)}</div>`,
+        next: i + 1,
+      };
+    }
+    formula.push(lines[i]);
+    i++;
+  }
+
+  // 閉じ忘れは数式として解釈せず、原文を通常の段落へ戻す。
+  return null;
 }
 
 const cells = (line: string) =>
@@ -73,6 +143,13 @@ export function renderMarkdown(source: string): string {
 
     if (!line.trim()) {
       i++;
+      continue;
+    }
+
+    const math = blockMath(lines, i);
+    if (math) {
+      out.push(math.html);
+      i = math.next;
       continue;
     }
 
