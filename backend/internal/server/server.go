@@ -64,7 +64,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/login", s.handleLogin)
 	mux.HandleFunc("POST /api/logout", s.handleLogout)
 	mux.HandleFunc("GET /api/session", s.handleSession)
-	mux.HandleFunc("GET /api/ask", s.requireAuth(s.handleAsk))
+	mux.HandleFunc("POST /api/ask", s.requireAuth(s.handleAsk))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		pages, chunks := s.ix.Stats()
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "pages": pages, "chunks": chunks})
@@ -190,7 +190,15 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 // ---------------------------------------------------------------- 質問
 
 func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
-	question := strings.TrimSpace(r.URL.Query().Get("q"))
+	var body struct {
+		Question string `json:"question"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "リクエストが不正です"})
+		return
+	}
+	// 質問をURLに載せない。非公開Wikiに関する文面がアクセスログへ残るのを避けるため。
+	question := strings.TrimSpace(body.Question)
 	if question == "" || len([]rune(question)) > 500 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "質問を入力してください（500文字以内）"})
 		return
@@ -242,6 +250,7 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", s.cfg.AllowOrigin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 			w.Header().Set("Vary", "Origin")
 		}
 		if r.Method == http.MethodOptions {
