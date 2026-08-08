@@ -17,7 +17,8 @@ import (
 )
 
 const (
-	maxPages = 3
+	// 空力設計は代違いで4ページあり、3では構造的に全部入らない
+	maxPages = 4
 	// 選択ページの本文をそのまま渡す上限。超えたらチャンク単位に絞る。
 	// M2a では3ページの合計が最大48,100字になった（36,261字の「駆動・フレーム班」が原因）。
 	directContextLimit = 12000
@@ -51,7 +52,7 @@ func New(ix *index.Index, client llm.Client) *Pipeline {
 
 const selectPrompt = `---
 上はWikiの目次です。次の質問に答えるために読むべきページを、目次のタイトルから
-最大3件選んでください。
+最大4件選んでください。
 
 厳守すること:
 - **目次に実在するページタイトルを、一字一句そのまま**書き写すこと
@@ -59,13 +60,16 @@ const selectPrompt = `---
 - 目次に無いページ名を推測して作らないこと
 - 関連が薄いものを埋め合わせで入れないこと
 - **質問に出てくる語がそのままタイトルに含まれるページがあれば、必ず候補に入れること**
+- **同じテーマで代（世代）違いのページが複数ある場合は、最新の代を必ず含めること**
+  （例: 空力設計(38th) / (40th) / (41st) があるなら 41st は外さない）。
+  引き継ぎ資料では最新代が最も重要であり、古い代だけを挙げるのは誤り
 
 目次を見る限りWikiに答えが無いと判断できる場合は answerable を false にし、
 titles には最も近そうなページだけを挙げてください。
 
 質問: `
 
-var selectSchema = json.RawMessage(`{"type":"object","properties":{"titles":{"type":"array","items":{"type":"string"},"maxItems":3},"answerable":{"type":"boolean"}},"required":["titles","answerable"]}`)
+var selectSchema = json.RawMessage(`{"type":"object","properties":{"titles":{"type":"array","items":{"type":"string"},"maxItems":4},"answerable":{"type":"boolean"}},"required":["titles","answerable"]}`)
 
 var chunkSchema = json.RawMessage(`{"type":"object","properties":{"ids":{"type":"array","items":{"type":"string"},"maxItems":8}},"required":["ids"]}`)
 

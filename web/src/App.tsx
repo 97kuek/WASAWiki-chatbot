@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ask, login, session, type Source } from "./api";
+import { Markdown } from "./markdown";
 
 type Turn = {
   question: string;
@@ -10,10 +11,35 @@ type Turn = {
   streaming: boolean;
 };
 
-const EXAMPLES = [
-  "作業場の家賃は月いくらですか？",
-  "荷重試験の申請方法を教えてください",
-  "40thと41stの空力設計は何が違いますか？",
+/**
+ * 回答末尾の「出典: ページ名（最終更新: YYYY-MM）」を落とす。
+ *
+ * 同じ情報を pages イベントで構造化データとして受け取っており、
+ * そちらはリンクにできる。本文の平文と二重に出す意味がない。
+ * 鮮度の注記（※〜）は情報として残す。
+ */
+function stripCitation(text: string): string {
+  const lines = text.split("\n");
+  const start = lines.findIndex((l) => /^\s*(\*\*)?出典[:：]/.test(l));
+  if (start === -1) return text.trim();
+  // 出典は末尾に書かせているので、それ以降はまとめて出典ブロックとみなす。
+  // 複数ページを箇条書きで並べることがあり、行単位の除去では取り切れない。
+  // ただし鮮度の注記（※〜）は本文として意味があるので残す
+  const notes = lines.slice(start).filter((l) => /^\s*[※注]/.test(l));
+  return [...lines.slice(0, start), ...notes].join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
+ * 質問候補。新入生や代替わり直後の人は「何を聞けばいいか」が分からないので、
+ * 入口を用意しておく。title は一覧で拾える短さ、body が実際に送る質問文。
+ */
+const SUGGESTIONS: { title: string; body: string }[] = [
+  { title: "空力設計の手順", body: "空力設計の設計手順について、詳しく分かりやすく説明してください" },
+  { title: "荷重試験の申請", body: "荷重試験の申請方法を教えてください。申請先のメールアドレスも知りたいです" },
+  { title: "作業場のこと", body: "作業場の家賃・ルール・移転の経緯を教えてください" },
+  { title: "鳥コンまでの流れ", body: "鳥人間コンテストまでにやっておくべきことを教えてください" },
+  { title: "代ごとの違い", body: "空力設計は38代から41代にかけて何が変化しましたか？" },
+  { title: "テストフライト", body: "テストフライトの申請方法と、TF前日までにやるべきことを教えてください" },
 ];
 
 export default function App() {
@@ -117,15 +143,17 @@ export default function App() {
 
       <main>
         {turns.length === 0 && (
-          <div className="card intro">
-            <p>引き継ぎ資料Wikiの内容について質問できます。</p>
+          <div className="intro">
+            <h2>WASA Wiki チャット</h2>
             <p className="muted">
-              回答は必ず出典ページを示します。Wikiに書かれていないことは「記載がありません」と答えます。
+              引き継ぎ資料Wikiの内容に答えます。回答には必ず出典ページを示し、
+              Wikiに書かれていないことは「記載がありません」と答えます。
             </p>
-            <div className="examples">
-              {EXAMPLES.map((e) => (
-                <button key={e} className="chip" onClick={() => handleAsk(e)}>
-                  {e}
+            <div className="suggestions">
+              {SUGGESTIONS.map((s) => (
+                <button key={s.title} className="suggestion" onClick={() => handleAsk(s.body)}>
+                  <span className="suggestion-title">{s.title}</span>
+                  <span className="suggestion-body">{s.body}</span>
                 </button>
               ))}
             </div>
@@ -136,17 +164,6 @@ export default function App() {
           <article key={i} className="turn">
             <div className="question">{turn.question}</div>
 
-            {turn.sources.length > 0 && (
-              <div className="sources">
-                {turn.sources.map((s) => (
-                  <a key={s.url} href={s.url} target="_blank" rel="noreferrer" className="chip">
-                    {s.title}
-                    <span className="muted"> · {s.last_edited.slice(0, 7)}</span>
-                  </a>
-                ))}
-              </div>
-            )}
-
             {/* 進捗表示。無言で待たされる数秒と、何をしているか見える数秒では体感が違う */}
             {turn.status && (
               <div className="status">
@@ -156,12 +173,29 @@ export default function App() {
             )}
 
             {turn.answer && (
-              <div className="answer">
-                {turn.answer}
+              <div>
+                <Markdown text={stripCitation(turn.answer)} />
                 {turn.streaming && <span className="caret" />}
               </div>
             )}
             {turn.error && <div className="error">{turn.error}</div>}
+
+            {turn.sources.length > 0 && (
+              <section className="sources">
+                <h2>{turn.streaming ? "参照中の資料" : "出典"}</h2>
+                <ul>
+                  {turn.sources.map((s) => (
+                    <li key={s.url}>
+                      <a href={s.url} target="_blank" rel="noreferrer noopener">
+                        <span className="source-title">{s.title}</span>
+                        <span className="source-meta">最終更新 {s.last_edited}</span>
+                        <span className="source-arrow" aria-hidden="true">↗</span>
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
           </article>
         ))}
         <div ref={bottom} />
@@ -181,10 +215,29 @@ export default function App() {
           maxLength={500}
           disabled={turns.some((t) => t.streaming)}
         />
-        <button type="submit" disabled={!question.trim() || turns.some((t) => t.streaming)}>
-          送信
+        <button
+          type="submit"
+          className="send"
+          aria-label="送信"
+          title="送信"
+          disabled={!question.trim() || turns.some((t) => t.streaming)}
+        >
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path
+              d="M12 19V5M12 5l-6 6M12 5l6 6"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
         </button>
       </form>
+
+      <p className="disclaimer">
+        生成AIの回答には誤りが含まれることがあります。重要な判断の前に出典ページをご確認ください。
+      </p>
     </div>
   );
 }

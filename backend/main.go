@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/joho/godotenv"
+
 	"github.com/97kuek/WASAWiki-chatbot/backend/internal/index"
 	"github.com/97kuek/WASAWiki-chatbot/backend/internal/llm"
 	"github.com/97kuek/WASAWiki-chatbot/backend/internal/pipeline"
@@ -34,6 +36,15 @@ func envInt(key string, fallback int) int {
 }
 
 func main() {
+	// リポジトリ直下の .env を読む。測定用のPython側と同じ設定を使えるようにするため。
+	// 既に環境変数が設定されていればそちらが優先される
+	for _, path := range []string{".env", "../.env"} {
+		if err := godotenv.Load(path); err == nil {
+			log.Printf("設定を読み込み: %s", path)
+			break
+		}
+	}
+
 	dataDir := env("DATA_DIR", "data")
 	ix, err := index.Load(dataDir)
 	if err != nil {

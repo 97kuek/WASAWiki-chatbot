@@ -39,11 +39,45 @@ CHUNK_MAX = 2500     # レンダリング後にこれを超えたら分割する
 CHUNK_MIN = 200      # これ未満の末尾チャンクは直前に吸収する
 
 # 個人情報のマスキング。氏名・役職・班は「40代の駆動班長は誰か」に答えるため残す。
-# 連絡先と生年月日は回答に不要な一方、外部API送信・パスワード漏洩時の露出面になる。
 MASK_PII = True
-EMAIL = re.compile(r"[\w.+-]+\s*@\s*[\w-]+(?:\.[\w-]+)+")
+EMAIL = re.compile(r"[A-Za-z0-9._%+-]+\s*@\s*[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
+
+# メールアドレスは一律に伏せない。実データ26件を分類したところ、
+# 業務上の申請先（教室予約・理工の窓口）と個人の連絡先がきれいに分かれていた。
+# 一律に伏せると「荷重試験の申請はどこに出すのか」に答えられなくなる。
+#
+# 早稲田の学生用サブドメイン。個人に割り当てられるもの
+PERSONAL_DOMAINS = {
+    "asagi.waseda.jp", "fuji.waseda.jp", "ruri.waseda.jp", "akane.waseda.jp",
+    "toki.waseda.jp", "moegi.waseda.jp", "suou.waseda.jp", "kurenai.waseda.jp",
+}
+FREE_MAIL = {
+    "gmail.com", "gmai.com", "googlemail.com", "yahoo.co.jp", "yahoo.com",
+    "outlook.jp", "outlook.com", "hotmail.com", "icloud.com", "nifty.com", "docomo.ne.jp",
+}
+# 役割・組織を表すローカル部。フリーメールでも共用アドレスなら残す
+ROLE_WORDS = (
+    "reserve", "classroom", "info", "admin", "contact", "office", "soumu", "support",
+    "wasa", "birdman", "toridenso", "fairing", "alumni", "staff", "dept", "ml", "list",
+)
+
+
+def mask_emails(text: str) -> str:
+    """個人の連絡先だけを伏せ、業務上の申請先は残す。"""
+
+    def decide(m: re.Match) -> str:
+        addr = m.group(0)
+        local, _, domain = addr.partition("@")
+        local, domain = local.strip().lower(), domain.strip().lower()
+        is_role = any(word in local for word in ROLE_WORDS) or re.match(r"^\d+(st|nd|rd|th)$", local)
+        if domain in PERSONAL_DOMAINS:
+            return "［個人のメールアドレス］"
+        if domain in FREE_MAIL and not is_role:
+            return "［個人のメールアドレス］"
+        return addr
+
+    return EMAIL.sub(decide, text)
 BIRTHDAY = re.compile(r"\d{4}\s*[年/.\-]\s*\d{1,2}\s*[月/.\-]\s*\d{1,2}\s*日?\s*生まれ")
-PHONE = re.compile(r"(?<![\d-])0\d{1,4}[-‐（(]\d{1,4}[-‐)）]\d{3,4}(?![\d-])")
 
 IMAGE_PREFIX = re.compile(r"^\s*(ファイル|File|画像|Image)\s*:", re.I)
 CATEGORY_PREFIX = re.compile(r"^\s*(Category|カテゴリ)\s*:", re.I)
@@ -226,9 +260,8 @@ def clean(text: str) -> tuple[str, list[dict], list[str], list[str]]:
     # マスキングはパース前に行う。後段だと links やキャプションに取り残しが出る
     # （実際 [[Mailto:...]] が内部リンク扱いで links 配列に残った）
     if MASK_PII:
-        text = EMAIL.sub("［メールアドレス］", text)
+        text = mask_emails(text)
         text = BIRTHDAY.sub("［生年月日］", text)
-        text = PHONE.sub("［電話番号］", text)
 
     text, stash = protect(text)
     text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
