@@ -1389,13 +1389,13 @@ button:disabled {
   background: var(--surface);
 }
 
-.sidebar-assistant svg {
+.sidebar-assistant .avatar-default {
+  border: 0;
+  background: transparent;
+}
+
+.sidebar-assistant .avatar-default svg {
   width: 20px;
-  fill: none;
-  stroke: var(--muted);
-  stroke-width: 1.7;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .sidebar-assistant-label {
@@ -1418,10 +1418,6 @@ button:disabled {
   font-size: 11px;
   white-space: nowrap;
   text-overflow: ellipsis;
-}
-
-.sidebar-assistant.on svg {
-  stroke: var(--accent);
 }
 
 .sidebar-assistant.on .sidebar-assistant-current {
@@ -1458,61 +1454,150 @@ button:disabled {
   line-height: 1.6;
 }
 
-.assistant-list {
+/* ---- アイコン ---- */
+
+.avatar {
+  flex: none;
   display: grid;
-  gap: 8px;
+  place-items: center;
+  border-radius: 50%;
+  object-fit: cover;
+  overflow: hidden;
+}
+
+/* 画像が無いときは名前の頭文字。用意しないと見栄えが悪い状態にすると、
+   結局だれもアシスタントを作らなくなる */
+.avatar-initial {
+  color: #fff;
+  font-weight: 700;
+  line-height: 1;
+  user-select: none;
+}
+
+.avatar-default {
+  border: 1px solid var(--line-strong);
+  background: var(--surface-soft);
+}
+
+.avatar-default svg {
+  width: 58%;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ---- 一覧（アイコン＋名前のカード） ---- */
+
+.assistant-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.assistant-list li {
+.assistant-grid li {
+  position: relative;
   display: flex;
-  align-items: stretch;
-  gap: 6px;
 }
 
-.assistant-pick {
+.assistant-card {
   flex: 1;
   display: grid;
-  gap: 3px;
-  padding: 10px 12px;
+  justify-items: center;
+  align-content: start;
+  gap: 6px;
+  padding: 16px 12px 12px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 12px;
   background: var(--surface);
-  text-align: left;
+  text-align: center;
   cursor: pointer;
 }
 
-.assistant-pick.on {
+.assistant-card:hover { border-color: var(--line-strong); }
+
+.assistant-card.on {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
 
 .assistant-name { font-size: 14px; font-weight: 600; color: var(--text); }
-.assistant-desc { font-size: 12px; line-height: 1.5; color: var(--muted); }
-/* 作成者名は必ず出す。匿名で共有できないことが、内容の管理を人手に
-   頼らずに済ませている仕組みそのもの（docs/03-画面・認証仕様.md §5） */
-.assistant-meta { font-size: 11px; color: var(--muted); }
 
-.assistant-row-actions {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 4px;
+.assistant-desc {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
 }
 
-.assistant-row-actions button {
-  padding: 5px 9px;
+/* 作成者名は必ず出す。匿名で共有できないことが、内容の管理を人手に
+   頼らずに済ませている仕組みそのもの（docs/03-画面・認証仕様.md） */
+.assistant-meta { font-size: 11px; line-height: 1.5; color: var(--muted); }
+
+/* カードの上に重ねる。並びを崩さずに操作を出す */
+.assistant-card-actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+}
+
+.assistant-grid li:hover .assistant-card-actions,
+.assistant-card-actions:focus-within { opacity: 1; }
+
+.assistant-card-actions button {
+  padding: 3px 7px;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: 6px;
   background: var(--surface);
   color: var(--muted);
   font-size: 11px;
   cursor: pointer;
 }
 
-.assistant-row-actions button.danger { color: #b3261e; }
+.assistant-card-actions button.danger { color: #b3261e; }
+
+/* 触れないポインタ（スマホ）ではホバーが無いので常に出す */
+@media (hover: none) {
+  .assistant-card-actions { opacity: 1; }
+}
+
+/* ---- 作成フォームのアイコン欄 ---- */
+
+.assistant-identity {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.assistant-identity > label { flex: 1; }
+
+.assistant-icon-pick {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+}
+
+.assistant-icon-button {
+  display: inline-block;
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.assistant-icon-button input { display: none; }
 
 .assistant-form {
   display: grid;

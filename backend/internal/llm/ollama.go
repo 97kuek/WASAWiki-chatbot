@@ -53,6 +53,9 @@ func (o *Ollama) body(req Request, stream bool) ([]byte, error) {
 		"prompt": req.Cached + req.Prompt,
 		"stream": stream,
 		"think":  false,
+		// /api/generate の system はテンプレートのシステム役へ入る。
+		// 測定用のローカル実行でも、本番と同じ強さの区別を保つ
+		"system": req.System,
 		"options": map[string]any{
 			"num_ctx":     o.NumCtx,
 			"temperature": 0,

@@ -416,7 +416,8 @@ func (s *Server) handleListAssistants(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCreateAssistant(w http.ResponseWriter, r *http.Request) {
 	var body state.Assistant
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&body); err != nil {
+	// アイコン画像（data URI・最大96KB）を含むので、他のAPIより大きく取る
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256<<10)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "リクエストが不正です"})
 		return
 	}
@@ -432,26 +433,25 @@ func (s *Server) handleCreateAssistant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 件数の上限だけは一覧で見る。多少超えても実害が無いので、
+	// ここは競合を許す（IDの重複と違い、他人のものを奪う経路にならない）
 	list, err := s.state.ListAssistants(r.Context())
 	if err != nil {
 		log.Printf("アシスタントの読み込みに失敗: %v", err)
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "アシスタントを読み込めませんでした"})
 		return
 	}
-	for _, item := range list {
-		if item.ID == body.ID {
-			// 上書きを許すと、他人のアシスタントを実質的に編集できてしまう。
-			// 「他人のものは複製して直す」の原則がここで効いている
-			writeJSON(w, http.StatusConflict, map[string]string{"error": "そのIDは既に使われています"})
-			return
-		}
-	}
 	if len(list) >= maxAssistants {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "アシスタントの数が上限に達しています"})
 		return
 	}
 
-	if err := s.state.SaveAssistant(r.Context(), body); err != nil {
+	// ID重複の判定は書き込み側に委ねる。一覧で調べてから書くと、同時に
+	// 作られた2件が両方とも検査を通り、後勝ちで他人のものを上書きできる
+	if err := s.state.CreateAssistant(r.Context(), body); errors.Is(err, state.ErrAssistantExists) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": state.ErrAssistantExists.Error()})
+		return
+	} else if err != nil {
 		log.Printf("アシスタントの保存に失敗: %v", err)
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "アシスタントを保存できませんでした"})
 		return
@@ -488,23 +488,29 @@ func (s *Server) handleDeleteAssistant(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusNotFound, map[string]string{"error": "アシスタントが見つかりません"})
 }
 
+// errAssistantUnavailable は、指定されたアシスタントを解決できなかったことを表す。
+var errAssistantUnavailable = errors.New("アシスタントを特定できません")
+
 // lookupAssistant は質問に添えられたIDを実体に解決する。
-// 見つからないIDは「未選択」として扱い、質問自体は通す。
-func (s *Server) lookupAssistant(ctx context.Context, id string) *state.Assistant {
+//
+// ⚠️ **解決できないときに「未選択」へ落とさない。** 以前はFirestore障害や
+// 削除直後に nil を返しており、参照範囲を絞ったつもりの質問が全資料参照へ
+// 黙って広がっていた。範囲を安全性の境界として使う以上、ここは閉じる側に倒す。
+func (s *Server) lookupAssistant(ctx context.Context, id string) (*state.Assistant, error) {
 	if id == "" {
-		return nil
+		return nil, nil // 明示的な「汎用」。絞り込み無しで正しい
 	}
 	list, err := s.state.ListAssistants(ctx)
 	if err != nil {
 		log.Printf("アシスタントの読み込みに失敗: %v", err)
-		return nil
+		return nil, err
 	}
 	for _, item := range list {
 		if item.ID == id {
-			return &item
+			return &item, nil
 		}
 	}
-	return nil
+	return nil, errAssistantUnavailable
 }
 
 // ---------------------------------------------------------------- 質問
@@ -525,15 +531,27 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 解決はレート制限の前に済ませる。存在しないIDでも質問自体は通すので、
-	// 回数を消費してから「アシスタントが無い」で止まる経路を作らない。
-	selected := s.lookupAssistant(r.Context(), body.AssistantID)
+	// 解決はレート制限の前に済ませる。ここで止める場合に回数を消費させないため。
+	selected, err := s.lookupAssistant(r.Context(), body.AssistantID)
+	if err != nil {
+		message := "選んだアシスタントが見つかりません。一覧から選び直してください"
+		if !errors.Is(err, errAssistantUnavailable) {
+			message = "アシスタントを読み込めませんでした。時間を置いてお試しください"
+		}
+		// 汎用へ落として続行しない。参照範囲を絞ったつもりの質問が
+		// 全資料参照へ広がるより、答えないほうが安全
+		writeJSON(w, http.StatusConflict, map[string]string{"error": message})
+		return
+	}
 
 	// レート制限。本当の費用リスクはインフラではなく
 	// API従量課金である（docs/01-設計方針.md §7）。これが実質的な上限装置になる。
 	user, _ := s.currentUser(r)
 	userKey := s.userKey(user)
-	taken, err := s.state.Take(r.Context(), userKey, today(), s.cfg.DailyLimit)
+	// 確保した日を1度だけ決めて、返却でも同じ日を使う。呼ぶたびに today() を
+	// 評価すると、23:59台に確保して0時以降に失敗したときへ翌日分を返してしまう
+	day := today()
+	taken, err := s.state.Take(r.Context(), userKey, day, s.cfg.DailyLimit)
 	if err != nil {
 		log.Printf("利用回数の確保に失敗: %v", err)
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "利用回数を確認できませんでした。時間を置いてお試しください"})
@@ -551,7 +569,7 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		if err := s.state.Refund(r.Context(), userKey, today()); err != nil {
+		if err := s.refund(r.Context(), userKey, day); err != nil {
 			log.Printf("利用回数の返却に失敗: %v", err)
 		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "ストリーミング未対応"})
@@ -581,20 +599,20 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		code := ""
 		retryAt := ""
 		if errors.Is(err, llm.ErrDailyQuota) {
-			if refundErr := s.state.Refund(r.Context(), userKey, today()); refundErr != nil {
+			if refundErr := s.refund(r.Context(), userKey, day); refundErr != nil {
 				log.Printf("利用回数の返却に失敗: %v", refundErr)
 			}
 			code = "daily_quota"
 			message = "Gemini無料枠の本日分を使い切りました。Google側の上限がリセットされてからお試しください"
 		} else if errors.Is(err, llm.ErrRateLimited) {
-			if refundErr := s.state.Refund(r.Context(), userKey, today()); refundErr != nil {
+			if refundErr := s.refund(r.Context(), userKey, day); refundErr != nil {
 				log.Printf("利用回数の返却に失敗: %v", refundErr)
 			}
 			code = "rate_limit"
 			message = "アクセスが集中し、Geminiの短時間の利用上限に達しました。数分後にもう一度お試しください"
 		} else if errors.Is(err, llm.ErrUnavailable) {
 			// 利用者ではなくGemini側の都合で失敗した質問は、個人の利用回数へ含めない。
-			if refundErr := s.state.Refund(r.Context(), userKey, today()); refundErr != nil {
+			if refundErr := s.refund(r.Context(), userKey, day); refundErr != nil {
 				log.Printf("利用回数の返却に失敗: %v", refundErr)
 			}
 			code = "unavailable"
@@ -693,6 +711,19 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 var japanTime = time.FixedZone("JST", 9*60*60)
 
 func today() string { return time.Now().In(japanTime).Format("2006-01-02") }
+
+// refund は確保した1回分を戻す。
+//
+// ⚠️ **リクエストのcontextをそのまま使わない。** 返却が必要になる場面の多くは
+// 利用者の切断であり、その時点で r.Context() はキャンセル済みである。
+// メモリ実装はcontextを見ないのでテストは通るが、Firestoreはトランザクションを
+// 開始できず、返却が黙って失敗していた。値（認証情報など）は引き継ぎ、
+// キャンセルだけ切り離した短い期限のcontextで実行する。
+func (s *Server) refund(parent context.Context, userKey, day string) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 10*time.Second)
+	defer cancel()
+	return s.state.Refund(ctx, userKey, day)
+}
 
 func nextJapanMidnight() time.Time {
 	now := time.Now().In(japanTime)

@@ -3,9 +3,11 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -151,5 +153,59 @@ func TestAssistantRoutesRequireAuth(t *testing.T) {
 		if res.Code != http.StatusUnauthorized {
 			t.Errorf("%s が未ログインで通った: %d", path, res.Code)
 		}
+	}
+}
+
+// 解決できないアシスタントで質問されたとき、汎用へ落として続行しない。
+// 参照範囲を絞ったつもりの質問が全資料参照へ黙って広がるのを防ぐ。
+func TestAskRejectsUnresolvableAssistant(t *testing.T) {
+	srv, _ := testServer(t, nil)
+	res := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(res, srv.testRequest("POST", "/api/ask",
+		`{"question":"鳥コンの流れは","assistantId":"消えたやつ"}`, "43 Taro"))
+	if res.Code != http.StatusConflict {
+		t.Fatalf("存在しないアシスタントで質問が通った: %d %s", res.Code, res.Body)
+	}
+}
+
+// 同じIDの同時作成で、後から来た方が他人のアシスタントを奪えないこと。
+// 一覧で重複を調べてから書く方式だと、両方が検査を通って後勝ちになる。
+func TestCreateAssistantConcurrentSameID(t *testing.T) {
+	srv, shared := testServer(t, nil)
+	const users = 8
+
+	var wg sync.WaitGroup
+	codes := make([]int, users)
+	start := make(chan struct{})
+	for i := range users {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			body := fmt.Sprintf(`{"id":"same","name":"%d番","instruction":"語尾を〜だよにする"}`, i)
+			res := httptest.NewRecorder()
+			<-start
+			srv.Routes().ServeHTTP(res, srv.testRequest("POST", "/api/assistants", body, fmt.Sprintf("4%d Taro", i)))
+			codes[i] = res.Code
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	created := 0
+	for _, code := range codes {
+		switch code {
+		case http.StatusCreated:
+			created++
+		case http.StatusConflict:
+		default:
+			t.Errorf("想定外の状態コード: %d", code)
+		}
+	}
+	if created != 1 {
+		t.Errorf("同じIDで%d件成功した（1件であるべき）", created)
+	}
+	list, _ := shared.ListAssistants(context.Background())
+	if len(list) != 1 {
+		t.Errorf("保存されたのが%d件", len(list))
 	}
 }

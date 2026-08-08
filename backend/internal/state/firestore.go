@@ -194,8 +194,20 @@ func (f *Firestore) ListAssistants(ctx context.Context) ([]Assistant, error) {
 	return list, nil
 }
 
+// SaveAssistant は無条件に書き込む。初期アシスタントの投入にだけ使う
+// （Apply が事前に一覧で存在を確認しており、競合する呼び出し元がない）。
 func (f *Firestore) SaveAssistant(ctx context.Context, assistant Assistant) error {
 	_, err := f.assistantCollection().Doc(assistant.ID).Set(ctx, assistant)
+	return err
+}
+
+// CreateAssistant は Create を使う。存在すればFirestoreがAlreadyExistsで弾くため、
+// 同時作成でも後勝ちの上書きが起きない（Setだと両方通ってしまう）。
+func (f *Firestore) CreateAssistant(ctx context.Context, assistant Assistant) error {
+	_, err := f.assistantCollection().Doc(assistant.ID).Create(ctx, assistant)
+	if status.Code(err) == codes.AlreadyExists {
+		return ErrAssistantExists
+	}
 	return err
 }
 

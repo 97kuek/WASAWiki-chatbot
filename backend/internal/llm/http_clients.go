@@ -151,10 +151,18 @@ func (g *Gemini) payload(req Request) map[string]any {
 		config["responseSchema"] = geminiSchema(req.Schema)
 	}
 	// Cached を先頭に置く。Gemini でも同一プレフィックスは暗黙キャッシュの対象になる
-	return map[string]any{
+	body := map[string]any{
 		"contents":         []any{map[string]any{"parts": []any{map[string]any{"text": req.Cached + req.Prompt}}}},
 		"generationConfig": config,
 	}
+	// 利用者が作った指示より強い立場で効かせる規則は systemInstruction へ回す。
+	// 同じ contents の後ろに置くだけでは、利用者の文章と同格にしかならない
+	if req.System != "" {
+		body["systemInstruction"] = map[string]any{
+			"parts": []any{map[string]any{"text": req.System}},
+		}
+	}
+	return body
 }
 
 var retryDelayPattern = regexp.MustCompile(`"retryDelay"\s*:\s*"([^"]+)"`)
@@ -402,9 +410,14 @@ func (c *Compat) Name() string { return "compat/" + c.model }
 
 func (c *Compat) payload(req Request, stream bool) map[string]any {
 	prompt := req.Cached + req.Prompt
+	messages := []any{}
+	if req.System != "" {
+		messages = append(messages, map[string]any{"role": "system", "content": req.System})
+	}
+	messages = append(messages, map[string]any{"role": "user", "content": prompt})
 	body := map[string]any{
 		"model":       c.model,
-		"messages":    []any{map[string]any{"role": "user", "content": prompt}},
+		"messages":    messages,
 		"temperature": 0,
 		"max_tokens":  req.MaxTokens,
 		"stream":      stream,
@@ -412,9 +425,10 @@ func (c *Compat) payload(req Request, stream bool) map[string]any {
 	if len(req.Schema) > 0 {
 		// json_schema モードは提供元によって対応が割れる。
 		// 広く通る json_object と、プロンプトでのスキーマ指示を併用する
-		body["messages"] = []any{map[string]any{"role": "user", "content": prompt +
+		messages[len(messages)-1] = map[string]any{"role": "user", "content": prompt +
 			"\n\n次のJSONスキーマに厳密に従うJSONだけを出力してください。前置き・説明・コードフェンスは書かないこと。\n" +
-			string(req.Schema)}}
+			string(req.Schema)}
+		body["messages"] = messages
 		body["response_format"] = map[string]any{"type": "json_object"}
 	}
 	return body

@@ -61,6 +61,11 @@ func (c *Claude) params(req Request) anthropic.MessageNewParams {
 			CacheControl: anthropic.NewCacheControlEphemeralParam(),
 		}}
 	}
+	if req.System != "" {
+		// 利用者が作った指示より強い立場で効かせる規則。内容は毎回同じなので
+		// キャッシュ境界より後ろに足してもキャッシュは分裂しない
+		params.System = append(params.System, anthropic.TextBlockParam{Text: req.System})
+	}
 	return params
 }
 

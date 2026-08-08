@@ -78,6 +78,8 @@ export type Assistant = {
   instruction: string;
   team?: string;
   origin?: "wiki" | "site";
+  /** data URI の画像。未設定なら画面側が名前の頭文字で描く。 */
+  icon?: string;
   author: string;
   createdAt: string;
   updatedAt: string;
@@ -101,6 +103,7 @@ export type AssistantDraft = {
   instruction: string;
   team?: string;
   origin?: "wiki" | "site";
+  icon?: string;
 };
 
 export async function createAssistant(draft: AssistantDraft): Promise<Assistant> {

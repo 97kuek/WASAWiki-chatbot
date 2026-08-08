@@ -64,15 +64,48 @@ type Page struct {
 }
 
 type Index struct {
-	TOC    string // 常時コンテキストに載せる目次
-	Pages  []Page
-	byName map[string]*Page // タイトルと別名の両方から引ける
-	byID   map[string]*Chunk
-	owner  map[string]*Page // チャンクID → 所属ページ
+	TOC string // 常時コンテキストに載せる目次
+	// SiteTOC は公式サイト（一般公開）の部分だけを抜いた目次。
+	//
+	// 「公式サイトのみ」のアシスタントに TOC をそのまま渡すと、選択ページと
+	// 出典は公式サイトだけなのに、**回答本文は引き継ぎWikiのページ名や
+	// リード文を目次から拾えてしまう**（回答プロンプトが目次を根拠にしてよいと
+	// 明記しているため）。部外に出せる情報だけ、という表示と食い違うので、
+	// 出所を絞ったときは目次も差し替える。
+	//
+	// キャッシュは「全体」と「公式サイトのみ」の2種類までしか分裂しない。
+	// 班の絞り込みで目次を変えないのは、班は機密の境界ではなく関連度の
+	// 絞り込みでしかなく、分裂させるとキャッシュが班の数だけ増えるため。
+	SiteTOC string
+	Pages   []Page
+	byName  map[string]*Page // タイトルと別名の両方から引ける
+	byID    map[string]*Chunk
+	owner   map[string]*Page // チャンクID → 所属ページ
 }
 
 type file struct {
 	Pages []Page `json:"pages"`
+}
+
+// 目次の出所ごとの見出し。build_toc.py が出力する文言と一致させること。
+const (
+	wikiHeading = "\n## 引き継ぎWiki（部内限定）"
+	siteHeading = "\n## 公式サイト（一般公開"
+)
+
+// siteOnlyTOC は目次から引き継ぎWikiの部分を落とす。
+//
+// 先頭の事実カード（人が書いた団体の基本情報）と公式サイトの節だけを残す。
+// **見出しが見つからないときは空を返す。** 全体を返すと部内資料が
+// 「公式サイトのみ」の回答へ混ざるので、目次なしで動く方を選ぶ
+// （精度は落ちるが、混ざるよりよい）。
+func siteOnlyTOC(toc string) string {
+	wikiAt := strings.Index(toc, wikiHeading)
+	siteAt := strings.Index(toc, siteHeading)
+	if wikiAt < 0 || siteAt < 0 || siteAt < wikiAt {
+		return ""
+	}
+	return toc[:wikiAt] + "\n" + toc[siteAt:]
 }
 
 // Load は dir 直下の index.json と toc.md を読み込む。
@@ -92,11 +125,12 @@ func Load(dir string) (*Index, error) {
 	}
 
 	ix := &Index{
-		TOC:    string(toc),
-		Pages:  parsed.Pages,
-		byName: make(map[string]*Page),
-		byID:   make(map[string]*Chunk),
-		owner:  make(map[string]*Page),
+		TOC:     string(toc),
+		SiteTOC: siteOnlyTOC(string(toc)),
+		Pages:   parsed.Pages,
+		byName:  make(map[string]*Page),
+		byID:    make(map[string]*Chunk),
+		owner:   make(map[string]*Page),
 	}
 	for i := range ix.Pages {
 		p := &ix.Pages[i]

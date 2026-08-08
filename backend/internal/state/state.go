@@ -1,7 +1,10 @@
 // Package state は、端末をまたいで共有する利用回数とチャット履歴を管理する。
 package state
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 type Source struct {
 	Title      string `json:"title" firestore:"title"`
@@ -47,6 +50,11 @@ type Assistant struct {
 	Team   string `json:"team,omitempty" firestore:"team,omitempty"`
 	Origin string `json:"origin,omitempty" firestore:"origin,omitempty"` // "" | "wiki" | "site"
 
+	// Icon は data URI の画像。空なら画面側が名前の頭文字で描く。
+	// 外部URLを許さないのは、部内Wikiの利用状況が外部ホストへ漏れるのと、
+	// CSP（img-src 'self' data:）で表示できないため。
+	Icon string `json:"icon,omitempty" firestore:"icon,omitempty"`
+
 	Author    string `json:"author" firestore:"author"` // Wikiの利用者名。画面に必ず出す
 	CreatedAt string `json:"createdAt" firestore:"created_at"`
 	UpdatedAt string `json:"updatedAt" firestore:"updated_at"`
@@ -64,6 +72,14 @@ type Store interface {
 	DeleteChat(context.Context, string, string) error
 
 	ListAssistants(context.Context) ([]Assistant, error)
-	SaveAssistant(context.Context, Assistant) error
+	// CreateAssistant は同じIDが無いときだけ書き込む。既にあれば ErrAssistantExists。
+	//
+	// 一覧で重複を調べてから書く方式だと、同時に作成された2件が両方とも
+	// 検査を通り、後勝ちで他人のアシスタントを上書きできてしまう。
+	// 「他人のものは編集できない」を守るには、書き込み自体を条件付きにするしかない。
+	CreateAssistant(context.Context, Assistant) error
 	DeleteAssistant(context.Context, string) error
 }
+
+// ErrAssistantExists は、既に使われているIDで作成しようとしたことを表す。
+var ErrAssistantExists = errors.New("そのIDは既に使われています")

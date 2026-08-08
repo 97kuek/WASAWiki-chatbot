@@ -116,9 +116,21 @@ func (m *Memory) ListAssistants(_ context.Context) ([]Assistant, error) {
 	return list, nil
 }
 
+// SaveAssistant は無条件に書き込む。シード投入と下準備のためだけに使う。
 func (m *Memory) SaveAssistant(_ context.Context, assistant Assistant) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.assistants[assistant.ID] = assistant
+	return nil
+}
+
+func (m *Memory) CreateAssistant(_ context.Context, assistant Assistant) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// 検査と書き込みを同じロックの中で行う。分けると同時作成で両方通る
+	if _, exists := m.assistants[assistant.ID]; exists {
+		return ErrAssistantExists
+	}
 	m.assistants[assistant.ID] = assistant
 	return nil
 }

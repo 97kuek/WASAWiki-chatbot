@@ -140,6 +140,20 @@ const answerPrompt = `あなたは早稲田大学の鳥人間サークル WASA �
 %s
 `
 
+// scopedTOC は、そのアシスタントに見せてよい目次を返す。
+//
+// 出所を絞ったときに目次を差し替えないと、選択ページと出典は範囲内なのに
+// **回答本文だけが範囲外のページ名やリード文を目次から拾える**。
+// 回答プロンプトが「目次を根拠に答えてよい」と明記しているため、ここは
+// 表示（「公式サイトのみ（部外に出せる情報だけ）」）と食い違う穴になる。
+func (p *Pipeline) scopedTOC(a *state.Assistant) string {
+	if a == nil || a.Origin != "site" {
+		return p.ix.TOC
+	}
+	// 空になるのは目次の見出しが変わったとき。全体を渡すより目次なしを選ぶ
+	return p.ix.SiteTOC
+}
+
 // inScope はアシスタントの参照範囲にページが入るかを返す。
 //
 // **判定をモデルに任せない。** プロンプトで「公式サイトだけ見て」と頼む方式は、
@@ -242,7 +256,10 @@ func (p *Pipeline) Run(ctx context.Context, question string, assistant *state.As
 	_, err = p.llm.Stream(ctx, llm.Request{
 		// 目次を先頭に置く。全体を見渡す問い（「最も情報が薄い分野は？」）は
 		// 選択ページの本文だけでは構造的に答えられない。キャッシュも効く
-		Cached: p.ix.TOC,
+		Cached: p.scopedTOC(assistant),
+		// 利用者が書いた指示は Prompt に入る。それを上書きさせない規則は
+		// system 側へ回す（assistant.Guard のコメント参照）
+		System: assistantpkg.Guard,
 		// 今日の日付を渡すのは、モデルが「2年前」を勝手に見積もっていたため。
 		// 基準日が無いと、最終更新2026-04の資料を「2年前」と述べる誤りが起きる
 		// アシスタントの指示は**資料の後・質問の前**に置く。
@@ -276,7 +293,7 @@ func (p *Pipeline) selectPages(ctx context.Context, question string, a *state.As
 			"\n**このアシスタントは「%s」しか参照できません。範囲外のページを選んでも捨てられます。**\n", scope)
 	}
 	raw, err := p.llm.Complete(ctx, llm.Request{
-		Cached:    p.ix.TOC, // 目次は必ず先頭固定。キャッシュが効く条件
+		Cached:    p.scopedTOC(a), // 目次は必ず先頭固定。キャッシュが効く条件
 		Prompt:    selectPrompt + question + scopeHint,
 		Schema:    selectSchema,
 		MaxTokens: 300,
@@ -395,9 +412,16 @@ func (p *Pipeline) selectChunks(ctx context.Context, question string, pages []*i
 	if err := json.Unmarshal([]byte(extractJSON(raw)), &out); err != nil {
 		return truncate(ids, maxChunks), nil
 	}
+	// 索引全体に存在するかではなく、**この質問で選んだページの節か**で判定する。
+	// 全体で照合すると、モデルが範囲外の節IDを返したときにそのまま通り、
+	// アシスタントの参照範囲を迂回できてしまう（IDは p{ページ}-c{連番} で予測できる）。
+	allowed := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		allowed[id] = true
+	}
 	var picked []string
 	for _, id := range out.IDs {
-		if _, _, ok := p.ix.Chunk(id); ok {
+		if allowed[id] {
 			picked = append(picked, id)
 		}
 	}

@@ -17,12 +17,15 @@ import (
 // 本物のモデルを呼ばずに「何を渡しているか」だけを検証したい。
 type stubLLM struct {
 	titles     []string
-	lastAnswer string
+	chunkIDs   []string // 節の絞り込みで返させるID。空なら選ばせない
+	lastAnswer string   // 回答生成に渡った Prompt
+	lastCached string   // 同 Cached（目次はこちらに載る）
 }
 
 func (s *stubLLM) Complete(_ context.Context, req llm.Request) (string, error) {
 	if strings.Contains(req.Prompt, "節の一覧") {
-		return `{"ids":[]}`, nil // 節の絞り込みは使わせない（総量が小さいので呼ばれない）
+		out, _ := json.Marshal(map[string]any{"ids": s.chunkIDs})
+		return string(out), nil
 	}
 	out, _ := json.Marshal(map[string]any{"titles": s.titles, "answerable": true})
 	return string(out), nil
@@ -30,6 +33,7 @@ func (s *stubLLM) Complete(_ context.Context, req llm.Request) (string, error) {
 
 func (s *stubLLM) Stream(_ context.Context, req llm.Request, onDelta llm.Delta) (string, error) {
 	s.lastAnswer = req.Prompt
+	s.lastCached = req.Cached
 	onDelta("（ダミー回答）")
 	return "（ダミー回答）", nil
 }
@@ -38,6 +42,12 @@ func (s *stubLLM) Name() string { return "stub" }
 
 // テスト用の小さな索引を書き出して読み込む。
 func testIndex(t *testing.T) *index.Index {
+	t.Helper()
+	return testIndexWithTOC(t, "# 目次\n")
+}
+
+// testIndexWithTOC は目次だけ差し替えた索引を作る。出所ごとの分割を試すため。
+func testIndexWithTOC(t *testing.T, toc string) *index.Index {
 	t.Helper()
 	dir := t.TempDir()
 	payload := map[string]any{"pages": []map[string]any{
@@ -65,7 +75,7 @@ func testIndex(t *testing.T) *index.Index {
 	if err := os.WriteFile(filepath.Join(dir, "index.json"), raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "toc.md"), []byte("# 目次\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "toc.md"), []byte(toc), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	ix, err := index.Load(dir)
@@ -182,3 +192,96 @@ func (c *cacheProbe) Stream(ctx context.Context, req llm.Request, onDelta llm.De
 }
 
 func (c *cacheProbe) Name() string { return "probe" }
+
+// 「公式サイトのみ」は部外に出せる情報だけに限る用途で使う。
+// 選択ページと出典を絞っても、**目次を渡したままだと回答本文が部内Wikiの
+// ページ名やリード文を拾える**（回答プロンプトが目次を根拠にしてよいと
+// 明記しているため）。目次側も出所で絞れていることを固定する。
+func TestRunScopedTOCHidesWikiSection(t *testing.T) {
+	ix := testIndexWithTOC(t, "# 目次\n\n## 引き継ぎWiki（部内限定）全1ページ\n\n- **電装班** 部内限定の秘密\n\n## 公式サイト（一般公開 wasa-birdman.com）全1ページ\n\n- **WASAについて知る** 団体紹介\n")
+	client := &stubLLM{titles: []string{"WASAについて知る"}}
+	pipe := New(ix, &cacheProbe{inner: client, seen: new([]string)})
+
+	if err := pipe.Run(context.Background(), "WASAとは", &state.Assistant{
+		Name: "対外説明", Instruction: "ですます調", Origin: "site",
+	}, func(Event) {}); err != nil {
+		t.Fatalf("Run が失敗: %v", err)
+	}
+	// 目次は Cached に載る。Prompt だけ見ても素通りするので両方を確かめる
+	whole := client.lastCached + client.lastAnswer
+	if strings.Contains(whole, "部内限定の秘密") {
+		t.Error("目次経由で部内Wikiの内容が回答プロンプトへ入った")
+	}
+	if !strings.Contains(whole, "団体紹介") {
+		t.Error("公式サイト側の目次まで落ちている")
+	}
+}
+
+// 目次の見出しが変わって分割できないときは、全体を渡すのではなく目次なしにする。
+func TestSiteTOCFailsClosed(t *testing.T) {
+	ix := testIndexWithTOC(t, "# 目次\n\n見出しの形式が変わった\n")
+	pipe := New(ix, &stubLLM{})
+	if got := pipe.scopedTOC(&state.Assistant{Origin: "site"}); got != "" {
+		t.Errorf("分割できないのに目次を渡した: %q", got)
+	}
+}
+
+// モデルが範囲外の節IDを返しても採用しない。IDは p{ページ}-c{連番} で予測できる。
+func TestSelectChunksRejectsOutOfScopeIDs(t *testing.T) {
+	// 節の絞り込みは総量が directContextLimit を超えたときだけ走る。
+	// 超えるだけの本文を持つ索引を用意して、LLMの返答を通す経路にする
+	ix := testLargeIndex(t)
+	site, ok := ix.Resolve("WASAについて知る")
+	if !ok {
+		t.Fatal("下準備のページが無い")
+	}
+	pipe := New(ix, &stubLLM{chunkIDs: []string{"p1-c0"}}) // 選択外のWikiの節
+	got, err := pipe.selectChunks(context.Background(), "質問", []*index.Page{site}, nil)
+	if err != nil {
+		t.Fatalf("selectChunks が失敗: %v", err)
+	}
+	for _, id := range got {
+		if id == "p1-c0" {
+			t.Fatal("選択ページ外の節IDが採用された")
+		}
+	}
+}
+
+// testLargeIndex は節の絞り込みが走る大きさの索引を作る。
+func testLargeIndex(t *testing.T) *index.Index {
+	t.Helper()
+	dir := t.TempDir()
+	long := strings.Repeat("あ", 7000)
+	payload := map[string]any{"pages": []map[string]any{
+		{
+			"id": "1", "source": "wiki", "title": "電装班", "url": "https://wiki.example/dens",
+			"last_edited": "2026-04-01", "team": "電装", "chars": 7000,
+			"chunks": []map[string]any{
+				{"id": "p1-c0", "breadcrumb": "電装班", "text": long, "chars": 7000},
+			},
+		},
+		{
+			"id": "s1", "source": "site", "title": "WASAについて知る", "url": "https://wasa-birdman.com/about",
+			"last_edited": "2026-04-01", "chars": 14000,
+			"chunks": []map[string]any{
+				{"id": "ps1-c0", "breadcrumb": "WASAについて知る > 前半", "text": long, "chars": 7000},
+				{"id": "ps1-c1", "breadcrumb": "WASAについて知る > 後半", "text": long, "chars": 7000},
+			},
+		},
+	}}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "index.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "toc.md"), []byte("# 目次\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ix, err := index.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ix
+}

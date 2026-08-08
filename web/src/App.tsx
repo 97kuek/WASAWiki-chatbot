@@ -15,6 +15,7 @@ import {
   type Chat,
   type Turn,
 } from "./api";
+import { AssistantAvatar, DefaultAvatar, toIconDataURL } from "./avatar";
 import { Markdown } from "./markdown";
 
 type Announcement = {
@@ -471,8 +472,12 @@ export default function App() {
       // 効いていない状態になる。存在しなければ汎用へ戻す
       setAssistantId((current) => (list.some((item) => item.id === current) ? current : ""));
     } catch {
-      // アシスタントが読めなくても汎用チャットは使えるので、画面は止めない
+      // アシスタントが読めなくても汎用チャットは使えるので、画面は止めない。
+      // ただし選択も外す。一覧だけ空にすると、画面は「汎用」と表示しながら
+      // 質問には古いIDを送る状態になり、表示と実際の参照範囲が食い違う
       setAssistants([]);
+      setAssistantId("");
+      localStorage.removeItem(ASSISTANT_KEY);
     }
   }
 
@@ -512,6 +517,20 @@ export default function App() {
     }
   }
 
+  async function handlePickIcon(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = ""; // 同じ画像を選び直せるようにする
+    if (!file) return;
+    setAssistantError("");
+    try {
+      setAssistantDraft((d) => ({ ...d, icon: undefined }));
+      const icon = await toIconDataURL(file);
+      setAssistantDraft((d) => ({ ...d, icon }));
+    } catch (error) {
+      setAssistantError(error instanceof Error ? error.message : "画像を読み込めませんでした");
+    }
+  }
+
   /** 他人のアシスタントは編集できない。複製してから直す（編集権の調整を発生させないため）。 */
   function duplicateAssistant(source: Assistant) {
     setAssistantDraft({
@@ -521,6 +540,7 @@ export default function App() {
       instruction: source.instruction,
       team: source.team,
       origin: source.origin,
+      icon: source.icon,
     });
     setAssistantError("");
     setAssistantPanel("form");
@@ -570,7 +590,8 @@ export default function App() {
         ),
       );
 
-    await ask(q, (event) => {
+    try {
+      await ask(q, (event) => {
       switch (event.type) {
         case "status":
           patch((current) => ({ ...current, status: event.message, retryAt: event.retry_at }));
@@ -595,11 +616,30 @@ export default function App() {
           patch((current) => ({ ...current, streaming: false, status: "", retryAt: undefined }));
           break;
       }
-    }, undefined, assistantId);
-    patch((current) => ({ ...current, streaming: false }));
-    // Gemini側の制限などでサーバーが回数を返却する場合もあるため、推測で1回減らさない。
-    const current = await session();
-    setRemaining(current.remaining);
+      }, undefined, assistantId);
+    } catch (error) {
+      // fetch自体の失敗やストリームの切断は ask() の中でイベントにならない。
+      // ここで拾わないと streaming が立ったままになり、入力欄が永久に
+      // disabled のまま、履歴同期も残回数の更新も止まる
+      patch((current) => ({
+        ...current,
+        error: error instanceof Error && error.name === "AbortError"
+          ? "送信を中止しました"
+          : "通信に失敗しました。接続を確認してもう一度お試しください",
+        streaming: false,
+        status: "",
+        retryAt: undefined,
+      }));
+    } finally {
+      patch((current) => ({ ...current, streaming: false, status: "" }));
+      // Gemini側の制限などでサーバーが回数を返却する場合もあるため、推測で1回減らさない。
+      try {
+        const current = await session();
+        setRemaining(current.remaining);
+      } catch {
+        // 残回数が取れなくても操作は続けられる。次の質問で取り直す
+      }
+    }
   }
 
   if (authed === null) return <div className="center muted">読み込み中…</div>;
@@ -689,7 +729,9 @@ export default function App() {
           onClick={() => { setAssistantError(""); setAssistantPanel("list"); }}
           aria-haspopup="dialog"
         >
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v3M7 9h10a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2ZM9 14h.01M15 14h.01" /></svg>
+          {activeAssistant
+            ? <AssistantAvatar name={activeAssistant.name} icon={activeAssistant.icon} size={22} />
+            : <DefaultAvatar size={22} />}
           <span className="sidebar-assistant-label">アシスタント</span>
           <span className="sidebar-assistant-current">{activeAssistant?.name ?? "汎用"}</span>
         </button>
@@ -987,27 +1029,29 @@ export default function App() {
                   <h2 id="assistant-title">アシスタント</h2>
                   <p className="muted">
                     口調や参照範囲を決めた設定です。誰でも作れて、全員が使えます。
-                    <strong>調べ方と出典の出し方はどれを選んでも同じです。</strong>
+                    <strong>出典の一覧と参照範囲はサーバー側で決まるので、どれを選んでも同じ根拠から答えます。</strong>
                   </p>
                 </header>
-                <ul className="assistant-list">
+                <ul className="assistant-grid">
                   <li>
-                    <button type="button" className={`assistant-pick ${assistantId === "" ? "on" : ""}`} onClick={() => chooseAssistant("")}>
+                    <button type="button" className={`assistant-card ${assistantId === "" ? "on" : ""}`} onClick={() => chooseAssistant("")}>
+                      <DefaultAvatar size={56} />
                       <span className="assistant-name">汎用</span>
                       <span className="assistant-desc">資料全体から、ふつうの口調で答えます</span>
                     </button>
                   </li>
                   {assistants.map((item) => (
                     <li key={item.id}>
-                      <button type="button" className={`assistant-pick ${assistantId === item.id ? "on" : ""}`} onClick={() => chooseAssistant(item.id)}>
+                      <button type="button" className={`assistant-card ${assistantId === item.id ? "on" : ""}`} onClick={() => chooseAssistant(item.id)}>
+                        <AssistantAvatar name={item.name} icon={item.icon} size={56} />
                         <span className="assistant-name">{item.name}</span>
                         {item.description && <span className="assistant-desc">{item.description}</span>}
                         <span className="assistant-meta">
-                          作成: {item.author}
-                          {item.scope && <> ・ 範囲: {item.scope}</>}
+                          {item.author}
+                          {item.scope && <><br />{item.scope}</>}
                         </span>
                       </button>
-                      <div className="assistant-row-actions">
+                      <div className="assistant-card-actions">
                         {/* 他人のものは編集ではなく複製。編集権をめぐる調整を起こさないため */}
                         <button type="button" onClick={() => duplicateAssistant(item)}>複製</button>
                         {item.canDelete && (
@@ -1031,14 +1075,30 @@ export default function App() {
                   <h2 id="assistant-title">アシスタントを作る</h2>
                   <p className="muted">
                     書けるのは<strong>口調・書き方・参照範囲</strong>だけです。
-                    出典を消したり、資料に無いことを答えさせたりはできません。
+                    出典の一覧と参照範囲はサーバー側で決まるため、指示では変えられません。
                   </p>
                 </header>
-                <label>
-                  <span>名前</span>
-                  <input value={assistantDraft.name} maxLength={40} required
-                    onChange={(event) => setAssistantDraft((d) => ({ ...d, name: event.target.value }))} />
-                </label>
+                <div className="assistant-identity">
+                  <div className="assistant-icon-pick">
+                    {/* 画像が無くても頭文字で成立させる。用意しないと見栄えが悪い状態にすると、
+                        結局だれもアシスタントを作らなくなる */}
+                    <AssistantAvatar name={assistantDraft.name || "?"} icon={assistantDraft.icon} size={64} />
+                    <label className="assistant-icon-button">
+                      <span>{assistantDraft.icon ? "変更" : "画像を選ぶ"}</span>
+                      <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void handlePickIcon(event)} />
+                    </label>
+                    {assistantDraft.icon && (
+                      <button type="button" className="linkish" onClick={() => setAssistantDraft((d) => ({ ...d, icon: undefined }))}>
+                        画像を外す
+                      </button>
+                    )}
+                  </div>
+                  <label>
+                    <span>名前</span>
+                    <input value={assistantDraft.name} maxLength={40} required
+                      onChange={(event) => setAssistantDraft((d) => ({ ...d, name: event.target.value }))} />
+                  </label>
+                </div>
                 <label>
                   <span>説明（一覧に出ます）</span>
                   <input value={assistantDraft.description} maxLength={120}
