@@ -1,6 +1,7 @@
 {
   "name": "wasa-chat-web",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",

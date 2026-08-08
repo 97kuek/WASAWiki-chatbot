@@ -7,8 +7,8 @@
   --line-strong: #ccc8c2;
   --text: #242321;
   --muted: #66625d;
-  --accent: #8f3f24;
-  --accent-soft: #f5ebe7;
+  --accent: #1717e8;
+  --accent-soft: #eeeeff;
   --shadow: 0 14px 36px rgb(35 31 28 / 8%);
   color-scheme: light;
 }
@@ -83,7 +83,7 @@ button:disabled {
 
 .login-page {
   background:
-    radial-gradient(circle at 20% 10%, rgb(143 63 36 / 7%), transparent 30%),
+    radial-gradient(circle at 20% 10%, rgb(23 23 232 / 7%), transparent 30%),
     var(--bg);
 }
 
@@ -109,19 +109,11 @@ button:disabled {
   text-align: center;
 }
 
-.eyebrow,
 .login-heading h1,
 .login-heading .muted,
 .gate .note,
 .gate .error {
   margin: 0;
-}
-
-.eyebrow {
-  color: var(--accent);
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
 }
 
 .login-heading h1 {
@@ -153,6 +145,45 @@ button:disabled {
 
 .gate input:focus {
   border-color: var(--accent);
+}
+
+.password-field {
+  position: relative;
+}
+
+.password-field input {
+  padding-right: 52px;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 7px;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.password-toggle:hover {
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+.password-toggle svg {
+  width: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
 }
 
 .gate > button {
@@ -485,34 +516,7 @@ button:disabled {
   white-space: nowrap;
 }
 
-.support-link {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 13px;
-  text-decoration: none;
-}
-
-.support-link:hover {
-  color: var(--text);
-}
-
-.help-icon {
-  width: 22px;
-  height: 22px;
-  display: grid;
-  place-items: center;
-  border: 2px solid currentColor;
-  border-radius: 50%;
-  font-size: 14px;
-  font-weight: 700;
-  line-height: 1;
-}
-
 .header-organization {
-  padding-left: 13px;
-  border-left: 1px solid var(--line);
   color: var(--muted);
   font-size: 13px;
   font-weight: 600;
@@ -897,7 +901,7 @@ button:disabled {
 
 .composer:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgb(143 63 36 / 10%);
+  box-shadow: 0 0 0 2px rgb(23 23 232 / 10%);
 }
 
 .composer textarea {
@@ -964,7 +968,6 @@ button:disabled {
 }
 
 @media (max-width: 1100px) {
-  .support-link > span:last-child,
   .header-organization {
     display: none;
   }
@@ -1004,7 +1007,6 @@ button:disabled {
   .header-kicker { display: none; }
   .chat-header h1 { max-width: 48vw; font-size: 15px; }
   .header-actions { gap: 6px; }
-  .support-link { display: none; }
   .profile-avatar { width: 32px; height: 32px; }
   .conversation { padding-inline: 16px; }
   .suggestions { grid-template-columns: 1fr; }
