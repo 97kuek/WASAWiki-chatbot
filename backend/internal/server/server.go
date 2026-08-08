@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -341,12 +343,13 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self' https:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 		// CORSヘッダーだけでは、レスポンスを読めなくするだけでPOST自体は届く。
 		// CookieをSameSite=Noneで使うため、本番ではOriginも照合してCSRFを防ぐ。
-		if origin := r.Header.Get("Origin"); origin != "" && s.cfg.AllowOrigin != "" && origin != s.cfg.AllowOrigin {
+		origin := r.Header.Get("Origin")
+		if origin != "" && s.cfg.AllowOrigin != "" && !originAllowed(origin, s.cfg.AllowOrigin) {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "許可されていない送信元です"})
 			return
 		}
-		if s.cfg.AllowOrigin != "" {
-			w.Header().Set("Access-Control-Allow-Origin", s.cfg.AllowOrigin)
+		if origin != "" && s.cfg.AllowOrigin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -358,6 +361,48 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func originAllowed(origin, configured string) bool {
+	actual, ok := parseOrigin(origin)
+	if !ok {
+		return false
+	}
+	for raw := range strings.SplitSeq(configured, ",") {
+		allowed, ok := parseOrigin(raw)
+		if !ok || actual.Scheme != allowed.Scheme || effectivePort(actual) != effectivePort(allowed) {
+			continue
+		}
+		actualHost, allowedHost := strings.ToLower(actual.Hostname()), strings.ToLower(allowed.Hostname())
+		if actualHost == allowedHost || isLoopbackHost(actualHost) && isLoopbackHost(allowedHost) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseOrigin(raw string) (*url.URL, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil ||
+		(parsed.Scheme != "http" && parsed.Scheme != "https") ||
+		(parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, false
+	}
+	return parsed, true
+}
+
+func effectivePort(origin *url.URL) string {
+	if port := origin.Port(); port != "" {
+		return port
+	}
+	if origin.Scheme == "https" {
+		return "443"
+	}
+	return "80"
+}
+
+func isLoopbackHost(host string) bool {
+	return host == "localhost" || net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback()
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
