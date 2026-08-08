@@ -20,6 +20,9 @@ services:
       # 未設定だと再起動のたびに全員ログアウトになる
       SESSION_SECRET: ${SESSION_SECRET:-dev-only-session-secret-change-me-32}
       DAILY_LIMIT: ${DAILY_LIMIT:-30}
+      # 他人のアシスタントも削除できるWiki利用者名（カンマ区切り）。
+      # 先頭の1人が assistants/ の初期アシスタントの作成者になる。
+      ADMIN_USERS: ${ADMIN_USERS:-}
       LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-}

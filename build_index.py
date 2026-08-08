@@ -525,6 +525,7 @@ def build_chunks(page_id: int | str, title: str, text: str) -> list[dict]:
     for i, chunk in enumerate(chunks):
         chunk["id"] = f"p{page_id}-c{i}"
         chunk["chars"] = len(chunk["text"])
+        chunk["era"] = extract_era(chunk["text"])
     return chunks
 
 
@@ -563,6 +564,49 @@ def extract_gen(title: str, body: str) -> dict:
             "gens_mentioned": sorted(mentioned),
         }
     return {"gen": None, "gen_source": None, "gens_mentioned": []}
+
+
+# 代と西暦の対応: N代 = 鳥人間コンテスト (GEN_EPOCH + N) 年大会に出場する代。
+# 公式サイト「WASA鳥人間Projectの歴史」の全代の列挙（1985年=初代 / 2005年=21代 /
+# 2015年=31代）と、Wiki側の「2024年度執行代（40代）」「2026年TF(42nd)」の
+# いずれにも例外なく一致する。facts.md にも同じ式を書いてある
+GEN_EPOCH = 1984
+
+# チャンク本文から代を拾う専用の正規表現。GEN_BODY とは別に持つ。
+#
+# GEN_BODY は前後に \b を置いているため、日本語では「42代の引き継ぎ」「第42代」の
+# ような**最も普通の書き方に一つも当たらない**（Pythonの \b は日本語の文字も
+# 語構成文字とみなすため、「の42代の」に境界が立たない）。ページ単位の gen は
+# この挙動を前提に M2a の数字を出しているので触らず、年代推定はこちらを使う。
+# 20〜49代に絞るのは誤検出を避けるため。「1st」「2代目」のような一般的な語や
+# 年齢の「20代」を拾うと年代が1980年代まで広がって推定が使い物にならない。
+# 20代未満（〜2004年）を語るチャンクは公式サイトの歴史ページにしかなく、
+# そちらは「1985年 初代」と西暦が併記されているので取りこぼさない
+ERA_GEN = re.compile(r"(?<![0-9])([2-4][0-9])\s*(?:st|nd|rd|th|代)(?![0-9])", re.I)
+
+# 本文中の西暦。「2023年」「2023/8/25」のように区切りが続くものだけを拾う。
+# 裸の4桁は部品番号・型番・寸法と紛れるため対象にしない
+ERA_YEAR = re.compile(r"(19[89][0-9]|20[0-4][0-9])\s*(?=[年/\-.])")
+
+
+def extract_era(text: str) -> dict:
+    """チャンク本文が「いつの話か」を示す手がかりを集める。
+
+    ページの last_edited は**編集した日**であって、書かれている内容の新しさではない。
+    実例: 公式サイト「WASA60周年記念交流会のお知らせ」は last_edited が 2026-03 だが、
+    本文の日付は2025年11月である。この2つを同一視した結果、回答が
+    「最終更新が新しいので最新の情報です」と誤って断定する事故が実際に起きた。
+
+    そこで本文中の西暦と代を別に持たせ、回答プロンプト側では
+    **古さの判断は last_edited ではなくこちらを根拠にする**よう指示している。
+    代は GEN_EPOCH の式で西暦に直してから西暦側に合流させる（代の方が
+    書かれている頻度が高く、これを使わないと年代不明のチャンクが大幅に増える）。
+    """
+    normalized = unicodedata.normalize("NFKC", text)
+    gens = {int(g) for g in ERA_GEN.findall(normalized)}
+    years = {int(y) for y in ERA_YEAR.findall(normalized)}
+    years |= {GEN_EPOCH + g for g in gens}
+    return {"years": sorted(years), "gens": sorted(gens)}
 
 
 # 「40代」「42nd」「40 Kosei Ozaki」のような、代のまとめページ・人物ページ

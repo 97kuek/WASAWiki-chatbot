@@ -13,8 +13,10 @@ import (
 	"strings"
 	"time"
 
+	assistantpkg "github.com/97kuek/wasa-chat/backend/internal/assistant"
 	"github.com/97kuek/wasa-chat/backend/internal/index"
 	"github.com/97kuek/wasa-chat/backend/internal/llm"
+	"github.com/97kuek/wasa-chat/backend/internal/state"
 )
 
 const (
@@ -25,6 +27,10 @@ const (
 	directContextLimit = 12000
 	maxChunks          = 8
 )
+
+// Cloud Run のコンテナはUTCで動く。利用者は日本の学生なので、
+// 「今日」は日本時間で伝えないと日付が1日ずれる
+var jst = time.FixedZone("JST", 9*60*60)
 
 // Event はSSEで画面に流す進捗。
 // 「無言で待たされる5秒」と「検索中→3ページ読んでいます→回答中と流れる5秒」では
@@ -85,6 +91,8 @@ const answerPrompt = `あなたは早稲田大学の鳥人間サークル WASA �
 資料は部内の引き継ぎWikiと一般公開の公式サイトの2つからなります。
 以下の資料を根拠に、質問に答えてください。
 
+**今日は %s（日本時間）です。** 「今年」「現在」「最新」「何年前」はこの日付を基準に判断すること。
+
 **答えられることは答える。**
 - 資料を読めば分かることは、質問と同じ言葉で書かれていなくても答えてよい
 - 要約・比較・時系列の整理・複数箇所の突き合わせは「推測」ではない。積極的に行う
@@ -100,25 +108,62 @@ const answerPrompt = `あなたは早稲田大学の鳥人間サークル WASA �
 - **公式サイト**（一般公開）… 団体紹介・歴代機体・活動報告。対外的な説明はこちら
 - 両方に書いてあって食い違う場合は、**引き継ぎWikiを優先**し、食い違い自体も述べる
 
+**情報の古さは「最終更新」で判断しない。**
+- **最終更新はページが編集された日**であって、そこに書かれている内容の年代ではない。
+  誤字直しやリンク追加でも更新日は今日になる。実測では17%%の節で、本文が扱う年代が
+  最終更新より2年以上古かった（最終更新2026年・本文は2024年までしか書いていない、など）
+- 各資料には「本文の年代」を添えてある。これは**本文中に出てくる西暦と代から機械的に
+  拾ったもの**で、内容がいつの話かの手がかりになる。**古さに言及するときはこちらを根拠にする**
+- 「本文の年代」が資料に無い（拾えなかった）ときは、**古さについて断定しない**。
+  最終更新日を代わりに使ってはいけない
+- 本文の年代が今日から2年以上前なら、その旨を一言添える。**何年前かは今日の日付から計算する**
+- 代（世代）と西暦の対応は冒頭の基本情報にある。代が分かれば年も分かる
+
 **書き方**
 - 必ず日本語で書く。思考の過程は書かず、結論から書く
-- 回答の最後に「出典: ページ名（Wiki / 公式サイト、最終更新: YYYY-MM）」を必ず挙げる
-- 参照元が2年以上前なら、情報が古い可能性を添える
+- 回答の最後に出典を必ず挙げる。形式は
+  ` + "`- [ページ名](URL)（Wiki / 公式サイト、本文の年代: YYYY年）`" + ` の**Markdownリンク**。
+  URLは各資料に添えてあるものを使い、書き換えたり推測で作ったりしない
+- 本文中にURL（Googleドライブ・ドキュメント・写真など）が書かれていて、
+  それが回答に関係するなら**URLをそのまま本文に載せる**。画面側でリンクになる
 
-なお、冒頭の目次には**どんなページが存在するか**が出所ごとに載っている。
+なお、冒頭には**人が保守している基本情報**と、**どんなページが存在するかの目次**が
+出所ごとに載っている。基本情報は資料本文より優先される確定事実として扱うこと。
 「どの分野の情報が薄いか」「そのページは存在するか」といった問いには、目次を根拠に答えてよい。
 
 # 資料
 
 %s
-
+%s
 # 質問
 
 %s
 `
 
-// Run は質問に答え、進行状況を emit に流す。
-func (p *Pipeline) Run(ctx context.Context, question string, emit func(Event)) error {
+// inScope はアシスタントの参照範囲にページが入るかを返す。
+//
+// **判定をモデルに任せない。** プロンプトで「公式サイトだけ見て」と頼む方式は、
+// 書き忘れや無視で部内資料が混ざる。ここで落とせば構造的に混ざらない。
+// 絞り込みは狭める方向しか無いので、範囲外を弾くだけで足りる。
+func inScope(pg *index.Page, a *state.Assistant) bool {
+	if a == nil {
+		return true
+	}
+	origin := pg.Source
+	if origin == "" {
+		origin = "wiki" // 旧い index.json には source が無い
+	}
+	if a.Origin != "" && a.Origin != origin {
+		return false
+	}
+	if a.Team != "" && pg.Team != a.Team {
+		return false
+	}
+	return true
+}
+
+// Run は質問に答え、進行状況を emit に流す。assistant は未選択なら nil。
+func (p *Pipeline) Run(ctx context.Context, question string, assistant *state.Assistant, emit func(Event)) error {
 	emit(Event{Type: "status", Message: "目次から関連ページを探しています"})
 	onWait := func(info llm.WaitInfo) {
 		message := "Geminiへの送信間隔を調整しています"
@@ -134,17 +179,23 @@ func (p *Pipeline) Run(ctx context.Context, question string, emit func(Event)) e
 		emit(Event{Type: "status", Message: message, RetryAt: retryAt})
 	}
 
-	pages, err := p.selectPages(ctx, question, onWait)
+	pages, err := p.selectPages(ctx, question, assistant, onWait)
 	if err != nil {
 		return fmt.Errorf("ページ選択: %w", err)
 	}
 	if len(pages) == 0 {
 		// M2b で、モデルが空文字列のタイトルを3件返して照合で全滅し、
 		// 文脈ゼロになった事例があった。字面一致で拾い直す保険。
-		pages = p.fallbackPages(question)
+		pages = p.fallbackPages(question, assistant)
 	}
 	if len(pages) == 0 {
-		emit(Event{Type: "delta", Text: "Wikiの目次から関連するページを特定できませんでした。"})
+		message := "Wikiの目次から関連するページを特定できませんでした。"
+		if scope := assistantpkg.ScopeLabel(assistant); scope != "" {
+			// 範囲外で落ちたのか、そもそも資料が無いのかが分からないと
+			// 「壊れている」と受け取られる。絞り込み中であることを伝える
+			message = fmt.Sprintf("このアシスタントの参照範囲（%s）に、該当する資料が見つかりませんでした。", scope)
+		}
+		emit(Event{Type: "delta", Text: message})
 		emit(Event{Type: "done"})
 		return nil
 	}
@@ -177,16 +228,31 @@ func (p *Pipeline) Run(ctx context.Context, question string, emit func(Event)) e
 		if pg.Source == "site" {
 			origin = "公式サイト"
 		}
-		blocks = append(blocks, fmt.Sprintf("## %s\n（出所: %s / ページ: %s / 最終更新: %s）\n\n%s",
-			c.Breadcrumb, origin, pg.Title, pg.LastEdited, c.Text))
+		// 年代は拾えないことがある（実測で38%）。空欄を出すとモデルが
+		// 「不明」を「古い」と読み替えるので、その場合は項目ごと省く
+		era := ""
+		if label := c.Era.Label(); label != "" {
+			era = " / 本文の年代: " + label
+		}
+		blocks = append(blocks, fmt.Sprintf("## %s\n（出所: %s / ページ: %s / URL: %s / 最終更新: %s%s）\n\n%s",
+			c.Breadcrumb, origin, pg.Title, pg.URL, pg.LastEdited, era, c.Text))
 	}
 
 	emit(Event{Type: "status", Message: "回答を作成しています"})
 	_, err = p.llm.Stream(ctx, llm.Request{
 		// 目次を先頭に置く。全体を見渡す問い（「最も情報が薄い分野は？」）は
 		// 選択ページの本文だけでは構造的に答えられない。キャッシュも効く
-		Cached:    p.ix.TOC,
-		Prompt:    fmt.Sprintf(answerPrompt, strings.Join(blocks, "\n\n---\n\n"), question),
+		Cached: p.ix.TOC,
+		// 今日の日付を渡すのは、モデルが「2年前」を勝手に見積もっていたため。
+		// 基準日が無いと、最終更新2026-04の資料を「2年前」と述べる誤りが起きる
+		// アシスタントの指示は**資料の後・質問の前**に置く。
+		// 直後に変更不能の規則（assistant.PromptSection の guard）が続くので、
+		// 「出典を書くな」のような指示が書かれていても最後に規則が勝つ。
+		Prompt: fmt.Sprintf(answerPrompt,
+			time.Now().In(jst).Format("2006年1月2日"),
+			strings.Join(blocks, "\n\n---\n\n"),
+			assistantpkg.PromptSection(assistant),
+			question),
 		MaxTokens: 1500,
 		OnWait:    onWait,
 	}, func(text string) {
@@ -199,10 +265,19 @@ func (p *Pipeline) Run(ctx context.Context, question string, emit func(Event)) e
 	return nil
 }
 
-func (p *Pipeline) selectPages(ctx context.Context, question string, onWait func(llm.WaitInfo)) ([]*index.Page, error) {
+func (p *Pipeline) selectPages(ctx context.Context, question string, a *state.Assistant, onWait func(llm.WaitInfo)) ([]*index.Page, error) {
+	// 絞り込み中でも**目次そのものは削らない**。目次を差し替えるとアシスタントごとに
+	// プロンプトキャッシュが分裂し、使う人の少ないアシスタントほど単価が上がる
+	// （llm.Request のコメント参照）。候補を減らす指示だけを足し、
+	// 実際の除外は下の inScope で決定的に行う。
+	scopeHint := ""
+	if scope := assistantpkg.ScopeLabel(a); scope != "" {
+		scopeHint = fmt.Sprintf(
+			"\n**このアシスタントは「%s」しか参照できません。範囲外のページを選んでも捨てられます。**\n", scope)
+	}
 	raw, err := p.llm.Complete(ctx, llm.Request{
 		Cached:    p.ix.TOC, // 目次は必ず先頭固定。キャッシュが効く条件
-		Prompt:    selectPrompt + question,
+		Prompt:    selectPrompt + question + scopeHint,
 		Schema:    selectSchema,
 		MaxTokens: 300,
 		OnWait:    onWait,
@@ -224,7 +299,7 @@ func (p *Pipeline) selectPages(ctx context.Context, question string, onWait func
 		// 実在しないページ名は落とす。M2a でモデルは班名・節名・
 		// 推測で作った名前を返してきた（index.Resolve のコメント参照）。
 		pg, ok := p.ix.Resolve(title)
-		if !ok || seen[pg.Title] {
+		if !ok || seen[pg.Title] || !inScope(pg, a) {
 			continue
 		}
 		seen[pg.Title] = true
@@ -238,7 +313,7 @@ func (p *Pipeline) selectPages(ctx context.Context, question string, onWait func
 
 // fallbackPages は LLM がページを1件も返せなかったときの保険。
 // 目次に対する素朴な字面一致。精度は高くないが「何も答えられない」よりはよい。
-func (p *Pipeline) fallbackPages(question string) []*index.Page {
+func (p *Pipeline) fallbackPages(question string, a *state.Assistant) []*index.Page {
 	grams := map[string]bool{}
 	runes := []rune(question)
 	for i := 0; i+1 < len(runes); i++ {
@@ -252,7 +327,9 @@ func (p *Pipeline) fallbackPages(question string) []*index.Page {
 	var ranked []scored
 	for i := range p.ix.Pages {
 		pg := &p.ix.Pages[i]
-		if len(pg.Chunks) == 0 {
+		// 保険の経路でも範囲外は出さない。ここを抜かすと、絞り込みが
+		// 「たいていは効く」だけの頼れない機能になる
+		if len(pg.Chunks) == 0 || !inScope(pg, a) {
 			continue
 		}
 		hay := pg.Title

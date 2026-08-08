@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
@@ -42,6 +43,20 @@ class Answer:
     answerable: bool = True
     dropped_titles: list[str] = field(default_factory=list)  # 照合で落とした架空のページ名
     context_chars: int = 0
+
+
+def era_label(era: dict | None) -> str:
+    """build_index.py の extract_era が入れた年代を、プロンプト用の短い表記にする。
+
+    Go側 index.Era.Label と同じ出力にすること。プロンプトを片方だけ変えると、
+    Pythonで測った数字が本番の説明にならなくなる。
+    """
+    years = (era or {}).get("years") or []
+    if not years:
+        return ""
+    if years[0] == years[-1]:
+        return f"{years[-1]}年"
+    return f"{years[0]}〜{years[-1]}年（最新{years[-1]}年）"
 
 
 def resolve_title(title: str, pages, alias) -> str | None:
@@ -171,6 +186,8 @@ titles には最も近そうなページだけを挙げてください。
 資料は部内の引き継ぎWikiと一般公開の公式サイトの2つからなります。
 以下の資料を根拠に、質問に答えてください。
 
+**今日は{today}（日本時間）です。** 「今年」「現在」「最新」「何年前」はこの日付を基準に判断すること。
+
 **答えられることは答える。**
 - 資料を読めば分かることは、質問と同じ言葉で書かれていなくても答えてよい
 - 要約・比較・時系列の整理・複数箇所の突き合わせは「推測」ではない。積極的に行う
@@ -186,12 +203,27 @@ titles には最も近そうなページだけを挙げてください。
 - **公式サイト**（一般公開）… 団体紹介・歴代機体・活動報告。対外的な説明はこちら
 - 両方に書いてあって食い違う場合は、**引き継ぎWikiを優先**し、食い違い自体も述べる
 
+**情報の古さは「最終更新」で判断しない。**
+- **最終更新はページが編集された日**であって、そこに書かれている内容の年代ではない。
+  誤字直しやリンク追加でも更新日は今日になる。実測では17%の節で、本文が扱う年代が
+  最終更新より2年以上古かった（最終更新2026年・本文は2024年までしか書いていない、など）
+- 各資料には「本文の年代」を添えてある。これは**本文中に出てくる西暦と代から機械的に
+  拾ったもの**で、内容がいつの話かの手がかりになる。**古さに言及するときはこちらを根拠にする**
+- 「本文の年代」が資料に無い（拾えなかった）ときは、**古さについて断定しない**。
+  最終更新日を代わりに使ってはいけない
+- 本文の年代が今日から2年以上前なら、その旨を一言添える。**何年前かは今日の日付から計算する**
+- 代（世代）と西暦の対応は冒頭の基本情報にある。代が分かれば年も分かる
+
 **書き方**
 - 必ず日本語で書く。思考の過程は書かず、結論から書く
-- 回答の最後に「出典: ページ名（Wiki / 公式サイト、最終更新: YYYY-MM）」を必ず挙げる
-- 参照元が2年以上前なら、情報が古い可能性を添える
+- 回答の最後に出典を必ず挙げる。形式は
+  `- [ページ名](URL)（Wiki / 公式サイト、本文の年代: YYYY年）` の**Markdownリンク**。
+  URLは各資料に添えてあるものを使い、書き換えたり推測で作ったりしない
+- 本文中にURL（Googleドライブ・ドキュメント・写真など）が書かれていて、
+  それが回答に関係するなら**URLをそのまま本文に載せる**。画面側でリンクになる
 
-なお、冒頭の目次には**どんなページが存在するか**が出所ごとに載っている。
+なお、冒頭には**人が保守している基本情報**と、**どんなページが存在するかの目次**が
+出所ごとに載っている。基本情報は資料本文より優先される確定事実として扱うこと。
 「どの分野の情報が薄いか」「そのページは存在するか」といった問いには、目次を根拠に答えてよい。
 
 # 資料
@@ -231,9 +263,13 @@ titles には最も近そうなページだけを挙げてください。
         for cid in chunk_ids:
             page = self.pages[self.chunk_page[cid]]
             origin = "公式サイト" if page.get("source") == "site" else "Wiki"
+            # 年代は拾えないことがある（実測で38%）。空欄を出すとモデルが
+            # 「不明」を「古い」と読み替えるので、その場合は項目ごと省く
+            era = era_label(self.chunks[cid].get("era"))
             blocks.append(
                 f"## {self.chunks[cid]['breadcrumb']}\n"
-                f"（出所: {origin} / ページ: {page['title']} / 最終更新: {page['last_edited']}）\n\n"
+                f"（出所: {origin} / ページ: {page['title']} / URL: {page['url']} / "
+                f"最終更新: {page['last_edited']}{' / 本文の年代: ' + era if era else ''}）\n\n"
                 f"{self.chunks[cid]['text']}"
             )
         context = "\n\n---\n\n".join(blocks)
@@ -241,7 +277,11 @@ titles には最も近そうなページだけを挙げてください。
         text = self.llm(
             # 目次を先頭に置く。全体を見渡す問いに答えられるようにするためと、
             # プロンプトキャッシュを効かせるため
-            self.toc + "\n\n" + self.ANSWER_PROMPT.format(context=context, question=question),
+            self.toc + "\n\n" + self.ANSWER_PROMPT.format(
+                today=date.today().strftime("%Y年%-m月%-d日"),
+                context=context,
+                question=question,
+            ),
             None, 900)
         return Answer(
             question=question,

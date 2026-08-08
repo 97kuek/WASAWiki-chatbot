@@ -21,6 +21,15 @@ from pathlib import Path
 INDEX = Path("data/index.json")
 OUT = Path("data/toc.md")
 
+# 人が保守する事実カード。目次の**先頭**に埋め込む。
+#
+# 資料を素直に読むと間違える事柄（WASA全体の60周年を鳥人間プロジェクトの年数と
+# 取り違える、代と西暦の対応が分からない）を確定事実として先に置く。
+# 別ファイルとして Go 側に読ませる案もあったが、目次は「先頭に固定するとキャッシュが
+# 効く」という条件で設計されている（backend/internal/llm/llm.go の Request 参照）。
+# 目次そのものの先頭に入れてしまえば、キャッシュの条件も配置も一切変えずに済む。
+FACTS = Path("facts.md")
+
 LEAD_CHARS = 90  # リード文の長さ。目次全体のサイズはほぼここで決まる
 MAX_HEADINGS = 10  # 1ページあたりに載せる見出しの数
 
@@ -90,6 +99,19 @@ def render_page(page: dict) -> list[str]:
     return lines
 
 
+def load_facts() -> list[str]:
+    """事実カードの本文を読む。`---` より前は保守用の注意書きなので落とす。
+
+    プロンプトに載る分量を人が目視で管理できるようにするための約束事。
+    ファイルが無くても目次は生成できる（事実カードは後から足した層である）。
+    """
+    if not FACTS.exists():
+        return []
+    text = FACTS.read_text(encoding="utf-8")
+    _, sep, body = text.partition("\n---\n")
+    return (body if sep else text).strip().split("\n") + [""]
+
+
 def main() -> None:
     all_pages = json.loads(INDEX.read_text(encoding="utf-8"))["pages"]
     pages = [p for p in all_pages if p.get("source", "wiki") == "wiki"]
@@ -104,7 +126,8 @@ def main() -> None:
         )
     )
 
-    lines = [
+    facts = load_facts()
+    lines = facts + [
         "# WASA 資料の目次",
         "",
         "出所が2つある。**引き継ぎWiki**（部内限定・作業手順や設計の詳細）と、",
@@ -147,7 +170,7 @@ def main() -> None:
     print("=" * 56)
     print(f"目次を生成      : {OUT}")
     print(f"ページ数        : {len(pages) + len(site)}（Wiki {len(pages)} / 公式サイト {len(site)}）")
-    print(f"文字数          : {chars:,} 字")
+    print(f"文字数          : {chars:,} 字（うち事実カード {len(chr(10).join(facts)):,} 字）")
     print(f"推定トークン数  : {int(chars / 1.5):,} 〜 {chars:,}")
     print(f"1ページあたり   : {chars // max(1, len(pages) + len(site))} 字")
 

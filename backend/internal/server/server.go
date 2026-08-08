@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/97kuek/wasa-chat/backend/internal/assistant"
 	"github.com/97kuek/wasa-chat/backend/internal/index"
 	"github.com/97kuek/wasa-chat/backend/internal/llm"
 	"github.com/97kuek/wasa-chat/backend/internal/pipeline"
@@ -39,6 +40,9 @@ type Config struct {
 	DailyLimit    int    // 利用者1人あたりの1日の質問数上限
 	AllowOrigin   string // 開発時にViteのdev serverから叩くためのCORS設定
 	SPADir        string // 指定するとビルド済みSPAも同じサーバーから配る
+	// 他人のアシスタントも削除できるWiki利用者名。役割ではなく、
+	// 明らかなゴミを片付けるための最小限の権限（docs/03-画面・認証仕様.md）
+	AdminUsers []string
 }
 
 // spaHandler は静的ファイルを返し、見つからないパスは index.html に落とす
@@ -75,6 +79,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/chats", s.requireAuth(s.handleListChats))
 	mux.HandleFunc("PUT /api/chats/{id}", s.requireAuth(s.handleSaveChat))
 	mux.HandleFunc("DELETE /api/chats/{id}", s.requireAuth(s.handleDeleteChat))
+	mux.HandleFunc("GET /api/assistants", s.requireAuth(s.handleListAssistants))
+	mux.HandleFunc("POST /api/assistants", s.requireAuth(s.handleCreateAssistant))
+	mux.HandleFunc("DELETE /api/assistants/{id}", s.requireAuth(s.handleDeleteAssistant))
 	// Cloud Runでは末尾が z の一部パスがプラットフォーム側で処理され、
 	// アプリまで届かず404になるため、予約されない /health を使う。
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
@@ -366,11 +373,146 @@ func (s *Server) handleDeleteChat(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ---------------------------------------------------------------- アシスタント
+//
+// 全員で共有する。審査はしない代わりに、悪い設定が危険ではなく退屈になるよう
+// 構造で縛ってある（internal/assistant のパッケージコメントを参照）。
+
+const maxAssistants = 100
+
+// assistantView は一覧に載せる形。権限の判定結果をサーバー側で付ける。
+// 画面側で作成者名を突き合わせる実装にすると、判定が2箇所に散る。
+type assistantView struct {
+	state.Assistant
+	Scope     string `json:"scope"`
+	CanDelete bool   `json:"canDelete"`
+}
+
+func (s *Server) assistantViews(list []state.Assistant, user string) []assistantView {
+	views := make([]assistantView, 0, len(list))
+	for _, item := range list {
+		views = append(views, assistantView{
+			Assistant: item,
+			Scope:     assistant.ScopeLabel(&item),
+			CanDelete: assistant.CanDelete(item, user, s.cfg.AdminUsers),
+		})
+	}
+	return views
+}
+
+func (s *Server) handleListAssistants(w http.ResponseWriter, r *http.Request) {
+	user, _ := s.currentUser(r)
+	list, err := s.state.ListAssistants(r.Context())
+	if err != nil {
+		log.Printf("アシスタントの読み込みに失敗: %v", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "アシスタントを読み込めませんでした"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"assistants": s.assistantViews(list, user),
+		"teams":      assistant.Teams,
+	})
+}
+
+func (s *Server) handleCreateAssistant(w http.ResponseWriter, r *http.Request) {
+	var body state.Assistant
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "リクエストが不正です"})
+		return
+	}
+	user, _ := s.currentUser(r)
+
+	// 作成者は本人で固定する。ここを本文から取ると、他人の名前で
+	// アシスタントを作れてしまい、名前が出ることによる抑止が消える
+	body.Author = user
+	now := time.Now().UTC().Format(time.RFC3339)
+	body.CreatedAt, body.UpdatedAt = now, now
+	if err := assistant.Validate(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	list, err := s.state.ListAssistants(r.Context())
+	if err != nil {
+		log.Printf("アシスタントの読み込みに失敗: %v", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "アシスタントを読み込めませんでした"})
+		return
+	}
+	for _, item := range list {
+		if item.ID == body.ID {
+			// 上書きを許すと、他人のアシスタントを実質的に編集できてしまう。
+			// 「他人のものは複製して直す」の原則がここで効いている
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "そのIDは既に使われています"})
+			return
+		}
+	}
+	if len(list) >= maxAssistants {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "アシスタントの数が上限に達しています"})
+		return
+	}
+
+	if err := s.state.SaveAssistant(r.Context(), body); err != nil {
+		log.Printf("アシスタントの保存に失敗: %v", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "アシスタントを保存できませんでした"})
+		return
+	}
+	writeJSON(w, http.StatusCreated, s.assistantViews([]state.Assistant{body}, user)[0])
+}
+
+func (s *Server) handleDeleteAssistant(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	user, _ := s.currentUser(r)
+	list, err := s.state.ListAssistants(r.Context())
+	if err != nil {
+		log.Printf("アシスタントの読み込みに失敗: %v", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "アシスタントを読み込めませんでした"})
+		return
+	}
+	for _, item := range list {
+		if item.ID != id {
+			continue
+		}
+		if !assistant.CanDelete(item, user, s.cfg.AdminUsers) {
+			writeJSON(w, http.StatusForbidden,
+				map[string]string{"error": "作成者本人と管理者だけが削除できます"})
+			return
+		}
+		if err := s.state.DeleteAssistant(r.Context(), id); err != nil {
+			log.Printf("アシスタントの削除に失敗: %v", err)
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "アシスタントを削除できませんでした"})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	writeJSON(w, http.StatusNotFound, map[string]string{"error": "アシスタントが見つかりません"})
+}
+
+// lookupAssistant は質問に添えられたIDを実体に解決する。
+// 見つからないIDは「未選択」として扱い、質問自体は通す。
+func (s *Server) lookupAssistant(ctx context.Context, id string) *state.Assistant {
+	if id == "" {
+		return nil
+	}
+	list, err := s.state.ListAssistants(ctx)
+	if err != nil {
+		log.Printf("アシスタントの読み込みに失敗: %v", err)
+		return nil
+	}
+	for _, item := range list {
+		if item.ID == id {
+			return &item
+		}
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------- 質問
 
 func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Question string `json:"question"`
+		Question    string `json:"question"`
+		AssistantID string `json:"assistantId"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "リクエストが不正です"})
@@ -382,6 +524,10 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "質問を入力してください（500文字以内）"})
 		return
 	}
+
+	// 解決はレート制限の前に済ませる。存在しないIDでも質問自体は通すので、
+	// 回数を消費してから「アシスタントが無い」で止まる経路を作らない。
+	selected := s.lookupAssistant(r.Context(), body.AssistantID)
 
 	// レート制限。本当の費用リスクはインフラではなく
 	// API従量課金である（docs/01-設計方針.md §7）。これが実質的な上限装置になる。
@@ -429,7 +575,7 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 
-	if err := s.pipe.Run(r.Context(), question, emit); err != nil {
+	if err := s.pipe.Run(r.Context(), question, selected, emit); err != nil {
 		log.Printf("質問の処理に失敗: %v", err)
 		message := "回答の生成に失敗しました"
 		code := ""

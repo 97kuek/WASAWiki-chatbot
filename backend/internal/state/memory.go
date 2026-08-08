@@ -8,13 +8,18 @@ import (
 
 // Memoryはローカル開発と単体テスト用。Cloud RunではFirestoreを必須にする。
 type Memory struct {
-	mu    sync.Mutex
-	usage map[string]int
-	chats map[string]map[string]Chat
+	mu         sync.Mutex
+	usage      map[string]int
+	chats      map[string]map[string]Chat
+	assistants map[string]Assistant
 }
 
 func NewMemory() *Memory {
-	return &Memory{usage: map[string]int{}, chats: map[string]map[string]Chat{}}
+	return &Memory{
+		usage:      map[string]int{},
+		chats:      map[string]map[string]Chat{},
+		assistants: map[string]Assistant{},
+	}
 }
 
 func usageKey(user, day string) string { return user + "\x00" + day }
@@ -95,5 +100,32 @@ func (m *Memory) DeleteChat(_ context.Context, user, chatID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.chats[user], chatID)
+	return nil
+}
+
+func (m *Memory) ListAssistants(_ context.Context) ([]Assistant, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	list := make([]Assistant, 0, len(m.assistants))
+	for _, item := range m.assistants {
+		list = append(list, item)
+	}
+	// 作成順に並べる。人気順や利用回数での並べ替えは、数が増えて
+	// 探しづらくなってから足す（いまは10件程度を想定している）
+	sort.Slice(list, func(i, j int) bool { return list[i].CreatedAt < list[j].CreatedAt })
+	return list, nil
+}
+
+func (m *Memory) SaveAssistant(_ context.Context, assistant Assistant) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.assistants[assistant.ID] = assistant
+	return nil
+}
+
+func (m *Memory) DeleteAssistant(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.assistants, id)
 	return nil
 }

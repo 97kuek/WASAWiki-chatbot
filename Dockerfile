@@ -32,9 +32,12 @@ COPY --from=build /out/server /app/server
 COPY --from=web /web/dist /app/web
 # Wikiのインデックス。ビルドコンテキストに data/ が無いとここで失敗する
 COPY data/index.json data/toc.md /app/data/
+# 初期アシスタント。同じIDが登録済みなら上書きしないので、毎回入れて問題ない
+COPY assistants/ /app/assistants/
 
 ENV DATA_DIR=/app/data \
     SPA_DIR=/app/web \
+    ASSISTANT_SEED_DIR=/app/assistants \
     PORT=8080
 EXPOSE 8080
 USER nonroot:nonroot

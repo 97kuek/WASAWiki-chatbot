@@ -170,5 +170,39 @@ func (f *Firestore) DeleteChat(ctx context.Context, user, chatID string) error {
 	return err
 }
 
+// アシスタントは全員で共有するため users/ の下ではなくトップレベルに置く。
+func (f *Firestore) assistantCollection() *firestore.CollectionRef {
+	return f.client.Collection("assistants")
+}
+
+func (f *Firestore) ListAssistants(ctx context.Context) ([]Assistant, error) {
+	snapshots, err := f.assistantCollection().
+		OrderBy("created_at", firestore.Asc).
+		Documents(ctx).
+		GetAll()
+	if err != nil {
+		return nil, err
+	}
+	list := make([]Assistant, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		var assistant Assistant
+		if err := snapshot.DataTo(&assistant); err != nil {
+			return nil, err
+		}
+		list = append(list, assistant)
+	}
+	return list, nil
+}
+
+func (f *Firestore) SaveAssistant(ctx context.Context, assistant Assistant) error {
+	_, err := f.assistantCollection().Doc(assistant.ID).Set(ctx, assistant)
+	return err
+}
+
+func (f *Firestore) DeleteAssistant(ctx context.Context, id string) error {
+	_, err := f.assistantCollection().Doc(id).Delete(ctx)
+	return err
+}
+
 var _ Store = (*Firestore)(nil)
 var _ Store = (*Memory)(nil)

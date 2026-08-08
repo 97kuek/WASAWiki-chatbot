@@ -16,12 +16,35 @@ import (
 
 var aliasSuffix = regexp.MustCompile(`\s*（別名:[^）]*）\s*$`)
 
+// Era は本文が「いつの話か」の手がかり。build_index.py の extract_era が入れる。
+//
+// ページの LastEdited は編集した日であって、書かれている内容の新しさではない。
+// 実測では911チャンク中155件（17%）で、本文が扱う年代が最終更新より2年以上古かった。
+// 「鳥コン > 鳥コンまでの流れ」は最終更新2026年だが本文は2024年までしか書いていない。
+type Era struct {
+	Years []int `json:"years"` // 本文中の西暦（代から換算したものを含む）
+	Gens  []int `json:"gens"`  // 本文中の代
+}
+
+// Label はプロンプトに載せる短い表記を返す。手がかりが無ければ空文字。
+func (e Era) Label() string {
+	if len(e.Years) == 0 {
+		return ""
+	}
+	lo, hi := e.Years[0], e.Years[len(e.Years)-1]
+	if lo == hi {
+		return fmt.Sprintf("%d年", hi)
+	}
+	return fmt.Sprintf("%d〜%d年（最新%d年）", lo, hi, hi)
+}
+
 // Chunk は検索・回答の単位。breadcrumb は「ページ名 > 見出し > 見出し」。
 type Chunk struct {
 	ID         string `json:"id"`
 	Breadcrumb string `json:"breadcrumb"`
 	Text       string `json:"text"`
 	Chars      int    `json:"chars"`
+	Era        Era    `json:"era"`
 }
 
 type Page struct {

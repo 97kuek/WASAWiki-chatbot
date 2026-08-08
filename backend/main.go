@@ -12,10 +12,12 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
 
+	"github.com/97kuek/wasa-chat/backend/internal/assistant"
 	"github.com/97kuek/wasa-chat/backend/internal/index"
 	"github.com/97kuek/wasa-chat/backend/internal/llm"
 	"github.com/97kuek/wasa-chat/backend/internal/pipeline"
@@ -43,6 +45,18 @@ func envNonNegativeInt(key string, fallback int) int {
 		return v
 	}
 	return fallback
+}
+
+// splitList はカンマ区切りの設定値を分解する。Wikiの利用者名には空白が
+// 入る（「42 Wasa Taro」）ため、区切りは空白ではなくカンマにしてある。
+func splitList(raw string) []string {
+	var list []string
+	for _, item := range strings.Split(raw, ",") {
+		if trimmed := strings.TrimSpace(item); trimmed != "" {
+			list = append(list, trimmed)
+		}
+	}
+	return list
 }
 
 func envSeconds(key string, fallback float64) time.Duration {
@@ -146,11 +160,34 @@ func main() {
 		log.Println("共有状態: メモリ（ローカル開発用。再起動で履歴と利用回数が消えます）")
 	}
 
+	// 他人のアシスタントも消せる利用者。役割を作るのではなく、
+	// 明らかなゴミを片付けるための最小限の権限（docs/03-画面・認証仕様.md §5）
+	admins := splitList(os.Getenv("ADMIN_USERS"))
+	if len(admins) == 0 {
+		log.Println("警告: ADMIN_USERS が未設定です。アシスタントは作成者本人しか削除できません")
+	}
+	seeds, err := assistant.LoadSeeds(env("ASSISTANT_SEED_DIR", "assistants"))
+	if err != nil {
+		log.Fatalf("初期アシスタントを読み込めません: %v", err)
+	}
+	if len(seeds) > 0 {
+		defaultAuthor := ""
+		if len(admins) > 0 {
+			defaultAuthor = admins[0]
+		}
+		added, err := assistant.Apply(context.Background(), sharedState, seeds, defaultAuthor)
+		if err != nil {
+			log.Fatalf("初期アシスタントの登録に失敗: %v", err)
+		}
+		log.Printf("初期アシスタント: %d件中 %d件を新規登録（既存は上書きしない）", len(seeds), added)
+	}
+
 	srv := server.New(server.Config{
 		SessionSecret: secret,
 		DailyLimit:    envInt("DAILY_LIMIT", 30),
 		AllowOrigin:   allowOrigin,
 		SPADir:        os.Getenv("SPA_DIR"),
+		AdminUsers:    admins,
 	}, ix, pipeline.New(ix, client), wiki.New(wikiAPI), sharedState)
 
 	addr := ":" + env("PORT", "8080") // Cloud Run は PORT を渡してくる

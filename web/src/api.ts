@@ -70,6 +70,62 @@ export async function session(): Promise<Session> {
   return res.json();
 }
 
+/** 全員で共有するアシスタント。作成者名は隠さない（誰に聞けばよいか分かるため）。 */
+export type Assistant = {
+  id: string;
+  name: string;
+  description: string;
+  instruction: string;
+  team?: string;
+  origin?: "wiki" | "site";
+  author: string;
+  createdAt: string;
+  updatedAt: string;
+  /** 参照範囲の説明。サーバー側で組み立てた文言をそのまま出す。 */
+  scope: string;
+  /** 作成者本人か管理者のときだけ true。判定はサーバーが持つ。 */
+  canDelete: boolean;
+};
+
+export async function listAssistants(): Promise<{ assistants: Assistant[]; teams: string[] }> {
+  const res = await fetch(`${base}/api/assistants`, { credentials: "include" });
+  if (!res.ok) throw new Error("アシスタントを読み込めませんでした");
+  const body = await res.json() as { assistants?: Assistant[]; teams?: string[] };
+  return { assistants: body.assistants ?? [], teams: body.teams ?? [] };
+}
+
+export type AssistantDraft = {
+  id: string;
+  name: string;
+  description: string;
+  instruction: string;
+  team?: string;
+  origin?: "wiki" | "site";
+};
+
+export async function createAssistant(draft: AssistantDraft): Promise<Assistant> {
+  const res = await fetch(`${base}/api/assistants`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(draft),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? "アシスタントを作成できませんでした");
+  return body as Assistant;
+}
+
+export async function deleteAssistant(id: string): Promise<void> {
+  const res = await fetch(`${base}/api/assistants/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? "アシスタントを削除できませんでした");
+  }
+}
+
 export async function listChats(): Promise<Chat[]> {
   const res = await fetch(`${base}/api/chats`, { credentials: "include" });
   if (!res.ok) throw new Error("チャット履歴を読み込めませんでした");
@@ -106,13 +162,14 @@ export async function ask(
   question: string,
   onEvent: (event: Event) => void,
   signal?: AbortSignal,
+  assistantId?: string,
 ): Promise<void> {
   // 非公開Wikiに関する質問をURLへ載せるとアクセスログに残るため、本文で送る。
   const res = await fetch(`${base}/api/ask`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({ question, assistantId: assistantId ?? "" }),
     signal,
   });
   if (!res.ok || !res.body) {
