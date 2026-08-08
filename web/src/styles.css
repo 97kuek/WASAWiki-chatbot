@@ -1560,7 +1560,7 @@ button:disabled {
 
 .assistant-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   margin: 0;
   padding: 0;
@@ -1596,10 +1596,6 @@ button:disabled {
 .assistant-name { font-size: 14px; font-weight: 600; color: var(--text); }
 
 .assistant-desc {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
   font-size: 12px;
   line-height: 1.5;
   color: var(--muted);
@@ -1679,9 +1675,16 @@ button:disabled {
   color: var(--muted);
 }
 
+.assistant-field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
 .assistant-form input,
-.assistant-form textarea,
-.assistant-form select {
+.assistant-form textarea {
   width: 100%;
   padding: 9px 11px;
   border: 1px solid var(--line-strong);
@@ -1700,6 +1703,102 @@ button:disabled {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
+}
+
+/* ネイティブの選択肢はOS側の配色になり入力欄と食い違うため、
+   開いた面まで同じ色・角丸・余白で揃える。 */
+.select-menu {
+  position: relative;
+  min-width: 0;
+}
+
+.select-menu-trigger {
+  width: 100%;
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 11px 9px 13px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.select-menu-trigger[aria-expanded="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.select-menu-trigger span {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.select-menu-trigger svg {
+  width: 20px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 140ms ease;
+}
+
+.select-menu-trigger[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.select-menu-options {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 100%;
+  max-height: min(320px, 50vh);
+  margin: 0;
+  padding: 5px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 16px 40px rgb(35 31 28 / 14%);
+  color: var(--text);
+  list-style: none;
+}
+
+.select-menu-options li {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.select-menu-options li.highlighted {
+  background: var(--surface-soft);
+}
+
+.select-menu-options li[aria-selected="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.select-menu-check {
+  color: var(--accent);
+  font-size: 16px;
+  line-height: 1;
 }
 
 .assistant-error {
@@ -1732,5 +1831,6 @@ button:disabled {
 .assistant-actions button:disabled { opacity: 0.45; }
 
 @media (max-width: 700px) {
+  .assistant-grid { grid-template-columns: 1fr; }
   .assistant-scope { grid-template-columns: 1fr; }
 }

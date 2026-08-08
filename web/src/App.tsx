@@ -19,6 +19,7 @@ import {
 } from "./api";
 import { AssistantAvatar, DefaultAvatar, toIconDataURL } from "./avatar";
 import { Markdown } from "./markdown";
+import { SelectMenu, type SelectOption } from "./SelectMenu";
 
 type Announcement = {
   id: string;
@@ -30,6 +31,12 @@ type Announcement = {
 const MAX_CHATS = 30;
 const ANNOUNCEMENT_READ_KEY = "wasa-chat-read-announcements";
 const ASSISTANT_KEY = "wasa-chat-assistant";
+
+const ORIGIN_OPTIONS: SelectOption[] = [
+  { value: "", label: "すべて" },
+  { value: "wiki", label: "引き継ぎWikiのみ" },
+  { value: "site", label: "公式サイトのみ（部外に出せる情報だけ）" },
+];
 
 const emptyDraft: AssistantDraft = { id: "", name: "", description: "", instruction: "" };
 
@@ -962,23 +969,30 @@ export default function App() {
                     onChange={(event) => setAssistantDraft((d) => ({ ...d, instruction: event.target.value }))} />
                 </label>
                 <div className="assistant-scope">
-                  <label>
+                  <div className="assistant-field">
                     <span>参照する出所</span>
-                    <select value={assistantDraft.origin ?? ""}
-                      onChange={(event) => setAssistantDraft((d) => ({ ...d, origin: (event.target.value || undefined) as AssistantDraft["origin"] }))}>
-                      <option value="">すべて</option>
-                      <option value="wiki">引き継ぎWikiのみ</option>
-                      <option value="site">公式サイトのみ（部外に出せる情報だけ）</option>
-                    </select>
-                  </label>
-                  <label>
+                    <SelectMenu
+                      label="参照する出所"
+                      value={assistantDraft.origin ?? ""}
+                      options={ORIGIN_OPTIONS}
+                      onChange={(value) => setAssistantDraft((d) => ({
+                        ...d,
+                        origin: (value || undefined) as AssistantDraft["origin"],
+                      }))}
+                    />
+                  </div>
+                  <div className="assistant-field">
                     <span>参照する区分</span>
-                    <select value={assistantDraft.team ?? ""}
-                      onChange={(event) => setAssistantDraft((d) => ({ ...d, team: event.target.value || undefined }))}>
-                      <option value="">すべて</option>
-                      {teams.map((team) => <option key={team.value} value={team.value}>{team.label}</option>)}
-                    </select>
-                  </label>
+                    <SelectMenu
+                      label="参照する区分"
+                      value={assistantDraft.team ?? ""}
+                      options={[
+                        { value: "", label: "すべて" },
+                        ...teams.map((team) => ({ value: team.value, label: team.label })),
+                      ]}
+                      onChange={(value) => setAssistantDraft((d) => ({ ...d, team: value || undefined }))}
+                    />
+                  </div>
                 </div>
                 {assistantError && <p className="assistant-error" role="alert">{assistantError}</p>}
                 <div className="assistant-actions">
@@ -994,8 +1008,7 @@ export default function App() {
                   <div>
                     <h2>アシスタント</h2>
                     <p className="muted">
-                      口調や参照範囲を決めた設定です。誰でも作れて、全員が使えます。
-                      <strong>出典の一覧と参照範囲はサーバー側で決まるので、どれを選んでも同じ根拠から答えます。</strong>
+                      口調や参照範囲を決めた設定です。誰でも作れて全員が使えます。
                     </p>
                   </div>
                   <button type="button" className="primary" onClick={startCreate}>新しく作る</button>
