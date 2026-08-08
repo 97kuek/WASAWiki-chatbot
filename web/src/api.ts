@@ -62,8 +62,12 @@ export async function ask(
   onEvent: (event: Event) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const res = await fetch(`${base}/api/ask?q=${encodeURIComponent(question)}`, {
+  // 非公開Wikiに関する質問をURLへ載せるとアクセスログに残るため、本文で送る。
+  const res = await fetch(`${base}/api/ask`, {
+    method: "POST",
     credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question }),
     signal,
   });
   if (!res.ok || !res.body) {

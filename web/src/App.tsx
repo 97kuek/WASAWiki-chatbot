@@ -50,6 +50,14 @@ const makeId = () => crypto.randomUUID();
 const chatTitle = (question: string) =>
   Array.from(question.trim()).slice(0, 28).join("") + (Array.from(question.trim()).length > 28 ? "…" : "");
 
+function clearStoredChats(username: string) {
+  try {
+    sessionStorage.removeItem(storageKey(username));
+  } catch {
+    // ストレージが無効でも、React上の履歴消去とログアウトは続ける。
+  }
+}
+
 /**
  * 非公開Wikiの内容を端末へ恒久保存しないよう、履歴は現在のタブだけに置く。
  * 読み込み時には途中だったストリーミング状態を解除し、再送信と誤認させない。
@@ -152,7 +160,7 @@ export default function App() {
 
   async function handleLogout() {
     await logout();
-    sessionStorage.removeItem(storageKey(username));
+    clearStoredChats(username);
     setAuthed(false);
     setUsername("");
     setChats([]);
@@ -167,7 +175,7 @@ export default function App() {
 
   function handleClearHistory() {
     if (streaming || !window.confirm("このタブのチャット履歴をすべて削除しますか？")) return;
-    sessionStorage.removeItem(storageKey(username));
+    clearStoredChats(username);
     setChats([]);
     setActiveChatId(null);
   }
