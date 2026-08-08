@@ -1202,9 +1202,11 @@ button:disabled {
 
 .composer {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   gap: 3px;
-  min-height: 88px;
-  padding: 10px 11px 8px 14px;
+  min-height: 58px;
+  padding: 7px 8px 7px 14px;
   border: 1px solid var(--accent);
   border-radius: 12px;
   background: var(--surface);
@@ -1218,7 +1220,7 @@ button:disabled {
 
 .composer textarea {
   width: 100%;
-  min-height: 38px;
+  min-height: 28px;
   max-height: 96px;
   resize: none;
   padding: 2px;
@@ -1328,7 +1330,7 @@ button:disabled {
   }
 
   .composer {
-    min-height: 82px;
+    min-height: 58px;
     padding-inline: 12px;
   }
 }

@@ -69,7 +69,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/logout", s.handleLogout)
 	mux.HandleFunc("GET /api/session", s.handleSession)
 	mux.HandleFunc("POST /api/ask", s.requireAuth(s.handleAsk))
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+	// Cloud Runでは末尾が z の一部パスがプラットフォーム側で処理され、
+	// アプリまで届かず404になるため、予約されない /health を使う。
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		pages, chunks := s.ix.Stats()
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "pages": pages, "chunks": chunks})
 	})
@@ -278,12 +280,14 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 			})
 		return
 	}
-	// SSE開始後はCookieヘッダーを書き換えられないため、確保した時点で保存する。
-	// Gemini都合で返却した場合は、処理後にフロントが呼ぶ /api/session で訂正される。
+	// SSE開始後はCookieヘッダーを書き換えられないため、確保中の回数は
+	// Cookieへ確定しない。成功後にフロントが呼ぶ /api/session で保存する。
+	// 先に保存するとGemini都合で返却しても、古いCookieから回数が復活してしまう。
 	s.setUsageCookie(w, user)
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
+		s.limit.refund(user)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "ストリーミング未対応"})
 		return
 	}
@@ -310,25 +314,35 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		message := "回答の生成に失敗しました"
 		code := ""
 		retryAt := ""
+		refunded := false
 		if errors.Is(err, llm.ErrDailyQuota) {
 			s.limit.refund(user)
+			refunded = true
 			code = "daily_quota"
 			message = "Gemini無料枠の本日分を使い切りました。Google側の上限がリセットされてからお試しください"
 		} else if errors.Is(err, llm.ErrRateLimited) {
 			s.limit.refund(user)
+			refunded = true
 			code = "rate_limit"
 			message = "アクセスが集中し、Geminiの短時間の利用上限に達しました。数分後にもう一度お試しください"
 		} else if errors.Is(err, llm.ErrUnavailable) {
 			// 利用者ではなくGemini側の都合で失敗した質問は、個人の利用回数へ含めない。
 			s.limit.refund(user)
+			refunded = true
 			code = "unavailable"
 			message = "現在Geminiを利用できません。時間を置いてからもう一度お試しください"
+		}
+		if !refunded {
+			// 従来どおり、Gemini都合以外の失敗は利用回数へ含める。
+			s.limit.commit(user)
 		}
 		if at, ok := llm.RetryAt(err); ok {
 			retryAt = at.Format(time.RFC3339)
 		}
 		emit(pipeline.Event{Type: "error", Message: message, Code: code, RetryAt: retryAt})
+		return
 	}
+	s.limit.commit(user)
 }
 
 // ---------------------------------------------------------------- 補助
@@ -419,10 +433,15 @@ type limiter struct {
 	limit int
 	day   string
 	used  map[string]int
+	// 処理中も上限判定には含める一方、失敗時に古いCookieから回数が復活しないよう
+	// 成功するまでは確定済みの used と分ける。
+	pending map[string]int
 }
 
 func newLimiter(limit int) *limiter {
-	return &limiter{limit: limit, day: today(), used: map[string]int{}}
+	return &limiter{
+		limit: limit, day: today(), used: map[string]int{}, pending: map[string]int{},
+	}
 }
 
 // 画面の「本日」と一致させるため、Cloud RunのUTCではなく日本時間で日付を切り替える。
@@ -437,7 +456,7 @@ func nextJapanMidnight() time.Time {
 
 func (l *limiter) rollover() {
 	if d := today(); d != l.day {
-		l.day, l.used = d, map[string]int{}
+		l.day, l.used, l.pending = d, map[string]int{}, map[string]int{}
 	}
 }
 
@@ -445,10 +464,10 @@ func (l *limiter) take(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.rollover()
-	if l.used[key] >= l.limit {
+	if l.used[key]+l.pending[key] >= l.limit {
 		return false
 	}
-	l.used[key]++
+	l.pending[key]++
 	return true
 }
 
@@ -456,7 +475,7 @@ func (l *limiter) remaining(key string) int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.rollover()
-	if r := l.limit - l.used[key]; r > 0 {
+	if r := l.limit - l.used[key] - l.pending[key]; r > 0 {
 		return r
 	}
 	return 0
@@ -484,7 +503,17 @@ func (l *limiter) refund(key string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.rollover()
-	if l.used[key] > 0 {
-		l.used[key]--
+	if l.pending[key] > 0 {
+		l.pending[key]--
+	}
+}
+
+func (l *limiter) commit(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.rollover()
+	if l.pending[key] > 0 {
+		l.pending[key]--
+		l.used[key]++
 	}
 }

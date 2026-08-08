@@ -816,7 +816,7 @@ export default function App() {
             </div>
           </form>
           <p className="composer-hint">Enterで送信・Shift + Enterで改行</p>
-          <p className="disclaimer">生成AIの回答には誤りが含まれることがあります。重要な判断の前に出典をご確認ください。</p>
+          <p className="disclaimer">生成AIの回答には誤りが含まれることがあります。</p>
         </div>
       </section>
       {renamingChatId && (

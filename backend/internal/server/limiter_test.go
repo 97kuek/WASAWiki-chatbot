@@ -18,6 +18,44 @@ func TestLimiterRefundsFailedQuestion(t *testing.T) {
 	}
 }
 
+func TestFailedQuestionCookieDoesNotRestoreReservedUsage(t *testing.T) {
+	const user = "利用者"
+	srv := &Server{
+		cfg:   Config{SessionSecret: "テスト用の固定鍵", DailyLimit: 3},
+		limit: newLimiter(3),
+	}
+	srv.limit.restore(user, today(), 1)
+	if !srv.limit.take(user) {
+		t.Fatal("質問回数を確保できていない")
+	}
+
+	// SSE開始時のCookieには、確保中の質問を確定回数として載せない。
+	day, used := srv.limit.usage(user)
+	token := srv.signUsage(user, day, used)
+	if _, got, ok := srv.verifyUsage(token, user); !ok || got != 1 {
+		t.Fatalf("確保中の質問がCookieへ保存された: used=%d ok=%v", got, ok)
+	}
+
+	srv.limit.refund(user)
+	srv.limit.restore(user, day, used)
+	if got := srv.limit.remaining(user); got != 2 {
+		t.Fatalf("失敗した質問が古いCookieから復活した: remaining=%d", got)
+	}
+}
+
+func TestLimiterCommitsSuccessfulQuestion(t *testing.T) {
+	limit := newLimiter(3)
+	if !limit.take("利用者") {
+		t.Fatal("質問回数を確保できていない")
+	}
+	limit.commit("利用者")
+	day, used := limit.usage("利用者")
+	if day != today() || used != 1 || limit.remaining("利用者") != 2 {
+		t.Fatalf("成功した質問を確定できていない: day=%q used=%d remaining=%d",
+			day, used, limit.remaining("利用者"))
+	}
+}
+
 func TestLimiterRestoresUsageWithoutRollingBack(t *testing.T) {
 	limit := newLimiter(30)
 	limit.restore("利用者", today(), 7)
