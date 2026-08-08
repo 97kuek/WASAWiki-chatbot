@@ -1,24 +1,40 @@
+/*
+ * ライトモード。有彩色は全体の5%未満に抑える。
+ *
+ * 面（背景・カード・ボタン・チップ）はすべて無彩色で組み、
+ * 彩度のある色は以下の細い要素だけに使う:
+ *   - 質問の左罫（3px）
+ *   - 進捗インジケータの点（7px）
+ *   - フォーカスリング
+ * 塗りつぶしに彩色を使わないので、面積比では1%に届かない。
+ *
+ * 文字サイズは本文16px。最小は14pxとし、それ未満は使わない。
+ */
+
 :root {
-  --bg: #12110f;
-  --surface: #1b1a17;
-  --line: #2e2c28;
-  --text: #ebe7df;
-  --muted: #948d81;
-  --accent: #c8703c;
-  color-scheme: dark;
+  --bg: #fbfbfa;
+  --surface: #ffffff;
+  --line: #e4e2df;
+  --line-strong: #cfcbc6;
+  --text: #1b1a19;
+  --muted: #5d5954; /* 白背景に対して約7:1。小さめの字でも読める */
+  --accent: #9c4221; /* 使うのは罫・点・フォーカスリングのみ */
+  color-scheme: light;
 }
 
 * {
   box-sizing: border-box;
 }
 
+html,
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
   font-family: "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
-  font-size: 15px;
-  line-height: 1.8;
+  font-size: 16px;
+  line-height: 1.85;
+  -webkit-font-smoothing: antialiased;
 }
 
 button,
@@ -27,11 +43,18 @@ input {
   color: inherit;
 }
 
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .muted {
   color: var(--muted);
+  font-size: 14px;
 }
 .error {
-  color: #e2725b;
+  color: #8a2f1c;
+  font-size: 15px;
 }
 
 .center {
@@ -44,55 +67,58 @@ input {
 .card {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: 12px;
   padding: 28px;
 }
 
 /* ---- ログイン ---- */
 
 .gate {
-  width: min(380px, 100%);
+  width: min(400px, 100%);
   display: grid;
-  gap: 14px;
+  gap: 16px;
 }
 .gate h1 {
   margin: 0;
-  font-size: 20px;
+  font-size: 21px;
+  font-weight: 600;
 }
 .gate p {
   margin: 0;
-  font-size: 14px;
+  font-size: 15px;
 }
 .gate input,
 .composer input {
-  background: #0e0d0c;
-  border: 1px solid var(--line);
-  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
   padding: 12px 14px;
   width: 100%;
+  font-size: 16px; /* iOSで自動ズームされないように16px以上を保つ */
 }
-.gate input:focus,
-.composer input:focus {
-  outline: 2px solid var(--accent);
-  outline-offset: -1px;
-}
-.gate button {
-  background: var(--accent);
+.gate button,
+.composer button {
+  background: #23211f;
   border: 0;
-  border-radius: 10px;
-  padding: 12px;
+  border-radius: 8px;
+  padding: 12px 22px;
   color: #fff;
+  font-size: 16px;
   cursor: pointer;
+}
+.gate button:hover,
+.composer button:hover:not(:disabled) {
+  background: #35322f;
 }
 
 /* ---- 本体 ---- */
 
 .app {
-  max-width: 780px;
+  max-width: 820px;
   margin: 0 auto;
   min-height: 100dvh;
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto 1fr auto auto;
 }
 
 header {
@@ -105,80 +131,173 @@ header {
 }
 header h1 {
   margin: 0;
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 600;
-}
-header span {
-  font-size: 13px;
 }
 
 main {
-  padding: 24px;
+  padding: 28px 24px;
   display: grid;
-  gap: 28px;
+  gap: 34px;
   align-content: start;
 }
 
 .intro {
   display: grid;
-  gap: 8px;
+  gap: 10px;
+  padding-top: 12px;
+}
+.intro h2 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
 }
 .intro p {
-  margin: 0;
-  font-size: 14px;
+  margin: 0 0 8px;
+  font-size: 15px;
 }
 
-.examples {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 8px;
+/* 質問候補。何を聞けばいいか分からない人の入口になる */
+.suggestions {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+.suggestion {
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.suggestion:hover {
+  border-color: var(--line-strong);
+  background: #f6f5f3;
+}
+.suggestion-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+.suggestion-body {
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.6;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .chip {
-  background: #262420;
-  border: 1px solid var(--line);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
   border-radius: 999px;
-  padding: 6px 14px;
-  font-size: 13px;
+  padding: 7px 15px;
+  font-size: 14px;
+  line-height: 1.5;
   text-decoration: none;
-  color: inherit;
+  color: var(--text);
   cursor: pointer;
 }
 .chip:hover {
-  border-color: var(--accent);
+  border-color: #8f8a84;
+  background: #f4f3f1;
 }
 
 .turn {
   display: grid;
-  gap: 12px;
+  gap: 14px;
 }
 
 .question {
   font-weight: 600;
-  font-size: 16px;
-  padding-left: 12px;
+  font-size: 17px;
+  padding-left: 14px;
   border-left: 3px solid var(--accent);
 }
 
+/* ---- 出典 ----
+ * 回答の下に置く。チップ状の見た目だと「押せる」ことが伝わりにくかったため、
+ * 一行ずつの枠付きリストにして、矢印とホバーで遷移することを示す。
+ */
+
 .sources {
-  display: flex;
-  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.sources h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+.sources ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
   gap: 8px;
+}
+.sources a {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 11px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  text-decoration: none;
+  color: var(--text);
+}
+.sources a:hover {
+  background: #f4f3f1;
+  border-color: #8f8a84;
+}
+.sources a:hover .source-title {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.source-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+.source-meta {
+  font-size: 14px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.source-arrow {
+  margin-left: auto;
+  font-size: 15px;
+  color: var(--muted);
+}
+/* 送信ボタン。文字を出さない分、押せる範囲は44px角を確保する */
+.send {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
 }
 
 .status {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   color: var(--muted);
-  font-size: 14px;
+  font-size: 15px;
 }
 .dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--accent);
+  flex: none;
   animation: pulse 1.2s ease-in-out infinite;
 }
 @keyframes pulse {
@@ -187,39 +306,120 @@ main {
   }
 }
 
-.answer {
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
 .caret {
   display: inline-block;
-  width: 8px;
-  height: 1em;
-  background: var(--accent);
+  width: 2px;
+  height: 1.05em;
+  background: var(--text);
   vertical-align: text-bottom;
+  margin-left: 2px;
   animation: pulse 1s step-end infinite;
 }
+
+/* ---- 回答本文（Markdown） ---- */
+
+.prose {
+  font-size: 16px;
+}
+.prose > *:first-child {
+  margin-top: 0;
+}
+.prose > *:last-child {
+  margin-bottom: 0;
+}
+.prose p {
+  margin: 0 0 1em;
+}
+.prose h3,
+.prose h4,
+.prose h5,
+.prose h6 {
+  margin: 1.5em 0 0.6em;
+  font-size: 16px;
+  font-weight: 700;
+}
+.prose ul,
+.prose ol {
+  margin: 0 0 1em;
+  padding-left: 1.5em;
+}
+.prose li {
+  margin: 0.25em 0;
+}
+.prose code {
+  background: #f1efec;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 14px;
+}
+.prose a {
+  color: var(--text);
+  text-underline-offset: 3px;
+}
+.prose blockquote {
+  margin: 0 0 1em;
+  padding-left: 14px;
+  border-left: 2px solid var(--line-strong);
+  color: var(--muted);
+  font-size: 15px;
+}
+.prose hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 1.5em 0;
+}
+
+/* 表は横に溢れるので、本文ではなく表自体をスクロールさせる */
+.table-scroll {
+  overflow-x: auto;
+  margin: 0 0 1em;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.prose table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 15px;
+}
+.prose th,
+.prose td {
+  border-bottom: 1px solid var(--line);
+  padding: 9px 13px;
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+.prose thead th {
+  background: #f6f5f3;
+  font-weight: 600;
+}
+.prose tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* ---- 入力欄 ---- */
 
 .composer {
   display: flex;
   gap: 10px;
-  padding: 16px 24px 24px;
+  padding: 16px 24px 12px;
   border-top: 1px solid var(--line);
   position: sticky;
   bottom: 0;
   background: var(--bg);
 }
-.composer button {
-  background: var(--accent);
-  border: 0;
-  border-radius: 10px;
-  padding: 0 22px;
-  color: #fff;
-  cursor: pointer;
-}
-.composer button:disabled {
-  background: #3a3733;
+.disclaimer {
+  margin: 0;
+  padding: 0 24px 20px;
+  text-align: center;
+  font-size: 14px;
   color: var(--muted);
+}
+
+.composer button:disabled {
+  background: #dedbd7;
+  color: #7c7772;
   cursor: not-allowed;
 }
