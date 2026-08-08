@@ -4,9 +4,9 @@ package server
 import (
 	"crypto/hmac"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -19,6 +19,7 @@ import (
 
 	"github.com/97kuek/WASAWiki-chatbot/backend/internal/index"
 	"github.com/97kuek/WASAWiki-chatbot/backend/internal/pipeline"
+	"github.com/97kuek/WASAWiki-chatbot/backend/internal/wiki"
 )
 
 const (
@@ -27,11 +28,10 @@ const (
 )
 
 type Config struct {
-	SharedPassword string // 部内で配る共有パスワード
-	SessionSecret  string // Cookie署名用。未設定なら起動時に生成する
-	DailyLimit     int    // 1セッションあたりの1日の質問数上限
-	AllowOrigin    string // 開発時にViteのdev serverから叩くためのCORS設定
-	SPADir         string // 指定するとビルド済みSPAも同じサーバーから配る
+	SessionSecret string // Cookie署名用。未設定なら起動時に生成する
+	DailyLimit    int    // 1セッションあたりの1日の質問数上限
+	AllowOrigin   string // 開発時にViteのdev serverから叩くためのCORS設定
+	SPADir        string // 指定するとビルド済みSPAも同じサーバーから配る
 }
 
 // spaHandler は静的ファイルを返し、見つからないパスは index.html に落とす
@@ -51,16 +51,18 @@ type Server struct {
 	cfg   Config
 	ix    *index.Index
 	pipe  *pipeline.Pipeline
+	auth  *wiki.Authenticator
 	limit *limiter
 }
 
-func New(cfg Config, ix *index.Index, pipe *pipeline.Pipeline) *Server {
-	return &Server{cfg: cfg, ix: ix, pipe: pipe, limit: newLimiter(cfg.DailyLimit)}
+func New(cfg Config, ix *index.Index, pipe *pipeline.Pipeline, auth *wiki.Authenticator) *Server {
+	return &Server{cfg: cfg, ix: ix, pipe: pipe, auth: auth, limit: newLimiter(cfg.DailyLimit)}
 }
 
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/login", s.handleLogin)
+	mux.HandleFunc("POST /api/logout", s.handleLogout)
 	mux.HandleFunc("GET /api/session", s.handleSession)
 	mux.HandleFunc("GET /api/ask", s.requireAuth(s.handleAsk))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -78,68 +80,106 @@ func (s *Server) Routes() http.Handler {
 
 // ---------------------------------------------------------------- 認証
 //
-// 共有パスワード1本 + 署名付きCookie。
-// URLを知っている人だけがアクセスできる方式は認証ではない、というのが採用理由。
-// 失効・監査ができない弱さは docs/01-設計方針.md §8-1 にトレードオフとして記録済み。
+// Wikiのアカウントで本人確認する。共有パスワード1本だと全員が同じ利用者に
+// なってしまい、チャット履歴を個人ごとに分けられないため。
+// パスワードは検証に使って捨て、Cookieには利用者名と有効期限だけを載せる。
 
-func (s *Server) sign(expiry int64) string {
+func (s *Server) sign(user string, expiry int64) string {
 	mac := hmac.New(sha256.New, []byte(s.cfg.SessionSecret))
-	fmt.Fprintf(mac, "%d", expiry)
-	return fmt.Sprintf("%d.%s", expiry, base64.RawURLEncoding.EncodeToString(mac.Sum(nil)))
+	fmt.Fprintf(mac, "%s|%d", user, expiry)
+	return fmt.Sprintf("%s|%d.%s", base64.RawURLEncoding.EncodeToString([]byte(user)),
+		expiry, base64.RawURLEncoding.EncodeToString(mac.Sum(nil)))
 }
 
-func (s *Server) verify(token string) bool {
-	parts := strings.SplitN(token, ".", 2)
-	if len(parts) != 2 {
-		return false
+// verify はCookieを検証し、利用者名を返す。
+func (s *Server) verify(token string) (string, bool) {
+	body, _, ok := strings.Cut(token, ".")
+	if !ok {
+		return "", false
 	}
-	expiry, err := strconv.ParseInt(parts[0], 10, 64)
+	encoded, rawExpiry, ok := strings.Cut(body, "|")
+	if !ok {
+		return "", false
+	}
+	user, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", false
+	}
+	expiry, err := strconv.ParseInt(rawExpiry, 10, 64)
 	if err != nil || time.Now().Unix() > expiry {
-		return false
+		return "", false
 	}
-	return hmac.Equal([]byte(s.sign(expiry)), []byte(token))
+	if !hmac.Equal([]byte(s.sign(string(user), expiry)), []byte(token)) {
+		return "", false
+	}
+	return string(user), true
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var body struct {
+		Username string `json:"username"`
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "リクエストが不正です"})
 		return
 	}
-	// タイミング攻撃を避けるため定数時間で比較する
-	if subtle.ConstantTimeCompare([]byte(body.Password), []byte(s.cfg.SharedPassword)) != 1 {
+
+	// パスワードはここで使い切る。保存もログ出力もしない
+	user, err := s.auth.Login(r.Context(), strings.TrimSpace(body.Username), body.Password)
+	if err != nil {
 		time.Sleep(300 * time.Millisecond) // 総当たりの速度を落とす
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "パスワードが違います"})
+		status, message := http.StatusUnauthorized, err.Error()
+		if errors.Is(err, wiki.ErrUnavailable) {
+			status = http.StatusBadGateway
+			log.Printf("Wikiへの接続に失敗: %v", err)
+			message = "Wikiに接続できませんでした。しばらくしてからお試しください"
+		}
+		writeJSON(w, status, map[string]string{"error": message})
 		return
 	}
+
 	http.SetCookie(w, &http.Cookie{
 		Name:     cookieName,
-		Value:    s.sign(time.Now().Add(sessionMaxAge).Unix()),
+		Value:    s.sign(user, time.Now().Add(sessionMaxAge).Unix()),
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   true,
 		SameSite: http.SameSiteNoneMode, // フロントを別オリジン(Cloudflare Pages)に置くため
 		MaxAge:   int(sessionMaxAge.Seconds()),
 	})
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "username": user})
 }
 
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
-	c, err := r.Cookie(cookieName)
-	ok := err == nil && s.verify(c.Value)
+	user, ok := s.currentUser(r)
 	remaining := 0
 	if ok {
-		remaining = s.limit.remaining(c.Value)
+		remaining = s.limit.remaining(user)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"authenticated": ok, "remaining": remaining})
+	writeJSON(w, http.StatusOK,
+		map[string]any{"authenticated": ok, "username": user, "remaining": remaining})
+}
+
+func (s *Server) handleLogout(w http.ResponseWriter, _ *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name: cookieName, Value: "", Path: "/", MaxAge: -1,
+		HttpOnly: true, Secure: true, SameSite: http.SameSiteNoneMode,
+	})
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) currentUser(r *http.Request) (string, bool) {
+	c, err := r.Cookie(cookieName)
+	if err != nil {
+		return "", false
+	}
+	return s.verify(c.Value)
 }
 
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		c, err := r.Cookie(cookieName)
-		if err != nil || !s.verify(c.Value) {
+		if _, ok := s.currentUser(r); !ok {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "ログインしてください"})
 			return
 		}
@@ -158,8 +198,8 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 
 	// レート制限。共有パスワードが漏れた場合、本当の費用リスクはインフラではなく
 	// API従量課金である（docs/01-設計方針.md §7）。これが実質的な上限装置になる。
-	c, _ := r.Cookie(cookieName)
-	if !s.limit.take(c.Value) {
+	user, _ := s.currentUser(r)
+	if !s.limit.take(user) {
 		writeJSON(w, http.StatusTooManyRequests,
 			map[string]string{"error": "本日の質問回数の上限に達しました"})
 		return

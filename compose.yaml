@@ -15,8 +15,8 @@ services:
     ports:
       - "8080:8080"
     environment:
-      # 本番では必ず変更すること。未設定だと起動しない
-      SHARED_PASSWORD: ${SHARED_PASSWORD:-wasa-dev}
+      # 認証はWikiのアカウントに委ねる（共有パスワードは廃止）
+      WIKI_API: ${WIKI_API:-https://wasabirdman.sakura.ne.jp/wbwiki/w/api.php}
       # 未設定だと再起動のたびに全員ログアウトになる
       SESSION_SECRET: ${SESSION_SECRET:-dev-secret-change-me}
       DAILY_LIMIT: ${DAILY_LIMIT:-30}

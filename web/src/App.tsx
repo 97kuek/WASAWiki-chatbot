@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ask, login, session, type Source } from "./api";
+import { ask, login, logout, session, type Source } from "./api";
 import { Markdown } from "./markdown";
 
 type Turn = {
@@ -44,9 +44,11 @@ const SUGGESTIONS: { title: string; body: string }[] = [
 
 export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null);
+  const [username, setUsername] = useState("");
   const [remaining, setRemaining] = useState(0);
-  const [password, setPassword] = useState("");
+  const [form, setForm] = useState({ username: "", password: "" });
   const [loginError, setLoginError] = useState("");
+  const [busy, setBusy] = useState(false);
   const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState<Turn[]>([]);
   const bottom = useRef<HTMLDivElement>(null);
@@ -54,6 +56,7 @@ export default function App() {
   useEffect(() => {
     session().then((s) => {
       setAuthed(s.authenticated);
+      setUsername(s.username);
       setRemaining(s.remaining);
     });
   }, []);
@@ -65,13 +68,26 @@ export default function App() {
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
     setLoginError("");
-    if (await login(password)) {
-      const s = await session();
-      setAuthed(true);
-      setRemaining(s.remaining);
-    } else {
-      setLoginError("パスワードが違います");
+    setBusy(true);
+    const error = await login(form.username, form.password);
+    setBusy(false);
+    // 成否にかかわらずパスワードは即座に画面から消す
+    setForm((f) => ({ ...f, password: "" }));
+    if (error) {
+      setLoginError(error);
+      return;
     }
+    const s = await session();
+    setAuthed(true);
+    setUsername(s.username);
+    setRemaining(s.remaining);
+  }
+
+  async function handleLogout() {
+    await logout();
+    setAuthed(false);
+    setUsername("");
+    setTurns([]); // 共用端末で次の人に会話が残らないようにする
   }
 
   async function handleAsk(text: string) {
@@ -118,17 +134,35 @@ export default function App() {
     return (
       <div className="center">
         <form className="card gate" onSubmit={handleLogin}>
+          <img src="/assets/wasa-logo.jpeg" alt="WASA 鳥人間プロジェクト" className="logo-large" />
           <h1>WASA Wiki チャット</h1>
-          <p className="muted">部内で配布されている合言葉を入力してください。</p>
+          <p className="muted">WASA Wiki と同じ利用者名・パスワードでログインしてください。</p>
           <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="合言葉"
+            type="text"
+            name="username"
+            autoComplete="username"
+            value={form.username}
+            onChange={(e) => setForm({ ...form, username: e.target.value })}
+            placeholder="利用者名"
             autoFocus
           />
+          <input
+            type="password"
+            name="password"
+            autoComplete="current-password"
+            value={form.password}
+            onChange={(e) => setForm({ ...form, password: e.target.value })}
+            placeholder="パスワード"
+          />
           {loginError && <p className="error">{loginError}</p>}
-          <button type="submit">入る</button>
+          <button type="submit" disabled={busy || !form.username || !form.password}>
+            {busy ? "確認中…" : "ログイン"}
+          </button>
+          <p className="note">
+            パスワードは Wiki で確認するためだけに使い、保存もしません。
+            パスワードを渡したくない場合は、Wikiの「特別:BotPasswords」で発行した
+            <code>利用者名@ボット名</code> でもログインできます。
+          </p>
         </form>
       </div>
     );
@@ -137,13 +171,23 @@ export default function App() {
   return (
     <div className="app">
       <header>
-        <h1>WASA Wiki チャット</h1>
-        <span className="muted">本日あと{remaining}回</span>
+        <h1>
+          <img src="/assets/wasa-logo.jpeg" alt="" className="logo" />
+          WASA Wiki チャット
+        </h1>
+        <div className="account">
+          <span className="muted">{username}</span>
+          <span className="muted">本日あと{remaining}回</span>
+          <button type="button" className="linkish" onClick={handleLogout}>
+            ログアウト
+          </button>
+        </div>
       </header>
 
       <main>
         {turns.length === 0 && (
           <div className="intro">
+            <img src="/assets/wasa-logo.jpeg" alt="" className="logo-large" />
             <h2>WASA Wiki チャット</h2>
             <p className="muted">
               引き継ぎ資料Wikiの内容に答えます。回答には必ず出典ページを示し、
@@ -224,10 +268,10 @@ export default function App() {
         >
           <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
             <path
-              d="M12 19V5M12 5l-6 6M12 5l6 6"
+              d="M21.5 2.5 2.5 10.2l7.3 2.8m11.7-10.5-7.6 19-2.9-7.3m10.5-11.7L9.8 13"
               fill="none"
               stroke="currentColor"
-              strokeWidth="2"
+              strokeWidth="1.8"
               strokeLinecap="round"
               strokeLinejoin="round"
             />

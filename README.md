@@ -56,7 +56,7 @@ python eval/answer_eval.py      # M2b: エンドツーエンドの回答品質
 ```bash
 # バックエンド
 cd backend
-SHARED_PASSWORD=... SESSION_SECRET=... DATA_DIR=../data go run .
+SESSION_SECRET=... DATA_DIR=../data go run .   # ログインはWikiのアカウントで行う
 
 # フロントエンド（別ターミナル）
 cd web && npm install && npm run dev
@@ -74,9 +74,9 @@ docker compose up --build   # → http://localhost:8080
 
 | 変数 | 既定 | 説明 |
 |---|---|---|
-| `SHARED_PASSWORD` | （必須） | 部内で配る合言葉 |
+| `WIKI_API` | 本Wikiのapi.php | ログイン時の照合先。利用者はこのWikiのアカウントで入る |
 | `SESSION_SECRET` | 自動生成 | Cookie署名鍵。未設定だと再起動で全員ログアウト |
-| `DAILY_LIMIT` | 30 | 1セッションあたりの1日の質問数。API費用の上限装置 |
+| `DAILY_LIMIT` | 30 | 利用者ひとりあたりの1日の質問数。API費用の上限装置 |
 | `LLM_PROVIDER` | `ollama` | `claude` にすると本番モデルを使う |
 | `CLAUDE_MODEL` | `claude-opus-5` | 費用優先なら `claude-sonnet-5` |
 | `DATA_DIR` | `data` | index.json と toc.md の置き場所 |
