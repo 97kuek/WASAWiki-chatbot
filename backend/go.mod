@@ -1,4 +1,4 @@
-module github.com/97kuek/WASAWiki-chatbot/backend
+module github.com/97kuek/wasa-chat/backend
 
 go 1.26.5
 

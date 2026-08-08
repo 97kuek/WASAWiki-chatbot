@@ -1,4 +1,4 @@
-// WASA Wiki チャットボットのAPIサーバー。
+// WASA ChatのAPIサーバー。
 //
 //	go run ./backend            # ローカル（Ollama）
 //	LLM_PROVIDER=claude go run ./backend
@@ -15,11 +15,11 @@ import (
 
 	"github.com/joho/godotenv"
 
-	"github.com/97kuek/WASAWiki-chatbot/backend/internal/index"
-	"github.com/97kuek/WASAWiki-chatbot/backend/internal/llm"
-	"github.com/97kuek/WASAWiki-chatbot/backend/internal/pipeline"
-	"github.com/97kuek/WASAWiki-chatbot/backend/internal/server"
-	"github.com/97kuek/WASAWiki-chatbot/backend/internal/wiki"
+	"github.com/97kuek/wasa-chat/backend/internal/index"
+	"github.com/97kuek/wasa-chat/backend/internal/llm"
+	"github.com/97kuek/wasa-chat/backend/internal/pipeline"
+	"github.com/97kuek/wasa-chat/backend/internal/server"
+	"github.com/97kuek/wasa-chat/backend/internal/wiki"
 )
 
 func env(key, fallback string) string {

@@ -20,6 +20,7 @@ type Chat = {
 };
 
 const MAX_CHATS = 30;
+const SUPPORT_URL = import.meta.env.VITE_SUPPORT_URL ?? "https://wasa-birdman.com/";
 
 /**
  * 回答末尾の「出典: ページ名（最終更新: YYYY-MM）」を落とす。
@@ -37,7 +38,6 @@ function stripCitation(text: string): string {
 const SUGGESTIONS: { title: string; body: string }[] = [
   { title: "空力設計の手順", body: "空力設計の設計手順について、詳しく分かりやすく説明してください" },
   { title: "荷重試験の申請", body: "荷重試験の申請方法を教えてください。申請先のメールアドレスも知りたいです" },
-  { title: "作業場のこと", body: "作業場の家賃・ルール・移転の経緯を教えてください" },
   { title: "鳥コンまでの流れ", body: "鳥人間コンテストまでにやっておくべきことを教えてください" },
   { title: "代ごとの違い", body: "空力設計は38代から41代にかけて何が変化しましたか？" },
   { title: "テストフライト", body: "テストフライトの申請方法と、TF前日までにやるべきことを教えてください" },
@@ -103,6 +103,7 @@ export default function App() {
   const [question, setQuestion] = useState("");
   const [chats, setChats] = useState<Chat[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(() => window.matchMedia("(min-width: 901px)").matches);
   const bottom = useRef<HTMLDivElement>(null);
 
   const activeChat = chats.find((chat) => chat.id === activeChatId);
@@ -121,6 +122,13 @@ export default function App() {
       setRemaining(current.remaining);
       if (current.authenticated) restoreHistory(current.username);
     });
+  }, []);
+
+  useEffect(() => {
+    const wide = window.matchMedia("(min-width: 901px)");
+    const followViewport = (event: MediaQueryListEvent) => setSidebarOpen(event.matches);
+    wide.addEventListener("change", followViewport);
+    return () => wide.removeEventListener("change", followViewport);
   }, []);
 
   useEffect(() => {
@@ -171,6 +179,7 @@ export default function App() {
     if (streaming) return;
     setActiveChatId(null);
     setQuestion("");
+    if (window.matchMedia("(max-width: 900px)").matches) setSidebarOpen(false);
   }
 
   function handleClearHistory() {
@@ -256,7 +265,7 @@ export default function App() {
           <img src="/assets/wasa-logo.jpeg" alt="WASA 鳥人間プロジェクト" className="logo-large" />
           <div className="login-heading">
             <p className="eyebrow">WASA 鳥人間プロジェクト</p>
-            <h1>Wiki チャット</h1>
+            <h1>WASA Chat</h1>
             <p className="muted">WASA Wiki と同じ利用者名・パスワードでログインしてください。</p>
           </div>
           <label>
@@ -291,11 +300,16 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell">
-      <aside className="history-panel" aria-label="チャット履歴">
-        <div className="brand">
-          <img src="/assets/wasa-logo.jpeg" alt="" className="logo" />
-          <span>WASA Wiki</span>
+    <div className={`app-shell ${sidebarOpen ? "" : "sidebar-collapsed"}`}>
+      <aside className="history-panel" aria-label="チャット履歴" aria-hidden={!sidebarOpen}>
+        <div className="brand-row">
+          <div className="brand">
+            <img src="/assets/wasa-logo.jpeg" alt="" className="logo" />
+            <span>WASA Chat</span>
+          </div>
+          <button type="button" className="sidebar-close" onClick={() => setSidebarOpen(false)} aria-label="履歴を閉じる">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6" /></svg>
+          </button>
         </div>
 
         <button type="button" className="new-chat" onClick={handleNewChat} disabled={streaming}>
@@ -318,7 +332,10 @@ export default function App() {
                 key={chat.id}
                 className={chat.id === activeChatId ? "active" : ""}
                 aria-current={chat.id === activeChatId ? "page" : undefined}
-                onClick={() => setActiveChatId(chat.id)}
+                onClick={() => {
+                  setActiveChatId(chat.id);
+                  if (window.matchMedia("(max-width: 900px)").matches) setSidebarOpen(false);
+                }}
               >
                 <HistoryIcon />
                 <span>{chat.title}</span>
@@ -331,19 +348,39 @@ export default function App() {
         <div className="account-card">
           <div>
             <span className="account-name">{username}</span>
-            <span>本日あと{remaining}回</span>
+            <span>本日はあと{remaining}回</span>
           </div>
           <button type="button" className="linkish" onClick={handleLogout}>ログアウト</button>
         </div>
       </aside>
+      {sidebarOpen && (
+        <button type="button" className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} aria-label="履歴を閉じる" />
+      )}
 
       <section className="chat-panel">
         <header className="chat-header">
-          <div>
-            <span className="header-kicker">WASA Wiki チャット</span>
-            <h1>{activeChat?.title ?? "新しいチャット"}</h1>
+          <div className="header-title">
+            <button type="button" className="sidebar-toggle" onClick={() => setSidebarOpen((open) => !open)} aria-label="チャット履歴を開く" aria-expanded={sidebarOpen}>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
+            </button>
+            <div>
+              <span className="header-kicker">WASA Chat</span>
+              <h1>{activeChat?.title ?? "新しいチャット"}</h1>
+            </div>
           </div>
-          <span className="header-remaining">本日あと{remaining}回</span>
+          <div className="header-actions">
+            <a className="support-link" href={SUPPORT_URL} target="_blank" rel="noreferrer noopener">
+              <span className="help-icon" aria-hidden="true">?</span>
+              <span>サポートサイト</span>
+            </a>
+            <span className="header-organization">WASA</span>
+            <button type="button" className="header-icon" aria-label="通知" title="通知はありません" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21h4" /></svg>
+            </button>
+            <span className="profile-avatar" title={username} aria-label={`利用者: ${username}`}>
+              {Array.from(username)[0] ?? "W"}
+            </span>
+          </div>
         </header>
 
         <main className="conversation" aria-live="polite">
@@ -353,7 +390,6 @@ export default function App() {
               <h2>引き継ぎ資料を、会話で探す</h2>
               <p className="muted">
                 部内Wikiと公式サイトを横断して回答し、参照した資料を示します。
-                資料にない内容は推測せず「記載がありません」と答えます。
               </p>
               <div className="suggestions">
                 {SUGGESTIONS.map((suggestion) => (
