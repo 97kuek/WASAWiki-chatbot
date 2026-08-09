@@ -29,12 +29,36 @@ MAX_CHUNKS = 8
 # B1や40thまで拾うと候補が増えすぎるため、英字で始まり数字を含む型番だけを扱う。
 # TR797の正解チャンクがBM25で22位だった実測は docs/02 §M8。
 IDENTIFIER_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_-]*[0-9][A-Za-z0-9_-]*")
+DEEP_QUESTION_PATTERN = re.compile(r"比較|違い|差異|変遷|歴代|全体|網羅|すべて|まとめ|傾向|なぜ|理由|背景|複数|どう変")
+RESPONSE_MODES = {"auto", "fast", "standard", "deep"}
+
+
+def resolve_response_mode(mode: str, question: str) -> str:
+    """Go側のresolveResponseModeと同じ規則で、自動モードを3段階へ解決する。"""
+    if mode not in RESPONSE_MODES:
+        raise ValueError(f"不正な回答モードです: {mode}")
+    if mode != "auto":
+        return mode
+    if DEEP_QUESTION_PATTERN.search(question):
+        return "deep"
+    if IDENTIFIER_PATTERN.search(question) or any(word in question for word in ("いつ", "何年", "誰")):
+        return "fast"
+    return "standard"
+
+
+def profile_for(mode: str, question: str, stage: str) -> str:
+    resolved = resolve_response_mode(mode, question)
+    if resolved == "standard" and stage == "answer":
+        # M2b-2で出典形式は軽量モデルでも31/31だったため、標準は検索だけを強くする。
+        return "fast"
+    return resolved
 
 
 class LLM(Protocol):
     """プロンプトとJSONスキーマを受け取り、パース済みの結果を返す。"""
 
-    def __call__(self, prompt: str, schema: dict | None = None, max_tokens: int = 800) -> Any: ...
+    def __call__(self, prompt: str, schema: dict | None = None, max_tokens: int = 800,
+                 profile: str = "fast") -> Any: ...
 
 
 @dataclass
@@ -154,10 +178,16 @@ class Pipeline:
         return f"{conversation}# 現在の質問\n\n{question}" if conversation else question
 
     def select_pages(
-        self, question: str, history: list[dict[str, str]] | None = None
+        self, question: str, history: list[dict[str, str]] | None = None,
+        mode: str = "auto",
     ) -> tuple[list[str], bool, list[str]]:
         search_question = self.contextual_question(question, history)
-        result = self.llm(self.toc + self.SELECT_PROMPT + search_question, self.SELECT_SCHEMA, 200)
+        result = self.llm(
+            self.toc + self.SELECT_PROMPT + search_question,
+            self.SELECT_SCHEMA,
+            200,
+            profile_for(mode, question, "selection"),
+        )
         titles = [t for t in result.get("titles", []) if isinstance(t, str)]
 
         # 空回答時だけのfallbackでは、LLMが人物ページを選んだTR797の誤答を
@@ -213,7 +243,7 @@ class Pipeline:
         "required": ["ids"],
     }
 
-    def select_chunks(self, question: str, titles: list[str]) -> list[str]:
+    def select_chunks(self, question: str, titles: list[str], mode: str = "auto") -> list[str]:
         """選択ページのチャンクを集める。総量が小さければ絞らない。
 
         36,261字の「駆動・フレーム班」のようなページを丸ごと渡すと文脈を圧迫するので、
@@ -244,7 +274,7 @@ class Pipeline:
             f"{catalog}\n\n---\n"
             f"質問「{question}」に答えるために必要な節を、最大{MAX_CHUNKS}件選び、IDだけをJSONで返してください。"
         )
-        result = self.llm(prompt, self.CHUNK_SCHEMA, 300)
+        result = self.llm(prompt, self.CHUNK_SCHEMA, 300, profile_for(mode, question, "selection"))
         # 索引全体ではなく、今回選んだページの節だけを受け付ける。
         picked = [i for i in result.get("ids", []) if i in ids]
         return merge(picked or ids)  # 型番一致を先に残し、残りをLLM候補で埋める
@@ -329,13 +359,14 @@ class Pipeline:
         scores.sort(reverse=True)
         return [t for score, t in scores[:MAX_PAGES] if score > 0]
 
-    def answer(self, question: str, history: list[dict[str, str]] | None = None) -> Answer:
+    def answer(self, question: str, history: list[dict[str, str]] | None = None,
+               mode: str = "auto") -> Answer:
         search_question = self.contextual_question(question, history)
-        titles, answerable, dropped = self.select_pages(question, history)
+        titles, answerable, dropped = self.select_pages(question, history, mode)
         if not titles:
             titles = self.fallback_pages(search_question)
 
-        chunk_ids = self.select_chunks(search_question, titles)
+        chunk_ids = self.select_chunks(search_question, titles, mode)
         blocks = []
         for cid in chunk_ids:
             page = self.pages[self.chunk_page[cid]]
@@ -360,7 +391,7 @@ class Pipeline:
                 conversation=self.conversation_section(history),
                 question=question,
             ),
-            None, 900)
+            None, 900, profile_for(mode, question, "answer"))
         return Answer(
             question=question,
             text=text if isinstance(text, str) else json.dumps(text, ensure_ascii=False),

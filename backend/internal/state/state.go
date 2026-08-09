@@ -27,6 +27,10 @@ type Turn struct {
 	// アイコンは現在の一覧から引き、消えていれば名前の頭文字で描く）
 	AssistantID   string `json:"assistantId,omitempty" firestore:"assistant_id,omitempty"`
 	AssistantName string `json:"assistantName,omitempty" firestore:"assistant_name,omitempty"`
+	// 回答時の指定と、自動判定後に実際に使ったモード。モデル名は履歴へ
+	// 保存しないため、将来モデルを更新しても画面表示が陳腐化しない。
+	ResponseMode string `json:"responseMode,omitempty" firestore:"response_mode,omitempty"`
+	ResolvedMode string `json:"resolvedMode,omitempty" firestore:"resolved_mode,omitempty"`
 }
 
 type Chat struct {

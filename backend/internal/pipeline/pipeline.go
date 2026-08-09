@@ -37,8 +37,9 @@ var jst = time.FixedZone("JST", 9*60*60)
 // 「無言で待たされる5秒」と「検索中→3ページ読んでいます→回答中と流れる5秒」では
 // 体感がまったく違う。進捗表示は実装が地味な割にUXへの効果が大きい。
 type Event struct {
-	Type    string   `json:"type"` // status | pages | delta | done | error
+	Type    string   `json:"type"` // mode | status | pages | delta | done | error
 	Message string   `json:"message,omitempty"`
+	Mode    string   `json:"mode,omitempty"`
 	Code    string   `json:"code,omitempty"`
 	RetryAt string   `json:"retry_at,omitempty"`
 	Pages   []Source `json:"pages,omitempty"`
@@ -60,6 +61,65 @@ type Source struct {
 type ConversationTurn struct {
 	Question string `json:"question"`
 	Answer   string `json:"answer"`
+}
+
+// ResponseMode は利用者に見せる回答モード。モデル名を直接受け付けないことで、
+// 廃止モデルへの固定と任意の高額モデル指定を防ぐ。
+type ResponseMode string
+
+const (
+	ModeAuto     ResponseMode = "auto"
+	ModeFast     ResponseMode = "fast"
+	ModeStandard ResponseMode = "standard"
+	ModeDeep     ResponseMode = "deep"
+)
+
+// ParseResponseMode はAPIから受け取った値を許可リストへ制限する。
+// 空文字は古い画面との互換のため自動モードとして扱う。
+func ParseResponseMode(raw string) (ResponseMode, bool) {
+	mode := ResponseMode(strings.TrimSpace(raw))
+	if mode == "" {
+		return ModeAuto, true
+	}
+	switch mode {
+	case ModeAuto, ModeFast, ModeStandard, ModeDeep:
+		return mode, true
+	default:
+		return "", false
+	}
+}
+
+var deepQuestionPattern = regexp.MustCompile(`比較|違い|差異|変遷|歴代|全体|網羅|すべて|まとめ|傾向|なぜ|理由|背景|複数|どう変`)
+
+// resolveResponseMode は追加のLLM呼び出しを増やさず、難しい問いだけ推論量を上げる。
+// 分類そのものの精度は評価スクリプトで測り、誤分類が見つかるまで規則を増やさない。
+func resolveResponseMode(requested ResponseMode, question string) ResponseMode {
+	if requested != ModeAuto {
+		return requested
+	}
+	if deepQuestionPattern.MatchString(question) {
+		return ModeDeep
+	}
+	// 型番の直接照合はGo側で決定的に候補を足せるため、LLMへ深い推論を
+	// させる便益が小さい。日付・人物の一点質問も同じ扱いにする。
+	if len(questionIdentifiers(question)) > 0 || strings.Contains(question, "いつ") ||
+		strings.Contains(question, "何年") || strings.Contains(question, "誰") {
+		return ModeFast
+	}
+	return ModeStandard
+}
+
+func profilesFor(mode ResponseMode) (selection, answer llm.Profile) {
+	switch mode {
+	case ModeFast:
+		return llm.ProfileFast, llm.ProfileFast
+	case ModeDeep:
+		return llm.ProfileDeep, llm.ProfileDeep
+	default:
+		// M2b-2では、ページ選択は判断力が必要だった一方、出典形式の遵守は
+		// 軽量モデルで31/31だった。標準では選択だけを強くする。
+		return llm.ProfileStandard, llm.ProfileFast
+	}
 }
 
 type Pipeline struct {
@@ -175,6 +235,14 @@ func inScope(pg *index.Page, a *state.Assistant) bool {
 
 // Run は質問に答え、進行状況を emit に流す。assistant は未選択なら nil。
 func (p *Pipeline) Run(ctx context.Context, question string, history []ConversationTurn, assistant *state.Assistant, emit func(Event)) error {
+	return p.RunWithMode(ctx, question, history, assistant, ModeAuto, emit)
+}
+
+// RunWithMode は質問の種類と利用者の指定から、段階ごとの能力を決めて回答する。
+func (p *Pipeline) RunWithMode(ctx context.Context, question string, history []ConversationTurn, assistant *state.Assistant, requested ResponseMode, emit func(Event)) error {
+	resolved := resolveResponseMode(requested, question)
+	selectionProfile, answerProfile := profilesFor(resolved)
+	emit(Event{Type: "mode", Mode: string(resolved)})
 	emit(Event{Type: "status", Message: "目次から関連ページを探しています"})
 	onWait := func(info llm.WaitInfo) {
 		message := "Geminiへの送信間隔を調整しています"
@@ -191,7 +259,7 @@ func (p *Pipeline) Run(ctx context.Context, question string, history []Conversat
 	}
 
 	searchQuestion := contextualQuestion(question, history)
-	pages, err := p.selectPages(ctx, searchQuestion, assistant, onWait)
+	pages, err := p.selectPages(ctx, searchQuestion, assistant, selectionProfile, onWait)
 	if err != nil {
 		return fmt.Errorf("ページ選択: %w", err)
 	}
@@ -228,7 +296,7 @@ func (p *Pipeline) Run(ctx context.Context, question string, history []Conversat
 	}
 	emit(Event{Type: "pages", Pages: sources})
 
-	chunks, err := p.selectChunks(ctx, searchQuestion, pages, onWait)
+	chunks, err := p.selectChunks(ctx, searchQuestion, pages, selectionProfile, onWait)
 	if err != nil {
 		return fmt.Errorf("節の絞り込み: %w", err)
 	}
@@ -273,6 +341,7 @@ func (p *Pipeline) Run(ctx context.Context, question string, history []Conversat
 			conversationSection(history),
 			question),
 		MaxTokens: 1500,
+		Profile:   answerProfile,
 		OnWait:    onWait,
 	}, func(text string) {
 		emit(Event{Type: "delta", Text: text})
@@ -306,7 +375,7 @@ func contextualQuestion(question string, history []ConversationTurn) string {
 	return conversationSection(history) + "# 現在の質問\n\n" + question
 }
 
-func (p *Pipeline) selectPages(ctx context.Context, question string, a *state.Assistant, onWait func(llm.WaitInfo)) ([]*index.Page, error) {
+func (p *Pipeline) selectPages(ctx context.Context, question string, a *state.Assistant, profile llm.Profile, onWait func(llm.WaitInfo)) ([]*index.Page, error) {
 	// 絞り込み中でも**目次そのものは削らない**。目次を差し替えるとアシスタントごとに
 	// プロンプトキャッシュが分裂し、使う人の少ないアシスタントほど単価が上がる
 	// （llm.Request のコメント参照）。候補を減らす指示だけを足し、
@@ -321,6 +390,7 @@ func (p *Pipeline) selectPages(ctx context.Context, question string, a *state.As
 		Prompt:    selectPrompt + question + scopeHint,
 		Schema:    selectSchema,
 		MaxTokens: 300,
+		Profile:   profile,
 		OnWait:    onWait,
 	})
 	if err != nil {
@@ -474,7 +544,7 @@ func (p *Pipeline) fallbackPages(question string, a *state.Assistant) []*index.P
 	return out
 }
 
-func (p *Pipeline) selectChunks(ctx context.Context, question string, pages []*index.Page, onWait func(llm.WaitInfo)) ([]string, error) {
+func (p *Pipeline) selectChunks(ctx context.Context, question string, pages []*index.Page, profile llm.Profile, onWait func(llm.WaitInfo)) ([]string, error) {
 	var ids []string
 	total := 0
 	for _, pg := range pages {
@@ -517,6 +587,7 @@ func (p *Pipeline) selectChunks(ctx context.Context, question string, pages []*i
 			catalog.String(), question, maxChunks),
 		Schema:    chunkSchema,
 		MaxTokens: 400,
+		Profile:   profile,
 		OnWait:    onWait,
 	})
 	if err != nil {

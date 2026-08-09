@@ -131,12 +131,23 @@ func main() {
 		if key == "" {
 			log.Fatal("GEMINI_API_KEY が未設定です")
 		}
-		client = llm.NewGemini(
+		// 強いモデルは、比較評価で有効性を確認してから環境変数へ設定する。
+		// 未設定時は全モードで同じモデルを使い、推論量だけを変えるため、
+		// UIを追加しただけで費用構造が黙って変わることはない。
+		baseModel := env("GEMINI_MODEL", "gemini-3.5-flash-lite")
+		models := llm.ModelProfiles{
+			Default:  baseModel,
+			Fast:     env("GEMINI_FAST_MODEL", baseModel),
+			Standard: env("GEMINI_STANDARD_MODEL", baseModel),
+			Deep:     env("GEMINI_DEEP_MODEL", baseModel),
+		}
+		client = llm.NewGeminiProfiles(
 			key,
-			env("GEMINI_MODEL", "gemini-flash-latest"),
+			models,
 			envSeconds("GEMINI_MIN_INTERVAL", 4),
 			envNonNegativeInt("GEMINI_MAX_RETRIES", 2),
 		)
+		log.Printf("Gemini回答モード: 高速=%s / 標準=%s / じっくり=%s", models.Fast, models.Standard, models.Deep)
 	case "compat", "grok", "groq", "openrouter", "mistral":
 		client = llm.NewCompat(os.Getenv("LLM_BASE_URL"), os.Getenv("LLM_API_KEY"), os.Getenv("LLM_MODEL"))
 	default:

@@ -118,7 +118,8 @@ class OllamaLLM(Base):
     def name(self) -> str:
         return f"ollama/{self.model}"
 
-    def __call__(self, prompt: str, schema: dict | None = None, max_tokens: int = 800) -> Any:
+    def __call__(self, prompt: str, schema: dict | None = None, max_tokens: int = 800,
+                 profile: str = "fast") -> Any:
         payload: dict[str, Any] = {
             "model": self.model,
             "prompt": prompt,
@@ -174,6 +175,11 @@ class GeminiLLM(Base):
             raise RuntimeError("GEMINI_API_KEY を .env に設定してください")
         self.timeout = timeout
         self.model = model or os.environ.get("GEMINI_MODEL") or self.pick_model()
+        self.models = {
+            "fast": os.environ.get("GEMINI_FAST_MODEL") or self.model,
+            "standard": os.environ.get("GEMINI_STANDARD_MODEL") or self.model,
+            "deep": os.environ.get("GEMINI_DEEP_MODEL") or self.model,
+        }
         # 無料枠は毎分のリクエスト数が絞られている。事前に間隔を空けておくと
         # 429 での待ち直しより結果的に速い
         self.interval = float(os.environ.get("GEMINI_MIN_INTERVAL", "4"))
@@ -215,16 +221,22 @@ class GeminiLLM(Base):
         flash = [n for n in available if "flash" in n]
         return max(flash, key=version) if flash else available[0]
 
-    def __call__(self, prompt: str, schema: dict | None = None, max_tokens: int = 800) -> Any:
-        config: dict[str, Any] = {
-            "temperature": 0,
+    def __call__(self, prompt: str, schema: dict | None = None, max_tokens: int = 800,
+                 profile: str = "fast") -> Any:
+        if profile not in ("fast", "standard", "deep"):
+            raise ValueError(f"不正なLLMプロファイルです: {profile}")
+        model = self.models[profile]
+        config: dict[str, Any] = {"maxOutputTokens": max_tokens}
+        if model.startswith(("gemini-3.", "gemini-3-")):
             # Gemini 3.x は思考トークンが maxOutputTokens を食う。実測では
             # 「1+1は？」でも47トークン使い、予算50だと本文がゼロ件で返ってきた。
-            # 思考の分を上乗せしておく
-            "maxOutputTokens": max_tokens + 2000,
-            # thinkingBudget は 3.6-flash では 400 になる。3.x は thinkingLevel
-            "thinkingConfig": {"thinkingLevel": "LOW"},
-        }
+            config["maxOutputTokens"] = max_tokens + 2000
+            config["thinkingConfig"] = {
+                "thinkingLevel": {"fast": "minimal", "standard": "medium", "deep": "high"}[profile]
+            }
+        else:
+            # Gemini 3.5以降はsampling parameterが非推奨なので、旧モデルだけに送る。
+            config["temperature"] = 0
         if schema:
             config["responseMimeType"] = "application/json"
             config["responseSchema"] = to_gemini_schema(schema)
@@ -237,7 +249,7 @@ class GeminiLLM(Base):
         result = post(
             # APIキーはクエリではなくヘッダで渡す。クエリに載せると、429などの
             # 例外メッセージにURLごと鍵が入り、測定ログを共有した時点で漏れる
-            f"{self.BASE}/models/{self.model}:generateContent",
+            f"{self.BASE}/models/{model}:generateContent",
             {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": config},
             headers={"x-goog-api-key": self.key},
             timeout=self.timeout,
@@ -274,7 +286,8 @@ class CompatLLM(Base):
     def name(self) -> str:
         return f"compat/{self.model}"
 
-    def __call__(self, prompt: str, schema: dict | None = None, max_tokens: int = 800) -> Any:
+    def __call__(self, prompt: str, schema: dict | None = None, max_tokens: int = 800,
+                 profile: str = "fast") -> Any:
         if schema:
             # json_schema モードは提供元によって対応が割れる。
             # 広く通る json_object と、プロンプトでのスキーマ指示を併用する

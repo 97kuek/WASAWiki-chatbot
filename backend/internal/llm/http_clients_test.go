@@ -43,6 +43,40 @@ func TestGeminiRetriesTemporaryFailure(t *testing.T) {
 	}
 }
 
+func TestGeminiProfileSelectsServerConfiguredModelAndThinking(t *testing.T) {
+	g := NewGeminiProfiles("test-key", ModelProfiles{
+		Default: "gemini-3.5-flash-lite", Fast: "gemini-3.5-flash-lite",
+		Standard: "gemini-3.6-flash", Deep: "gemini-3.6-flash",
+	}, 0, 0)
+
+	if got := g.modelFor(ProfileStandard); got != "gemini-3.6-flash" {
+		t.Fatalf("標準モデルを選べていない: %q", got)
+	}
+	payload := g.payload(Request{MaxTokens: 300, Profile: ProfileDeep}, "gemini-3.6-flash")
+	config := payload["generationConfig"].(map[string]any)
+	thinking := config["thinkingConfig"].(map[string]any)
+	if thinking["thinkingLevel"] != "high" {
+		t.Fatalf("じっくりの推論量が不正: %+v", thinking)
+	}
+	if _, exists := config["temperature"]; exists {
+		t.Fatal("Gemini 3系へ非推奨のtemperatureを送っている")
+	}
+	if config["maxOutputTokens"] != 2300 {
+		t.Fatalf("思考用の余白がない: %+v", config)
+	}
+}
+
+func TestGeminiLegacyModelOmitsThinkingLevel(t *testing.T) {
+	g := NewGemini("test-key", "gemini-2.5-flash", 0, 0)
+	config := g.payload(Request{MaxTokens: 300, Profile: ProfileDeep}, "gemini-2.5-flash")["generationConfig"].(map[string]any)
+	if _, exists := config["thinkingConfig"]; exists {
+		t.Fatal("thinkingLevel非対応モデルへ設定を送っている")
+	}
+	if config["temperature"] != 0 {
+		t.Fatalf("旧モデルの決定性設定が消えた: %+v", config)
+	}
+}
+
 func TestGeminiStopsRequestsDuringRateLimitCooldown(t *testing.T) {
 	var calls atomic.Int32
 	g := NewGemini("test-key", "test-model", 0, 0)

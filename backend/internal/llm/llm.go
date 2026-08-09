@@ -71,8 +71,22 @@ type Request struct {
 	Prompt    string          // 質問ごとに変わる部分
 	Schema    json.RawMessage // 構造化出力のJSONスキーマ。nil なら自由形式
 	MaxTokens int
-	OnWait    func(WaitInfo) // nilなら待機状況を通知しない
+	// Profile はモデル名を利用者へ公開せず、処理に必要な能力だけを伝える。
+	// 実際のモデルIDはサーバー側の許可済み設定から選ぶため、クライアントが
+	// 任意の高額モデルを指定することはできない。
+	Profile Profile
+	OnWait  func(WaitInfo) // nilなら待機状況を通知しない
 }
+
+// Profile は呼び出しごとの速度・推論量の段階。プロバイダが対応しない場合は
+// 既定モデルへ安全にフォールバックする。
+type Profile string
+
+const (
+	ProfileFast     Profile = "fast"
+	ProfileStandard Profile = "standard"
+	ProfileDeep     Profile = "deep"
+)
 
 // Delta はストリーミング中に届く差分。
 type Delta func(text string)

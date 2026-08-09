@@ -894,11 +894,24 @@ button:disabled {
 
 /* 誰が答えたかを本文の上に出す。口調が変わった理由が分かるようにする */
 .answer-author {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   margin-bottom: 2px;
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;
   line-height: 1.4;
+}
+
+.answer-mode {
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
 }
 
 .assistant-content {
@@ -1289,6 +1302,55 @@ button:disabled {
   margin-inline: auto;
 }
 
+.response-mode-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.response-mode-label {
+  font-weight: 600;
+}
+
+.response-mode-select {
+  width: 108px;
+}
+
+.response-mode-select .select-menu-trigger {
+  min-height: 30px;
+  padding: 4px 8px 4px 10px;
+  border-color: var(--line);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 92%);
+  font-size: 12px;
+}
+
+.response-mode-select .select-menu-trigger svg {
+  width: 16px;
+}
+
+.response-mode-select .select-menu-options {
+  top: auto;
+  bottom: calc(100% + 6px);
+  width: 160px;
+}
+
+.response-mode-select .select-menu-options li {
+  min-height: 34px;
+  padding-block: 5px;
+  font-size: 12px;
+}
+
+.response-mode-help {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .composer {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1422,6 +1484,8 @@ button:disabled {
     min-height: 58px;
     padding-inline: 12px;
   }
+
+  .response-mode-help { display: none; }
 }
 
 @media (max-width: 560px) {

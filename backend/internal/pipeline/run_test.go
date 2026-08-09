@@ -16,20 +16,25 @@ import (
 // stubLLM はページ選択に固定の答えを返し、回答生成のプロンプトを記録する。
 // 本物のモデルを呼ばずに「何を渡しているか」だけを検証したい。
 type stubLLM struct {
-	titles     []string
-	chunkIDs   []string // 節の絞り込みで返させるID。空なら選ばせない
-	lastAnswer string   // 回答生成に渡った Prompt
-	lastCached string   // 同 Cached（目次はこちらに載る）
-	lastSelect string   // ページ選択に渡った Prompt
-	lastSystem string   // 回答生成に渡った System
+	titles        []string
+	chunkIDs      []string // 節の絞り込みで返させるID。空なら選ばせない
+	lastAnswer    string   // 回答生成に渡った Prompt
+	lastCached    string   // 同 Cached（目次はこちらに載る）
+	lastSelect    string   // ページ選択に渡った Prompt
+	lastSystem    string   // 回答生成に渡った System
+	selectProfile llm.Profile
+	chunkProfile  llm.Profile
+	answerProfile llm.Profile
 }
 
 func (s *stubLLM) Complete(_ context.Context, req llm.Request) (string, error) {
 	if strings.Contains(req.Prompt, "節の一覧") {
+		s.chunkProfile = req.Profile
 		out, _ := json.Marshal(map[string]any{"ids": s.chunkIDs})
 		return string(out), nil
 	}
 	s.lastSelect = req.Prompt
+	s.selectProfile = req.Profile
 	out, _ := json.Marshal(map[string]any{"titles": s.titles, "answerable": true})
 	return string(out), nil
 }
@@ -38,6 +43,7 @@ func (s *stubLLM) Stream(_ context.Context, req llm.Request, onDelta llm.Delta) 
 	s.lastAnswer = req.Prompt
 	s.lastCached = req.Cached
 	s.lastSystem = req.System
+	s.answerProfile = req.Profile
 	onDelta("（ダミー回答）")
 	return "（ダミー回答）", nil
 }
@@ -202,6 +208,41 @@ func TestRunUsesRecentConversationWithoutTreatingItAsEvidence(t *testing.T) {
 	}
 }
 
+func TestResponseModeUsesDifferentProfilesByStage(t *testing.T) {
+	client := &stubLLM{titles: []string{"電装班"}}
+	pipe := New(testIndex(t), client)
+	var resolved string
+	if err := pipe.RunWithMode(context.Background(), "電装班について教えて", nil, nil, ModeStandard, func(event Event) {
+		if event.Type == "mode" {
+			resolved = event.Mode
+		}
+	}); err != nil {
+		t.Fatalf("RunWithMode が失敗: %v", err)
+	}
+	if resolved != string(ModeStandard) {
+		t.Fatalf("解決したモードが画面へ流れていない: %q", resolved)
+	}
+	if client.selectProfile != llm.ProfileStandard || client.answerProfile != llm.ProfileFast {
+		t.Fatalf("標準モードの段階別設定が不正: select=%q answer=%q", client.selectProfile, client.answerProfile)
+	}
+}
+
+func TestAutoResponseModeRaisesEffortOnlyForComplexQuestions(t *testing.T) {
+	cases := []struct {
+		question string
+		want     ResponseMode
+	}{
+		{"TR797とは何ですか？", ModeFast},
+		{"空力設計は38代から41代でどう変化しましたか？", ModeDeep},
+		{"フライトシミュレーターについて教えて", ModeStandard},
+	}
+	for _, tc := range cases {
+		if got := resolveResponseMode(ModeAuto, tc.question); got != tc.want {
+			t.Errorf("resolveResponseMode(%q) = %q, want %q", tc.question, got, tc.want)
+		}
+	}
+}
+
 func TestGenericCanAnswerSeparatedGeneralKnowledgeWithoutPages(t *testing.T) {
 	client := &stubLLM{}
 	pipe := New(testIndex(t), client)
@@ -226,7 +267,7 @@ func TestSelectPagesAddsNormalizedIdentifierMatch(t *testing.T) {
 	client := &stubLLM{titles: []string{"人物ページ"}}
 	pipe := New(testIdentifierIndex(t), client)
 
-	pages, err := pipe.selectPages(context.Background(), "TR797とは何ですか？", nil, nil)
+	pages, err := pipe.selectPages(context.Background(), "TR797とは何ですか？", nil, llm.ProfileFast, nil)
 	if err != nil {
 		t.Fatalf("ページ選択が失敗: %v", err)
 	}
@@ -367,7 +408,7 @@ func TestSelectChunksRejectsOutOfScopeIDs(t *testing.T) {
 		t.Fatal("下準備のページが無い")
 	}
 	pipe := New(ix, &stubLLM{chunkIDs: []string{"p1-c0"}}) // 選択外のWikiの節
-	got, err := pipe.selectChunks(context.Background(), "質問", []*index.Page{site}, nil)
+	got, err := pipe.selectChunks(context.Background(), "質問", []*index.Page{site}, llm.ProfileStandard, nil)
 	if err != nil {
 		t.Fatalf("selectChunks が失敗: %v", err)
 	}

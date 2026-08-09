@@ -14,6 +14,7 @@ import {
   type Assistant,
   type AssistantDraft,
   type Chat,
+  type ResponseMode,
   type Team,
   type Turn,
 } from "./api";
@@ -33,6 +34,7 @@ const ANNOUNCEMENT_READ_KEY = "wasa-chat-read-announcements";
 const ASSISTANT_KEY = "wasa-chat-assistant";
 const ASSISTANT_FAVORITES_KEY = "wasa-chat-assistant-favorites";
 const ASSISTANT_SORT_KEY = "wasa-chat-assistant-sort";
+const RESPONSE_MODE_KEY = "wasa-chat-response-mode";
 const TOAST_DURATION_MS = 3000;
 const CENTER_ICON_POSITION: IconCropPosition = { x: 50, y: 50 };
 
@@ -49,6 +51,32 @@ const ASSISTANT_SORT_OPTIONS: SelectOption[] = [
   { value: "name", label: "名前順" },
   { value: "author", label: "作成者順" },
 ];
+
+const RESPONSE_MODE_OPTIONS: SelectOption[] = [
+  { value: "auto", label: "自動" },
+  { value: "fast", label: "高速" },
+  { value: "standard", label: "標準" },
+  { value: "deep", label: "じっくり" },
+];
+
+const RESPONSE_MODE_LABELS: Record<ResponseMode, string> = {
+  auto: "自動",
+  fast: "高速",
+  standard: "標準",
+  deep: "じっくり",
+};
+
+const RESPONSE_MODE_HELP: Record<ResponseMode, string> = {
+  auto: "質問に合わせて自動調整",
+  fast: "一点だけをすばやく確認",
+  standard: "検索を重視した通常回答",
+  deep: "比較や変遷を時間をかけて整理",
+};
+
+function loadResponseMode(): ResponseMode {
+  const saved = localStorage.getItem(RESPONSE_MODE_KEY);
+  return saved === "fast" || saved === "standard" || saved === "deep" ? saved : "auto";
+}
 
 const emptyDraft: AssistantDraft = { id: "", name: "", description: "", instruction: "" };
 
@@ -68,6 +96,14 @@ function stripCitation(text: string): string {
   if (start === -1) return text.trim();
   const notes = lines.slice(start).filter((line) => /^\s*[※注]/.test(line));
   return [...lines.slice(0, start), ...notes].join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function turnModeLabel(turn: Turn): string | null {
+  if (!turn.responseMode) return null;
+  if (turn.responseMode === "auto" && turn.resolvedMode) {
+    return `自動（${RESPONSE_MODE_LABELS[turn.resolvedMode]}）`;
+  }
+  return RESPONSE_MODE_LABELS[turn.responseMode];
 }
 
 /** 新入生や代替わり直後でも質問を始められるよう、具体的な入口を用意する。 */
@@ -254,6 +290,7 @@ export default function App() {
   const [teams, setTeams] = useState<Team[]>([]);
   const [favoriteAssistantIds, setFavoriteAssistantIds] = useState(loadFavoriteAssistantIds);
   const [assistantSort, setAssistantSort] = useState<AssistantSort>(loadAssistantSort);
+  const [responseMode, setResponseMode] = useState<ResponseMode>(loadResponseMode);
   // 選んだアシスタントは端末に覚える。毎回選び直させると、結局
   // 誰も使わない機能になる（サーバーに持つほどの情報でもない）
   const [assistantId, setAssistantId] = useState(() => localStorage.getItem(ASSISTANT_KEY) ?? "");
@@ -764,6 +801,7 @@ export default function App() {
       // 後から一覧が変わっても、この回答を出したアシスタントを辿れるようにする
       assistantId: activeAssistant?.id,
       assistantName: activeAssistant?.name,
+      responseMode,
     };
 
     // 送信した瞬間に質問の吹き出しを出し、過去の会話への追質問なら履歴の先頭へ戻す。
@@ -797,6 +835,9 @@ export default function App() {
     try {
       await ask(q, (event) => {
       switch (event.type) {
+        case "mode":
+          patch((current) => ({ ...current, resolvedMode: event.mode }));
+          break;
         case "status":
           patch((current) => ({ ...current, status: event.message, retryAt: event.retry_at }));
           break;
@@ -820,7 +861,7 @@ export default function App() {
           patch((current) => ({ ...current, streaming: false, status: "", retryAt: undefined }));
           break;
       }
-      }, undefined, assistantId, context);
+      }, undefined, assistantId, context, responseMode);
     } catch (error) {
       // fetch自体の失敗やストリームの切断は ask() の中でイベントにならない。
       // ここで拾わないと streaming が立ったままになり、入力欄が永久に
@@ -1304,7 +1345,10 @@ export default function App() {
                   ? <AssistantAvatar name={turn.assistantName} icon={assistants.find((a) => a.id === turn.assistantId)?.icon} size={34} />
                   : <img src="/assets/wasa-chat-mark-photo-trimmed.png" alt="" className="assistant-avatar" />}
                 <div className="assistant-content">
-                  <div className="answer-author">{turn.assistantName ?? "WASA Chat"}</div>
+                  <div className="answer-author">
+                    <span>{turn.assistantName ?? "WASA Chat"}</span>
+                    {turnModeLabel(turn) && <span className="answer-mode">{turnModeLabel(turn)}</span>}
+                  </div>
                   {turn.status && (
                     <div className="status">
                       <FlightLoader />
@@ -1358,6 +1402,22 @@ export default function App() {
         </main>
 
         <div className="composer-area">
+          <div className="response-mode-bar">
+            <span className="response-mode-label">回答モード</span>
+            <div className="response-mode-select">
+              <SelectMenu
+                label="回答モード"
+                value={responseMode}
+                options={RESPONSE_MODE_OPTIONS}
+                onChange={(value) => {
+                  const next = value as ResponseMode;
+                  setResponseMode(next);
+                  localStorage.setItem(RESPONSE_MODE_KEY, next);
+                }}
+              />
+            </div>
+            <span className="response-mode-help">{RESPONSE_MODE_HELP[responseMode]}</span>
+          </div>
           <form
             className="composer"
             onSubmit={(event) => {

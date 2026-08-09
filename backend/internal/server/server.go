@@ -330,6 +330,15 @@ func validateChat(chat *state.Chat, expectedID string) bool {
 			len(turn.AssistantID) > 64 || len([]rune(turn.AssistantName)) > 40 {
 			return false
 		}
+		if _, ok := pipeline.ParseResponseMode(turn.ResponseMode); !ok {
+			return false
+		}
+		if turn.ResolvedMode != "" {
+			resolved, ok := pipeline.ParseResponseMode(turn.ResolvedMode)
+			if !ok || resolved == pipeline.ModeAuto {
+				return false
+			}
+		}
 		for _, source := range turn.Sources {
 			parsed, err := url.Parse(source.URL)
 			if err != nil || parsed.Host == "" || parsed.Scheme != "http" && parsed.Scheme != "https" ||
@@ -586,9 +595,10 @@ func validConversationContext(context []pipeline.ConversationTurn) bool {
 
 func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Question    string                      `json:"question"`
-		AssistantID string                      `json:"assistantId"`
-		Context     []pipeline.ConversationTurn `json:"context"`
+		Question     string                      `json:"question"`
+		AssistantID  string                      `json:"assistantId"`
+		ResponseMode string                      `json:"responseMode"`
+		Context      []pipeline.ConversationTurn `json:"context"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32*1024)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "リクエストが不正です"})
@@ -602,6 +612,11 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	if !validConversationContext(body.Context) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "直近の会話が不正です"})
+		return
+	}
+	responseMode, ok := pipeline.ParseResponseMode(body.ResponseMode)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "回答モードが不正です"})
 		return
 	}
 
@@ -667,7 +682,7 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 
-	if err := s.pipe.Run(r.Context(), question, body.Context, selected, emit); err != nil {
+	if err := s.pipe.RunWithMode(r.Context(), question, body.Context, selected, responseMode, emit); err != nil {
 		log.Printf("質問の処理に失敗: %v", err)
 		message := "回答の生成に失敗しました"
 		code := ""

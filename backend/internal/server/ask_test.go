@@ -30,3 +30,14 @@ func TestValidConversationContext(t *testing.T) {
 		})
 	}
 }
+
+func TestResponseModeValidation(t *testing.T) {
+	for _, valid := range []string{"", "auto", "fast", "standard", "deep"} {
+		if _, ok := pipeline.ParseResponseMode(valid); !ok {
+			t.Errorf("有効な回答モードを拒否した: %q", valid)
+		}
+	}
+	if _, ok := pipeline.ParseResponseMode("gemini-3.6-flash"); ok {
+		t.Fatal("利用者が生のモデルIDを指定できている")
+	}
+}

@@ -9,6 +9,9 @@ export type Source = {
   origin?: "wiki" | "site";
 };
 
+export type ResponseMode = "auto" | "fast" | "standard" | "deep";
+export type ResolvedResponseMode = Exclude<ResponseMode, "auto">;
+
 export type Turn = {
   question: string;
   answer: string;
@@ -22,6 +25,9 @@ export type Turn = {
    *  アイコンは持たない（履歴が肥大するため、現在の一覧から引く）。 */
   assistantId?: string;
   assistantName?: string;
+  /** 利用者が選んだモードと、自動判定後に実際に使われたモード。 */
+  responseMode?: ResponseMode;
+  resolvedMode?: ResolvedResponseMode;
 };
 
 export type Chat = {
@@ -38,6 +44,7 @@ export type ConversationContextTurn = Pick<Turn, "question" | "answer">;
 
 /** サーバーから流れてくる進捗イベント。pipeline.Event と対応する。 */
 export type Event =
+  | { type: "mode"; mode: ResolvedResponseMode }
   | { type: "status"; message: string; retry_at?: string }
   | { type: "pages"; pages: Source[] }
   | { type: "delta"; text: string }
@@ -190,13 +197,14 @@ export async function ask(
   signal?: AbortSignal,
   assistantId?: string,
   context: ConversationContextTurn[] = [],
+  responseMode: ResponseMode = "auto",
 ): Promise<void> {
   // 非公開Wikiに関する質問をURLへ載せるとアクセスログに残るため、本文で送る。
   const res = await fetch(`${base}/api/ask`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, assistantId: assistantId ?? "", context }),
+    body: JSON.stringify({ question, assistantId: assistantId ?? "", context, responseMode }),
     signal,
   });
   if (!res.ok || !res.body) {

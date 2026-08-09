@@ -24,6 +24,7 @@ import (
 type Gemini struct {
 	key          string
 	model        string
+	models       map[Profile]string
 	http         *http.Client
 	requestSlot  chan struct{}
 	lastRequest  time.Time
@@ -35,15 +36,42 @@ type Gemini struct {
 
 const geminiBase = "https://generativelanguage.googleapis.com/v1beta"
 
+// ModelProfiles は画面の回答モードに対応する、サーバー管理のモデル許可リスト。
+// 空欄はDefaultへ戻すため、一部だけ設定しても起動できる。
+type ModelProfiles struct {
+	Default  string
+	Fast     string
+	Standard string
+	Deep     string
+}
+
 func NewGemini(key, model string, minInterval time.Duration, maxRetries int) *Gemini {
+	return NewGeminiProfiles(key, ModelProfiles{Default: model}, minInterval, maxRetries)
+}
+
+func NewGeminiProfiles(key string, models ModelProfiles, minInterval time.Duration, maxRetries int) *Gemini {
 	if minInterval < 0 {
 		minInterval = 0
 	}
 	if maxRetries < 0 {
 		maxRetries = 0
 	}
+	if models.Default == "" {
+		models.Default = "gemini-flash-latest"
+	}
+	configured := map[Profile]string{
+		ProfileFast:     models.Fast,
+		ProfileStandard: models.Standard,
+		ProfileDeep:     models.Deep,
+	}
+	for profile, model := range configured {
+		if strings.TrimSpace(model) == "" {
+			configured[profile] = models.Default
+		}
+	}
 	return &Gemini{
-		key: key, model: model, http: &http.Client{}, requestSlot: make(chan struct{}, 1),
+		key: key, model: models.Default, models: configured,
+		http: &http.Client{}, requestSlot: make(chan struct{}, 1),
 		minInterval: minInterval, maxRetries: maxRetries,
 	}
 }
@@ -68,6 +96,17 @@ func (g *Gemini) acquire(ctx context.Context, onWait func(WaitInfo)) error {
 func (g *Gemini) release() { <-g.requestSlot }
 
 func (g *Gemini) Name() string { return "gemini/" + g.model }
+
+func (g *Gemini) modelFor(profile Profile) string {
+	if model := g.models[profile]; model != "" {
+		return model
+	}
+	return g.model
+}
+
+func isGemini3(model string) bool {
+	return strings.HasPrefix(model, "gemini-3.") || strings.HasPrefix(model, "gemini-3-")
+}
 
 // ListModels は generateContent が使えるモデル名を返す。
 // モデル名は変わりやすいため、固定せず問い合わせて確かめられるようにしている。
@@ -144,8 +183,32 @@ func convertSchema(schema map[string]any) map[string]any {
 	return out
 }
 
-func (g *Gemini) payload(req Request) map[string]any {
-	config := map[string]any{"temperature": 0, "maxOutputTokens": req.MaxTokens}
+func (g *Gemini) payload(req Request, model string) map[string]any {
+	maxOutputTokens := req.MaxTokens
+	thinkingLevel := ""
+	// thinkingLevel はGemini 3系の設定。2.5系へ同じ項目を送ると400になるため、
+	// モデル名で対応が確認できるときだけ付ける。
+	if isGemini3(model) {
+		switch req.Profile {
+		case ProfileFast:
+			thinkingLevel = "minimal"
+		case ProfileDeep:
+			thinkingLevel = "high"
+		default:
+			thinkingLevel = "medium"
+		}
+		// Gemini 3系は思考分もmaxOutputTokensを消費する。測定用Pythonで
+		// 2,000トークンの余白が必要だったため、本文上限とは別に確保する。
+		maxOutputTokens += 2_000
+	}
+	config := map[string]any{"maxOutputTokens": maxOutputTokens}
+	if thinkingLevel != "" {
+		config["thinkingConfig"] = map[string]any{"thinkingLevel": thinkingLevel}
+	} else {
+		// Gemini 3.5以降ではsampling parameterが非推奨。旧モデルだけに残し、
+		// 新モデルへの移行で400にならないようにする。
+		config["temperature"] = 0
+	}
 	if len(req.Schema) > 0 {
 		config["responseMimeType"] = "application/json"
 		config["responseSchema"] = geminiSchema(req.Schema)
@@ -241,7 +304,7 @@ func (g *Gemini) waitRequest(ctx context.Context, retryWait time.Duration, onWai
 	return nil
 }
 
-func (g *Gemini) do(ctx context.Context, method string, body map[string]any, onWait func(WaitInfo)) (*http.Response, error) {
+func (g *Gemini) do(ctx context.Context, model, method string, body map[string]any, onWait func(WaitInfo)) (*http.Response, error) {
 	if time.Now().Before(g.blockedUntil) {
 		blockedErr := g.blockedErr
 		if blockedErr == nil {
@@ -258,7 +321,7 @@ func (g *Gemini) do(ctx context.Context, method string, body map[string]any, onW
 	// APIキーはクエリ文字列ではなくヘッダで渡す。
 	// クエリに載せると、通信エラー時の *url.Error にURLごと鍵が入り、
 	// サーバーログ（log.Printf("%v", err)）にそのまま残ってしまう
-	url := fmt.Sprintf("%s/models/%s:%s", geminiBase, g.model, method)
+	url := fmt.Sprintf("%s/models/%s:%s", geminiBase, model, method)
 	if method == "streamGenerateContent" {
 		url += "?alt=sse"
 	}
@@ -346,7 +409,8 @@ func (g *Gemini) Complete(ctx context.Context, req Request) (string, error) {
 		return "", err
 	}
 	defer g.release()
-	resp, err := g.do(ctx, "generateContent", g.payload(req), req.OnWait)
+	model := g.modelFor(req.Profile)
+	resp, err := g.do(ctx, model, "generateContent", g.payload(req, model), req.OnWait)
 	if err != nil {
 		return "", err
 	}
@@ -363,7 +427,8 @@ func (g *Gemini) Stream(ctx context.Context, req Request, onDelta Delta) (string
 		return "", err
 	}
 	defer g.release()
-	resp, err := g.do(ctx, "streamGenerateContent", g.payload(req), req.OnWait)
+	model := g.modelFor(req.Profile)
+	resp, err := g.do(ctx, model, "streamGenerateContent", g.payload(req, model), req.OnWait)
 	if err != nil {
 		return "", err
 	}
