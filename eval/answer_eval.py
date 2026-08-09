@@ -39,12 +39,26 @@ NO_INFO = re.compile(
     r"記載(が|は)?(あり|ござい)?ませ|記述(が|は)?(あり|ござい)?ませ|書かれてい(ませ|ない)|"
     r"見当たりませ|情報(が|は)(あり|ござい)?ませ|特定できませ|含まれてい(ませ|ない)"
 )
-CITATION = re.compile(r"出典|参照|最終更新")
+# 出典行の検出。M7で出力形式を
+# `- [ページ名](URL)（Wiki / 公式サイト、本文の年代: YYYY年）` へ変えたのに、
+# ここが旧形式の「出典:」のままだったため、正しく出典を出している回答を
+# 0%と報告していた（2026-08-09に発覚）。新旧どちらの形式も拾う。
+CITATION_LINE = re.compile(
+    r"^\s*[-*]\s*\[[^\]]+\]\(https?://[^)]+\).*$"   # 現行: Markdownリンクの出典行
+    r"|^\s*出典[:：].*$",                            # 旧形式
+    re.M,
+)
+CITATION = CITATION_LINE
+
+
+def strip_citations(text: str) -> str:
+    """出典行を落とす。出典はメタデータであって、回答の主張ではない。"""
+    return CITATION_LINE.sub("", text).strip()
 
 
 def body_only(text: str) -> str:
     """出典欄を除いた本文。出典に含まれる語で判定が揺れるのを防ぐ。"""
-    return re.sub(r"出典[:：].*", "", text, flags=re.S).strip()
+    return strip_citations(re.sub(r"出典[:：].*", "", text, flags=re.S))
 
 
 def answered_well(qtype: str, text: str) -> bool:
@@ -79,8 +93,9 @@ FAITHFUL_SCHEMA = {
 
 def judge_faithfulness(llm, context: str, answer: str, toc: str = "") -> dict:
     # 出典行はメタデータであって主張ではない。判定対象から外さないと
-    # 「出典: X（最終更新: Y）」そのものを裏付け無しと指摘してくる
-    answer = re.sub(r"^出典[:：].*$", "", answer, flags=re.M)
+    # 「出典: X（最終更新: Y）」そのものを裏付け無しと指摘してくる（M3で対処済み）。
+    # M7で出典形式をMarkdownリンクへ変えた際、ここも新形式に合わせる必要がある
+    answer = strip_citations(answer)
     prompt = f"""以下の「資料」と「回答」を読み、回答の内容が資料だけで裏付けられるかを判定してください。
 
 手順:
