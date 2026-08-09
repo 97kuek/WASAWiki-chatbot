@@ -216,6 +216,19 @@ function HistoryIcon() {
   );
 }
 
+/** 検索待ちを鳥人間らしく見せる、小さな人力飛行機の周回表示。 */
+function FlightLoader() {
+  return (
+    <span className="flight-loader" aria-hidden="true">
+      <span className="flight-loader-orbit">
+        <svg viewBox="0 0 18 12">
+          <path d="M1 6.2 8 5l3-4 1.5.3L11 5.2l5 1 1 1.2-6.3.2-2.2 3.8-1.4-.3.8-3.5-6 .7Z" />
+        </svg>
+      </span>
+    </span>
+  );
+}
+
 export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [username, setUsername] = useState("");
@@ -736,6 +749,12 @@ export default function App() {
     const now = new Date().toISOString();
     const chatId = activeChat?.id ?? makeId();
     const turnIndex = activeChat?.turns.length ?? 0;
+    // 全履歴を毎回送ると入力費用が増え続ける。指示語の解決に必要な直近2往復だけを送り、
+    // 出典やエラー状態はサーバーへ再送しない。長さの上限はサーバー側でも検証する。
+    const context = (activeChat?.turns ?? [])
+      .filter((item) => !item.streaming && item.question.trim() && item.answer.trim())
+      .slice(-2)
+      .map((item) => ({ question: item.question, answer: item.answer.slice(0, 2000) }));
     const turn: Turn = {
       question: q,
       answer: "",
@@ -801,7 +820,7 @@ export default function App() {
           patch((current) => ({ ...current, streaming: false, status: "", retryAt: undefined }));
           break;
       }
-      }, undefined, assistantId);
+      }, undefined, assistantId, context);
     } catch (error) {
       // fetch自体の失敗やストリームの切断は ask() の中でイベントにならない。
       // ここで拾わないと streaming が立ったままになり、入力欄が永久に
@@ -827,15 +846,21 @@ export default function App() {
     }
   }
 
-  if (authed === null) return <div className="center muted">読み込み中…</div>;
+  if (authed === null) return (
+    <div className="center app-loading" role="status" aria-label="WASA Chatを読み込んでいます">
+      <img src="/assets/wasa-chat-logo.svg" alt="WASA Chat" className="loading-wordmark" />
+      <FlightLoader />
+      <span className="muted">離陸準備中…</span>
+    </div>
+  );
 
   if (!authed) {
     return (
       <div className="center login-page">
         <form className="card gate" onSubmit={handleLogin}>
-          <img src="/assets/wasa-logo.jpeg" alt="WASA 鳥人間プロジェクト" className="logo-large" />
+          <img src="/assets/wasa-chat-logo.svg" alt="WASA Chat" className="brand-logo-large" />
           <div className="login-heading">
-            <h1>WASA Chat</h1>
+            <h1 className="visually-hidden">WASA Chat</h1>
             <p className="muted">WASA Wikiと同じ利用者名・パスワードでログイン</p>
           </div>
           <label>
@@ -894,8 +919,7 @@ export default function App() {
       <aside className="history-panel" aria-label="チャット履歴" aria-hidden={!sidebarOpen}>
         <div className="brand-row">
           <div className="brand">
-            <img src="/assets/wasa-logo.jpeg" alt="" className="logo" />
-            <span>WASA Chat</span>
+            <img src="/assets/wasa-chat-logo.svg" alt="WASA Chat" className="brand-logo" />
           </div>
           <button type="button" className="sidebar-close" onClick={() => setSidebarOpen(false)} aria-label="履歴を閉じる">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6" /></svg>
@@ -1245,7 +1269,7 @@ export default function App() {
         <main className="conversation" aria-live="polite">
           {!activeChat && (
             <div className="intro">
-              <img src="/assets/wasa-logo.jpeg" alt="" className="logo-large" />
+              <img src="/assets/wasa-chat-logo.svg" alt="WASA Chat" className="intro-logo" />
               <h2>引き継ぎ資料を、会話で探す</h2>
               <p className="muted">
                 部内Wikiと公式サイトを横断して回答し、参照した資料を示します。
@@ -1278,12 +1302,12 @@ export default function App() {
                     WASAロゴのままだと、口調が変わった理由が画面から分からない */}
                 {turn.assistantName
                   ? <AssistantAvatar name={turn.assistantName} icon={assistants.find((a) => a.id === turn.assistantId)?.icon} size={34} />
-                  : <img src="/assets/wasa-logo.jpeg" alt="" className="assistant-avatar" />}
+                  : <img src="/assets/wasa-chat-mark.svg" alt="" className="assistant-avatar" />}
                 <div className="assistant-content">
                   <div className="answer-author">{turn.assistantName ?? "WASA Chat"}</div>
                   {turn.status && (
                     <div className="status">
-                      <span className="dot" />
+                      <FlightLoader />
                       <span>{turn.status}</span>
                       {turn.retryAt && <small>{retryLabel(turn.retryAt, clock)}</small>}
                     </div>

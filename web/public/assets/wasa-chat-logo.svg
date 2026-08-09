@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 430 96" role="img" aria-labelledby="title desc">
+  <title id="title">WASA Chat</title>
+  <desc id="desc">人力飛行機をあしらったWASA Chatのロゴ</desc>
+  <defs>
+    <linearGradient id="sky" x1="10" y1="10" x2="86" y2="86" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2e4f87"/>
+      <stop offset="1" stop-color="#132b52"/>
+    </linearGradient>
+  </defs>
+  <path d="M16 10h64a10 10 0 0 1 10 10v44a10 10 0 0 1-10 10H48L30 87l3-13H16A10 10 0 0 1 6 64V20A10 10 0 0 1 16 10Z" fill="url(#sky)"/>
+  <path d="M16 57c15-13 36-19 62-17" fill="none" stroke="#9bc7e5" stroke-width="2" stroke-linecap="round" stroke-dasharray="4 5"/>
+  <path d="m18 50 30-5 11-14 5 1-5 14 19 3 4 4-24 1-8 13-4-1 3-13-27 3Z" fill="#fff"/>
+  <circle cx="80" cy="23" r="4" fill="#ef6a55"/>
+
+  <!-- 端末のフォントに左右されないよう、文字も図形として収録する。 -->
+  <g fill="none" stroke="#17243b" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m112 25 9 44 13-29 13 29 9-44"/>
+    <path d="m168 69 17-44 17 44m-27-17h20"/>
+    <path d="M244 31c-6-5-13-7-20-5-8 2-11 12-3 17l16 8c9 5 6 17-4 19-8 1-15-1-20-6"/>
+    <path d="m253 69 17-44 17 44m-27-17h20"/>
+  </g>
+  <g fill="none" stroke="#53657e" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M329 35c-10-7-24-1-24 11s14 18 24 11"/>
+    <path d="M339 34v25m22-25v25m-22-13h22"/>
+    <path d="m371 59 10-25 10 25m-16-10h12"/>
+    <path d="M396 34h27m-13 0v25"/>
+  </g>
+  <path d="M305 72h118" stroke="#ef6a55" stroke-width="3" stroke-linecap="round"/>
+</svg>

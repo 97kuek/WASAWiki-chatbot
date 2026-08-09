@@ -61,7 +61,10 @@ def post(url: str, payload: dict, headers: dict | None = None, timeout: int = 30
                 return json.load(response)
         except urllib.error.HTTPError as err:
             detail = err.read().decode("utf-8", "replace")
-            if err.code in (429, 503) and attempt < retries - 1:
+            # 残高枯渇は待っても解消しない。M9の比較測定で、この429を通常の
+            # レート制限として75秒待ち直してから同じ理由で失敗した。
+            depleted = "prepayment credits are depleted" in detail.lower()
+            if err.code in (429, 503) and not depleted and attempt < retries - 1:
                 # サーバーが待ち時間を指定してくればそれに従う
                 match = re.search(r'"retryDelay"\s*:\s*"(\d+)s"', detail)
                 wait = int(match.group(1)) if match else min(60, 5 * 2**attempt)

@@ -60,6 +60,17 @@ button:disabled {
   color: var(--muted);
 }
 
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .error {
   color: #962f21;
   font-size: 15px;
@@ -94,15 +105,28 @@ button:disabled {
   padding: 38px;
 }
 
-.logo-large {
-  width: 72px;
-  height: 72px;
+.brand-logo-large {
+  width: min(286px, 88%);
+  height: auto;
   object-fit: contain;
-  border-radius: 14px;
 }
 
-.gate .logo-large {
+.gate .brand-logo-large {
   justify-self: center;
+}
+
+.app-loading {
+  grid-auto-rows: max-content;
+  align-content: center;
+  gap: 18px;
+  background:
+    radial-gradient(circle at 50% 42%, rgb(46 79 135 / 9%), transparent 28%),
+    var(--bg);
+}
+
+.loading-wordmark {
+  width: min(300px, 72vw);
+  height: auto;
 }
 
 .login-heading {
@@ -304,10 +328,9 @@ button:disabled {
   display: none;
 }
 
-.logo {
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
+.brand-logo {
+  width: 154px;
+  height: auto;
   object-fit: contain;
 }
 
@@ -769,6 +792,12 @@ button:disabled {
   padding: 24px 0 48px;
 }
 
+.intro-logo {
+  width: min(292px, 70vw);
+  height: auto;
+  margin-bottom: 8px;
+}
+
 .intro h2 {
   margin: 0;
   font-size: clamp(24px, 3vw, 34px);
@@ -893,17 +922,45 @@ button:disabled {
   font-weight: 600;
 }
 
-.dot {
-  width: 7px;
-  height: 7px;
+.flight-loader {
+  position: relative;
+  width: 28px;
+  height: 28px;
   flex: none;
+  border: 1px dashed rgb(46 79 135 / 35%);
   border-radius: 50%;
-  background: var(--accent);
-  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.flight-loader-orbit {
+  position: absolute;
+  inset: -2px;
+  animation: fly-orbit 1.45s linear infinite;
+}
+
+.flight-loader svg {
+  position: absolute;
+  top: -4px;
+  left: 50%;
+  width: 16px;
+  height: 12px;
+  fill: #2e4f87;
+  transform: translateX(-50%) rotate(8deg);
+  filter: drop-shadow(0 1px 1px rgb(19 43 82 / 20%));
+}
+
+@keyframes fly-orbit {
+  to { transform: rotate(360deg); }
 }
 
 @keyframes pulse {
   50% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flight-loader-orbit,
+  .caret {
+    animation: none;
+  }
 }
 
 .caret {
@@ -1361,7 +1418,7 @@ button:disabled {
 
 @media (max-width: 560px) {
   .gate { padding: 28px 22px; }
-  .logo { width: 30px; height: 30px; }
+  .brand-logo { width: 138px; }
   .brand { font-size: 15px; }
   .chat-header { min-height: 60px; padding-block: 9px; }
   .chat-header h1 { max-width: 48vw; font-size: 15px; }
@@ -1372,7 +1429,7 @@ button:disabled {
   .conversation { padding-inline: 16px; }
   .suggestions { grid-template-columns: 1fr; }
   .intro { align-content: start; padding-top: 14px; }
-  .intro .logo-large { width: 56px; height: 56px; }
+  .intro-logo { width: min(250px, 72vw); }
   .question { max-width: 92%; }
   .assistant-row { grid-template-columns: 28px minmax(0, 1fr); gap: 10px; }
   .assistant-avatar { width: 28px; height: 28px; }

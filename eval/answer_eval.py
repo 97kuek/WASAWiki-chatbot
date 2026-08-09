@@ -121,7 +121,7 @@ def main() -> None:
     per_type = defaultdict(lambda: {"n": 0, "page_hit": 0, "faithful": 0})
 
     for q in questions:
-        answer = pipeline.answer(q["question"])
+        answer = pipeline.answer(q["question"], q.get("history"))
         gold = set(q["evidence_pages"])
         picked = set(answer.pages)
 

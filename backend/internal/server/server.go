@@ -569,12 +569,28 @@ func (s *Server) lookupAssistant(ctx context.Context, id string) (*state.Assista
 
 // ---------------------------------------------------------------- 質問
 
+func validConversationContext(context []pipeline.ConversationTurn) bool {
+	// 全履歴を毎回送ると入力費用が会話の長さに比例して増える。指示語の解決には
+	// 直近2往復で足りるため、サーバー側でも上限を固定する。
+	if len(context) > 2 {
+		return false
+	}
+	for _, turn := range context {
+		if strings.TrimSpace(turn.Question) == "" || strings.TrimSpace(turn.Answer) == "" ||
+			len([]rune(turn.Question)) > 500 || len([]rune(turn.Answer)) > 2_000 {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Question    string `json:"question"`
-		AssistantID string `json:"assistantId"`
+		Question    string                      `json:"question"`
+		AssistantID string                      `json:"assistantId"`
+		Context     []pipeline.ConversationTurn `json:"context"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32*1024)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "リクエストが不正です"})
 		return
 	}
@@ -582,6 +598,10 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 	question := strings.TrimSpace(body.Question)
 	if question == "" || len([]rune(question)) > 500 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "質問を入力してください（500文字以内）"})
+		return
+	}
+	if !validConversationContext(body.Context) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "直近の会話が不正です"})
 		return
 	}
 
@@ -647,7 +667,7 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 
-	if err := s.pipe.Run(r.Context(), question, selected, emit); err != nil {
+	if err := s.pipe.Run(r.Context(), question, body.Context, selected, emit); err != nil {
 		log.Printf("質問の処理に失敗: %v", err)
 		message := "回答の生成に失敗しました"
 		code := ""

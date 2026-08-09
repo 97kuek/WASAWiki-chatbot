@@ -87,6 +87,20 @@ func TestPromptSectionEmptyWhenUnset(t *testing.T) {
 	}
 }
 
+func TestSystemGuardSeparatesGenericKnowledgePolicy(t *testing.T) {
+	generic := SystemGuard(nil)
+	if !strings.Contains(generic, "一般知識（WASA資料外）") {
+		t.Fatal("汎用チャットに資料外知識の分離規則がない")
+	}
+	strict := SystemGuard(&state.Assistant{Name: "空力設計"})
+	if !strings.Contains(strict, "範囲外の話題を、記憶から補って答えない") {
+		t.Fatal("アシスタントの資料範囲が閉じていない")
+	}
+	if strings.Contains(strict, "一般知識（WASA資料外）") {
+		t.Fatal("アシスタントまで資料外知識を許可している")
+	}
+}
+
 func TestScopeLabel(t *testing.T) {
 	cases := []struct {
 		assistant *state.Assistant

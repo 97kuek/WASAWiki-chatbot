@@ -5,6 +5,12 @@
       "id": "q01",
       "type": "fact | procedure | comparison | global | partial | unanswerable",
       "question": "実際に新入生や後任から聞かれそうな質問文",
+      "history": [
+        {
+          "question": "省略表現を解決するための直前の質問（多ターン問題だけ）",
+          "answer": "直前の回答。事実の根拠ではなく、指示語の解決にだけ使う"
+        }
+      ],
       "expected": "期待する回答。事実型は答えそのもの、手順型は含むべき要点を書く",
       "evidence_pages": ["根拠となるWikiページのタイトル"],
       "evidence_chunks": [

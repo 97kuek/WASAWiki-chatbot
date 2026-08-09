@@ -20,6 +20,8 @@ type stubLLM struct {
 	chunkIDs   []string // 節の絞り込みで返させるID。空なら選ばせない
 	lastAnswer string   // 回答生成に渡った Prompt
 	lastCached string   // 同 Cached（目次はこちらに載る）
+	lastSelect string   // ページ選択に渡った Prompt
+	lastSystem string   // 回答生成に渡った System
 }
 
 func (s *stubLLM) Complete(_ context.Context, req llm.Request) (string, error) {
@@ -27,6 +29,7 @@ func (s *stubLLM) Complete(_ context.Context, req llm.Request) (string, error) {
 		out, _ := json.Marshal(map[string]any{"ids": s.chunkIDs})
 		return string(out), nil
 	}
+	s.lastSelect = req.Prompt
 	out, _ := json.Marshal(map[string]any{"titles": s.titles, "answerable": true})
 	return string(out), nil
 }
@@ -34,6 +37,7 @@ func (s *stubLLM) Complete(_ context.Context, req llm.Request) (string, error) {
 func (s *stubLLM) Stream(_ context.Context, req llm.Request, onDelta llm.Delta) (string, error) {
 	s.lastAnswer = req.Prompt
 	s.lastCached = req.Cached
+	s.lastSystem = req.System
 	onDelta("（ダミー回答）")
 	return "（ダミー回答）", nil
 }
@@ -132,7 +136,7 @@ func run(t *testing.T, assistant *state.Assistant) (*stubLLM, []Source, string) 
 
 	var sources []Source
 	var answer strings.Builder
-	err := pipe.Run(context.Background(), "WASAについて教えて", assistant, func(e Event) {
+	err := pipe.Run(context.Background(), "WASAについて教えて", nil, assistant, func(e Event) {
 		switch e.Type {
 		case "pages":
 			sources = e.Pages
@@ -179,6 +183,45 @@ func TestRunWithoutAssistantKeepsEverything(t *testing.T) {
 	}
 }
 
+func TestRunUsesRecentConversationWithoutTreatingItAsEvidence(t *testing.T) {
+	client := &stubLLM{titles: []string{"電装班"}}
+	pipe := New(testIndex(t), client)
+	history := []ConversationTurn{{
+		Question: "ESP32について教えて", Answer: "以前の回答には誤りがあるかもしれません。",
+	}}
+
+	if err := pipe.Run(context.Background(), "それのピン配置は？", history, nil, func(Event) {}); err != nil {
+		t.Fatalf("Run が失敗: %v", err)
+	}
+	if !strings.Contains(client.lastSelect, "ESP32について教えて") {
+		t.Fatal("ページ選択に直近の会話が渡っていない")
+	}
+	if !strings.Contains(client.lastAnswer, "以前の回答: 以前の回答には誤り") ||
+		!strings.Contains(client.lastAnswer, "事実の根拠にせず") {
+		t.Fatal("回答生成に会話の位置づけが明示されていない")
+	}
+}
+
+func TestGenericCanAnswerSeparatedGeneralKnowledgeWithoutPages(t *testing.T) {
+	client := &stubLLM{}
+	pipe := New(testIndex(t), client)
+	var answer strings.Builder
+
+	if err := pipe.Run(context.Background(), "量子色力学とは？", nil, nil, func(event Event) {
+		if event.Type == "delta" {
+			answer.WriteString(event.Text)
+		}
+	}); err != nil {
+		t.Fatalf("Run が失敗: %v", err)
+	}
+	if answer.String() != "（ダミー回答）" {
+		t.Fatalf("資料が無い時点で汎用回答が止まった: %q", answer.String())
+	}
+	if !strings.Contains(client.lastSystem, "一般知識（WASA資料外）") {
+		t.Fatal("汎用チャットに資料外知識の分離規則が渡っていない")
+	}
+}
+
 func TestSelectPagesAddsNormalizedIdentifierMatch(t *testing.T) {
 	client := &stubLLM{titles: []string{"人物ページ"}}
 	pipe := New(testIdentifierIndex(t), client)
@@ -202,11 +245,30 @@ func TestRunKeepsIdentifierChunkAfterNarrowing(t *testing.T) {
 	}
 	pipe := New(testIdentifierIndex(t), client)
 
-	if err := pipe.Run(context.Background(), "TR797とは何ですか？", nil, func(Event) {}); err != nil {
+	if err := pipe.Run(context.Background(), "TR797とは何ですか？", nil, nil, func(Event) {}); err != nil {
 		t.Fatalf("Run が失敗: %v", err)
 	}
 	if !strings.Contains(client.lastAnswer, "TR-797型分布") {
 		t.Fatal("ページ選択後の節絞り込みで、型番の完全一致チャンクが落ちた")
+	}
+}
+
+func TestRunResolvesIdentifierFromRecentConversation(t *testing.T) {
+	client := &stubLLM{
+		titles:   []string{"人物ページ"},
+		chunkIDs: []string{"p1-c0"},
+	}
+	pipe := New(testIdentifierIndex(t), client)
+	history := []ConversationTurn{{
+		Question: "循環分布には何がありますか？",
+		Answer:   "完全楕円循環分布とTR-797型分布があります。",
+	}}
+
+	if err := pipe.Run(context.Background(), "後者について詳しく", history, nil, func(Event) {}); err != nil {
+		t.Fatalf("Run が失敗: %v", err)
+	}
+	if !strings.Contains(client.lastAnswer, "TR-797型分布は翼根曲げモーメント") {
+		t.Fatal("直近の会話にある型番から正解チャンクを引けていない")
 	}
 }
 
@@ -230,7 +292,7 @@ func TestRunKeepsTOCCacheable(t *testing.T) {
 	var cached []string
 	pipe := New(ix, &cacheProbe{inner: &stubLLM{titles: []string{"電装班"}}, seen: &cached})
 	for _, a := range []*state.Assistant{nil, {Name: "電装", Instruction: "簡潔に", Team: "電装"}} {
-		if err := pipe.Run(context.Background(), "質問", a, func(Event) {}); err != nil {
+		if err := pipe.Run(context.Background(), "質問", nil, a, func(Event) {}); err != nil {
 			t.Fatalf("Run が失敗: %v", err)
 		}
 	}
@@ -271,7 +333,7 @@ func TestRunScopedTOCHidesWikiSection(t *testing.T) {
 	client := &stubLLM{titles: []string{"WASAについて知る"}}
 	pipe := New(ix, &cacheProbe{inner: client, seen: new([]string)})
 
-	if err := pipe.Run(context.Background(), "WASAとは", &state.Assistant{
+	if err := pipe.Run(context.Background(), "WASAとは", nil, &state.Assistant{
 		Name: "対外説明", Instruction: "ですます調", Origin: "site",
 	}, func(Event) {}); err != nil {
 		t.Fatalf("Run が失敗: %v", err)

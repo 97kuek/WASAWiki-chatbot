@@ -32,6 +32,18 @@ K_VALUES = (1, 3, 5, 10)
 Retriever = Callable[[str], list[str]]
 
 
+def question_with_history(question: dict) -> str:
+    """多ターン問題は、直近の会話と現在の質問を本番と同じ順で検索へ渡す。"""
+    history = question.get("history") or []
+    if not history:
+        return question["question"]
+    lines = ["# 直近の会話（参照解決用）"]
+    for turn in history:
+        lines += [f"利用者: {turn['question']}", f"以前の回答: {turn['answer']}"]
+    lines += ["# 現在の質問", question["question"]]
+    return "\n".join(lines)
+
+
 def tokenize(text: str) -> list[str]:
     """日本語は文字bigram、英数字は単語単位で切る。
 
@@ -97,7 +109,7 @@ def score(questions: list[dict], retrieve: Retriever, chunk_page: dict[str, str]
 
     reciprocal = 0.0
     for q in scored:
-        ranked = retrieve(q["question"])
+        ranked = retrieve(question_with_history(q))
         gold = set(q["evidence_chunks"])
         gold_pages = {chunk_page[c] for c in gold if c in chunk_page}
 

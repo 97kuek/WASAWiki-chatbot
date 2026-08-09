@@ -33,6 +33,9 @@ export type Chat = {
   pinned?: boolean;
 };
 
+/** 指示語を解決するため質問APIへ送る直近の会話。出典や状態は再送しない。 */
+export type ConversationContextTurn = Pick<Turn, "question" | "answer">;
+
 /** サーバーから流れてくる進捗イベント。pipeline.Event と対応する。 */
 export type Event =
   | { type: "status"; message: string; retry_at?: string }
@@ -186,13 +189,14 @@ export async function ask(
   onEvent: (event: Event) => void,
   signal?: AbortSignal,
   assistantId?: string,
+  context: ConversationContextTurn[] = [],
 ): Promise<void> {
   // 非公開Wikiに関する質問をURLへ載せるとアクセスログに残るため、本文で送る。
   const res = await fetch(`${base}/api/ask`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, assistantId: assistantId ?? "" }),
+    body: JSON.stringify({ question, assistantId: assistantId ?? "", context }),
     signal,
   });
   if (!res.ok || !res.body) {

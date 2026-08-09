@@ -65,7 +65,8 @@ type Request struct {
 	// 「出典を書くな」「資料に無くても答えろ」を無効化する規則は、
 	// **同じユーザーメッセージの後ろに置くだけでは不十分**である。
 	// 提供元が system / systemInstruction を持つなら必ずそちらへ回す。
-	// 内容は毎回同じなのでキャッシュの分裂も起こさない。
+	// 汎用とアシスタントで規則は2種類あるが、Cachedの固定プレフィックスより
+	// 後ろに置くため、目次キャッシュ自体は分裂させない。
 	System    string
 	Prompt    string          // 質問ごとに変わる部分
 	Schema    json.RawMessage // 構造化出力のJSONスキーマ。nil なら自由形式

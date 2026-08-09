@@ -64,6 +64,18 @@ def select(llm, toc: str, question: str) -> tuple[dict, float]:
     return parsed, time.time() - started
 
 
+def question_with_history(question: dict) -> str:
+    """指示語を含む多ターン問題だけ、直近の会話をページ選択へ添える。"""
+    history = question.get("history") or []
+    if not history:
+        return question["question"]
+    lines = ["# 直近の会話（参照解決用）"]
+    for turn in history:
+        lines += [f"利用者: {turn['question']}", f"以前の回答: {turn['answer']}"]
+    lines += ["# 現在の質問", question["question"]]
+    return "\n".join(lines)
+
+
 def main() -> None:
     index = json.loads(INDEX.read_text(encoding="utf-8"))
     questions = json.loads(GOLDEN.read_text(encoding="utf-8"))["questions"]
@@ -92,7 +104,7 @@ def main() -> None:
     elapsed = 0.0
 
     for q in questions:
-        result, dt = select(llm, toc, q["question"])
+        result, dt = select(llm, toc, question_with_history(q))
         elapsed += dt
         raw_titles = [t.strip() for t in result.get("titles", []) if t.strip()]
 
