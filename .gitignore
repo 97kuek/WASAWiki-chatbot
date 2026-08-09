@@ -17,9 +17,12 @@ node_modules/
 dist/
 
 # ゴールデンデータ（Wiki由来の回答を含む。golden.example.json のみ公開）
+# ⚠️ 個別ファイル名で並べないこと。--output で別名を付けた answers-tr797.json が
+# パターンから漏れて公開リポジトリへ入った（2026-08-09）。評価の出力は全て除外する。
 eval/golden.json
-eval/answers.json
-eval/response_mode_results.json
+eval/answers*.json
+eval/*_results.json
+eval/answers-*.json
 
 # Dockerビルド用にコピーしたデータ
 backend/data/

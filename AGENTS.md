@@ -126,9 +126,10 @@ OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q8_0 OLLAMA_CONTEXT_LENGTH=32768 \
 
 何を変えたか。特に **なぜ** 変えたかを実測値とともに書く。
 設計方針を変えた場合は、どのドキュメントのどこを更新したかも書く。
-
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ```
+
+**`Co-Authored-By` などの共同作業者行は付けないこと。** このリポジトリの著者は保守者本人であり、
+コミット履歴を道具の一覧にしない（2026-08-09に人間が判断）。
 
 ---
 
