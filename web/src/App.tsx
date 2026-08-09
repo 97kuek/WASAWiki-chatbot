@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   ask,
   createAssistant,
@@ -23,8 +23,15 @@ import {
   type Turn,
 } from "./api";
 import { AssistantAvatar, DefaultAvatar, toIconDataURL, type IconCropPosition } from "./avatar";
-import { Markdown } from "./markdown";
 import { SelectMenu, type SelectOption } from "./SelectMenu";
+
+// KaTeXは初期JSの大半を占めるが、回答が表示されるまでは不要である。
+// 質問送信時に先読みし、ログイン画面の初期表示と回答開始時の待ち時間を両立する。
+const loadMarkdownModule = () => import("./markdown");
+const Markdown = lazy(async () => {
+  const module = await loadMarkdownModule();
+  return { default: module.Markdown };
+});
 
 type Announcement = {
   id: string;
@@ -966,6 +973,7 @@ export default function App() {
     const q = text.trim();
     if (!q || streaming) return;
     setQuestion("");
+    void loadMarkdownModule();
 
     const now = new Date().toISOString();
     const chatId = activeChat?.id ?? makeId();
@@ -1627,7 +1635,9 @@ export default function App() {
                   )}
                   {turn.answer && (
                     <div>
-                      <Markdown text={stripCitation(turn.answer)} />
+                      <Suspense fallback={<div className="muted" role="status">回答を表示中…</div>}>
+                        <Markdown text={stripCitation(turn.answer)} />
+                      </Suspense>
                       {turn.streaming && <span className="caret" />}
                     </div>
                   )}
