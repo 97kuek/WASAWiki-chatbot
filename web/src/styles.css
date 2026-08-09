@@ -90,6 +90,52 @@ button:disabled {
   box-shadow: var(--shadow);
 }
 
+/* ---- 描画に失敗したとき ---- */
+
+.crash-page {
+  background: var(--bg);
+}
+
+.crash-card {
+  width: min(440px, 100%);
+  display: grid;
+  gap: 14px;
+  padding: 32px;
+  justify-items: start;
+}
+
+.crash-card h1 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.crash-detail {
+  width: 100%;
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 0.8rem;
+  /* 例外文は長い1行になりうる。折り返して端末幅からはみ出させない */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.crash-card button {
+  padding: 10px 22px;
+  border: 0;
+  border-radius: 10px;
+  background: #2e4f87;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+.crash-card button:hover {
+  background: #263f6d;
+}
+
 /* ---- ログイン ---- */
 
 .login-page {

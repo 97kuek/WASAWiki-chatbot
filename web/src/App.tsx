@@ -36,9 +36,42 @@ import {
 // KaTeXは初期JSの大半を占めるが、回答が表示されるまでは不要である。
 // 質問送信時に先読みし、ログイン画面の初期表示と回答開始時の待ち時間を両立する。
 const loadMarkdownModule = () => import("./markdown");
+
+const CHUNK_RELOAD_KEY = "wasa-chat-chunk-reload";
+const readFlag = (key: string) => {
+  try {
+    return sessionStorage.getItem(key);
+  } catch {
+    return null; // プライベートモードなどで読めなくても動作は続ける
+  }
+};
+const writeFlag = (key: string, value: string | null) => {
+  try {
+    if (value === null) sessionStorage.removeItem(key);
+    else sessionStorage.setItem(key, value);
+  } catch {
+    /* 保存できなくてもよい。1回だけ再読み込みする保険が効かなくなるだけ */
+  }
+};
+
 const Markdown = lazy(async () => {
-  const module = await loadMarkdownModule();
-  return { default: module.Markdown };
+  try {
+    const module = await loadMarkdownModule();
+    writeFlag(CHUNK_RELOAD_KEY, null);
+    return { default: module.Markdown };
+  } catch (error) {
+    // デプロイすると配信物のファイル名（ハッシュ）が変わり、開いたままのタブが
+    // 参照している旧ファイルは消える。そのまま失敗させると lazy が描画中に
+    // 例外を投げ、画面が真っ白になる（2026-08-09に本番で報告あり）。
+    // 新しい配信物を取り直せば直るので、1回だけ再読み込みする。
+    // 印を残すのは、取得そのものが壊れているときに再読み込みを繰り返さないため。
+    if (!readFlag(CHUNK_RELOAD_KEY)) {
+      writeFlag(CHUNK_RELOAD_KEY, "1");
+      location.reload();
+      await new Promise<never>(() => {}); // 再読み込みするので解決させない
+    }
+    throw error;
+  }
 });
 
 type Announcement = {
@@ -924,7 +957,9 @@ export default function App() {
     const q = text.trim();
     if (!q || streaming) return;
     setQuestion("");
-    void loadMarkdownModule();
+    // 先読みなので、失敗しても握りつぶす。実際に必要になった時点で
+    // 上の lazy 側が読み直しと再読み込みを引き受ける
+    void loadMarkdownModule().catch(() => {});
 
     const now = new Date().toISOString();
     const chatId = activeChat?.id ?? makeId();

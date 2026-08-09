@@ -6,9 +6,40 @@
     <meta name="robots" content="noindex, nofollow" />
     <link rel="icon" href="/assets/wasa-logo.jpeg" />
     <title>WASA Chat</title>
+    <!--
+      本体のJSが動かなかったときの案内。CSPが script-src 'self' なので
+      インラインスクリプトは使えず、時間差の表示はCSSアニメーションで行う。
+      Reactがマウントすると #root の中身ごと置き換わるため、通常はこの文言が
+      画面に出ることはない。旧いブラウザや配信の失敗で「真っ白なまま」に
+      なる場合だけ、8秒後に浮かび上がる。
+    -->
+    <style>
+      .boot-fallback {
+        opacity: 0;
+        animation: boot-fallback-in 400ms ease 8s forwards;
+        margin: 0 auto;
+        padding: 40px 24px;
+        max-width: 30rem;
+        font-family: system-ui, sans-serif;
+        line-height: 1.8;
+        color: #33312e;
+        text-align: center;
+      }
+      @keyframes boot-fallback-in {
+        to { opacity: 1; }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="boot-fallback">
+        <p>WASA Chat を読み込めませんでした。</p>
+        <p>
+          ページを再読み込みしても直らない場合は、ブラウザのキャッシュを消すか、
+          別のブラウザで開いてみてください。
+        </p>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
