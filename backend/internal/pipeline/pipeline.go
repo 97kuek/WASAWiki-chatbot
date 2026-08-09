@@ -37,11 +37,13 @@ var jst = time.FixedZone("JST", 9*60*60)
 // 「無言で待たされる5秒」と「検索中→3ページ読んでいます→回答中と流れる5秒」では
 // 体感がまったく違う。進捗表示は実装が地味な割にUXへの効果が大きい。
 type Event struct {
-	Type    string   `json:"type"` // mode | status | pages | delta | done | error
+	Type    string   `json:"type"` // mode | status | timing | pages | delta | done | error
 	Message string   `json:"message,omitempty"`
 	Mode    string   `json:"mode,omitempty"`
 	Code    string   `json:"code,omitempty"`
 	RetryAt string   `json:"retry_at,omitempty"`
+	Stage   string   `json:"stage,omitempty"`
+	Millis  int64    `json:"milliseconds,omitempty"`
 	Pages   []Source `json:"pages,omitempty"`
 	Text    string   `json:"text,omitempty"`
 }
@@ -240,6 +242,14 @@ func (p *Pipeline) Run(ctx context.Context, question string, history []Conversat
 
 // RunWithMode は質問の種類と利用者の指定から、段階ごとの能力を決めて回答する。
 func (p *Pipeline) RunWithMode(ctx context.Context, question string, history []ConversationTurn, assistant *state.Assistant, requested ResponseMode, emit func(Event)) error {
+	started := time.Now()
+	emitTiming := func(stage string, stageStarted time.Time) {
+		millis := time.Since(stageStarted).Milliseconds()
+		if millis < 1 {
+			millis = 1 // 0msだとomitemptyでSSEから消え、画面側が計測不能と誤認する。
+		}
+		emit(Event{Type: "timing", Stage: stage, Millis: millis})
+	}
 	resolved := resolveResponseMode(requested, question)
 	selectionProfile, answerProfile := profilesFor(resolved)
 	emit(Event{Type: "mode", Mode: string(resolved)})
@@ -259,6 +269,7 @@ func (p *Pipeline) RunWithMode(ctx context.Context, question string, history []C
 	}
 
 	searchQuestion := contextualQuestion(question, history)
+	pageStarted := time.Now()
 	pages, err := p.selectPages(ctx, searchQuestion, assistant, selectionProfile, onWait)
 	if err != nil {
 		return fmt.Errorf("ページ選択: %w", err)
@@ -268,6 +279,7 @@ func (p *Pipeline) RunWithMode(ctx context.Context, question string, history []C
 		// 文脈ゼロになった事例があった。字面一致で拾い直す保険。
 		pages = p.fallbackPages(searchQuestion, assistant)
 	}
+	emitTiming("pages", pageStarted)
 	if len(pages) == 0 {
 		message := "Wikiの目次から関連するページを特定できませんでした。"
 		if scope := assistantpkg.ScopeLabel(assistant); scope != "" {
@@ -277,6 +289,7 @@ func (p *Pipeline) RunWithMode(ctx context.Context, question string, history []C
 		}
 		if assistant != nil {
 			emit(Event{Type: "delta", Text: message})
+			emitTiming("total", started)
 			emit(Event{Type: "done"})
 			return nil
 		}
@@ -296,10 +309,12 @@ func (p *Pipeline) RunWithMode(ctx context.Context, question string, history []C
 	}
 	emit(Event{Type: "pages", Pages: sources})
 
+	chunkStarted := time.Now()
 	chunks, err := p.selectChunks(ctx, searchQuestion, pages, selectionProfile, onWait)
 	if err != nil {
 		return fmt.Errorf("節の絞り込み: %w", err)
 	}
+	emitTiming("chunks", chunkStarted)
 	emit(Event{Type: "status", Message: fmt.Sprintf("%d件の資料を読んでいます", len(chunks))})
 
 	var blocks []string
@@ -323,6 +338,7 @@ func (p *Pipeline) RunWithMode(ctx context.Context, question string, history []C
 	}
 
 	emit(Event{Type: "status", Message: "回答を作成しています"})
+	answerStarted := time.Now()
 	_, err = p.llm.Stream(ctx, llm.Request{
 		// 目次を先頭に置く。全体を見渡す問い（「最も情報が薄い分野は？」）は
 		// 選択ページの本文だけでは構造的に答えられない。キャッシュも効く
@@ -346,9 +362,11 @@ func (p *Pipeline) RunWithMode(ctx context.Context, question string, history []C
 	}, func(text string) {
 		emit(Event{Type: "delta", Text: text})
 	})
+	emitTiming("answer", answerStarted)
 	if err != nil {
 		return fmt.Errorf("回答生成: %w", err)
 	}
+	emitTiming("total", started)
 	emit(Event{Type: "done"})
 	return nil
 }

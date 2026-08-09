@@ -33,6 +33,7 @@ func TestAnswerFeedbackCanBeSentWithOneTapAndUpdated(t *testing.T) {
 
 	updated := `{"clientId":"chat-1:0","kind":"answer","rating":"bad","reasons":["missing"],` +
 		`"comment":"必要な資料がない","question":"質問","answer":"回答","sources":[],` +
+		`"timings":{"pagesMs":1200,"chunksMs":300,"answerMs":2500,"totalMs":4100},` +
 		`"chatId":"chat-1","turnIndex":0,"page":"chat","responseMode":"auto"}`
 	req = authenticatedRequest(srv, http.MethodPost, "/api/feedback", updated, "利用者")
 	recorder = httptest.NewRecorder()
@@ -41,8 +42,21 @@ func TestAnswerFeedbackCanBeSentWithOneTapAndUpdated(t *testing.T) {
 	if err != nil || len(items) != 1 {
 		t.Fatalf("同じ回答の評価が重複した: count=%d err=%v", len(items), err)
 	}
-	if items[0].Rating != "bad" || items[0].Comment != "必要な資料がない" {
+	if items[0].Rating != "bad" || items[0].Comment != "必要な資料がない" ||
+		items[0].Timings == nil || items[0].Timings.TotalMS != 4100 {
 		t.Fatalf("理由と補足で更新できていない: %+v", items[0])
+	}
+}
+
+func TestFeedbackRejectsInvalidStageTimings(t *testing.T) {
+	srv := feedbackTestServer()
+	invalid := `{"clientId":"chat-1:0","kind":"answer","rating":"bad","question":"質問","answer":"回答",` +
+		`"timings":{"pagesMs":5000,"totalMs":1000},"chatId":"chat-1","turnIndex":0,"page":"chat"}`
+	req := authenticatedRequest(srv, http.MethodPost, "/api/feedback", invalid, "利用者")
+	recorder := httptest.NewRecorder()
+	srv.handleSaveFeedback(recorder, req)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("合計より長い段階時間を受け付けた: status=%d", recorder.Code)
 	}
 }
 

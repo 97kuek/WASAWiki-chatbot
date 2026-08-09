@@ -28,6 +28,7 @@ Python側の `rag/pipeline.py` とGo側の `backend/internal/pipeline`は、検�
 - コードで保証する規則: [docs/06-決定的ルール.md](docs/06-決定的ルール.md)
 - 認証とデータ保護: [docs/07-認証・データ保護.md](docs/07-認証・データ保護.md)
 - 評価制度と利用者フィードバック: [docs/08-評価・フィードバック.md](docs/08-評価・フィードバック.md)
+- 今後の作業: [TODO.md](TODO.md)
 
 ## セットアップ
 
@@ -111,8 +112,8 @@ docker compose up --build   # → http://localhost:8080
 | `LLM_PROVIDER` | `ollama` | 本番でGeminiを使う場合は `gemini` |
 | `GEMINI_API_KEY` | (なし) | WASAで共有するGeminiプロジェクトのAPIキー。サーバーの`.env`だけに置く |
 | `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Geminiの固定モデルID。`latest`別名は本番で使わない |
-| `GEMINI_FAST_MODEL` | `GEMINI_MODEL` | 高速モード用。比較測定で改善を確認するまでは未設定 |
-| `GEMINI_STANDARD_MODEL` | `GEMINI_MODEL` | 標準モードのページ・節選択用 |
+| `GEMINI_FAST_MODEL` | `GEMINI_MODEL` | 自動判定の高速段階用。比較測定で改善を確認するまでは未設定 |
+| `GEMINI_STANDARD_MODEL` | `GEMINI_MODEL` | 自動判定の標準段階で行うページ・節選択用 |
 | `GEMINI_DEEP_MODEL` | `GEMINI_MODEL` | じっくりモード用 |
 | `GEMINI_PAID_TIER` | `false` | Gemini有料枠を確認した場合だけ`true`にする |
 | `GEMINI_FREE_TIER_APPROVED` | `false` | 非公開WikiをGemini無料枠へ送る組織承認。2026-08-08のWASA会議で代表・PMが承認 |

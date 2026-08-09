@@ -19,6 +19,7 @@ import {
   type Feedback,
   type FeedbackReason,
   type ResponseMode,
+  type StageTimingName,
   type Team,
   type Turn,
 } from "./api";
@@ -86,8 +87,6 @@ const ASSISTANT_SORT_OPTIONS: SelectOption[] = [
 
 const RESPONSE_MODE_OPTIONS: SelectOption[] = [
   { value: "auto", label: "自動" },
-  { value: "fast", label: "高速" },
-  { value: "standard", label: "標準" },
   { value: "deep", label: "じっくり" },
 ];
 
@@ -98,16 +97,21 @@ const RESPONSE_MODE_LABELS: Record<ResponseMode, string> = {
   deep: "じっくり",
 };
 
-const RESPONSE_MODE_HELP: Record<ResponseMode, string> = {
+const RESPONSE_MODE_HELP: Record<"auto" | "deep", string> = {
   auto: "質問に合わせて自動調整",
-  fast: "一点だけをすばやく確認",
-  standard: "検索を重視した通常回答",
   deep: "比較や変遷を時間をかけて整理",
 };
 
-function loadResponseMode(): ResponseMode {
+function loadResponseMode(): "auto" | "deep" {
   const saved = localStorage.getItem(RESPONSE_MODE_KEY);
-  return saved === "fast" || saved === "standard" || saved === "deep" ? saved : "auto";
+  // 旧画面の高速・標準は内部の自動判定へ戻す。利用者に速度の細分を求めない。
+  return saved === "deep" ? "deep" : "auto";
+}
+
+function formatDuration(milliseconds: number | undefined): string {
+  if (milliseconds === undefined) return "—";
+  if (milliseconds < 1_000) return `${milliseconds}ms`;
+  return `${(milliseconds / 1_000).toFixed(milliseconds < 10_000 ? 1 : 0)}秒`;
 }
 
 const emptyDraft: AssistantDraft = { id: "", name: "", description: "", instruction: "" };
@@ -132,9 +136,7 @@ function stripCitation(text: string): string {
 
 function turnModeLabel(turn: Turn): string | null {
   if (!turn.responseMode) return null;
-  if (turn.responseMode === "auto" && turn.resolvedMode) {
-    return `自動（${RESPONSE_MODE_LABELS[turn.resolvedMode]}）`;
-  }
+  if (turn.responseMode === "auto") return "自動";
   return RESPONSE_MODE_LABELS[turn.responseMode];
 }
 
@@ -289,9 +291,14 @@ function FlightLoader() {
   return (
     <span className="flight-loader" aria-hidden="true">
       <span className="flight-loader-orbit">
-        <svg viewBox="0 0 18 12">
-          <path d="M1 6.2 8 5l3-4 1.5.3L11 5.2l5 1 1 1.2-6.3.2-2.2 3.8-1.4-.3.8-3.5-6 .7Z" />
-        </svg>
+        <span className="flight-loader-plane">
+          <span className="flight-loader-trail" />
+          <svg viewBox="0 0 30 16">
+            <path className="plane-wing" d="M1.5 7.8 14 5.4 28.5 8.1 14 9.2Z" />
+            <path className="plane-body" d="M13.2 6.5 17.7 1.4 19 1.8 17 7.4 24.7 9.7 24.1 10.8 16.1 9.1 13.3 14.7 12 14.2 13.7 8.8Z" />
+            <path className="plane-tail" d="m16.2 11.2 4.1 2.3-4.9-.8" />
+          </svg>
+        </span>
       </span>
     </span>
   );
@@ -320,6 +327,7 @@ export default function App() {
   const [generalFeedbackId, setGeneralFeedbackId] = useState(makeId);
   const [generalReason, setGeneralReason] = useState<FeedbackReason | null>(null);
   const [generalComment, setGeneralComment] = useState("");
+  const [generalSubmitting, setGeneralSubmitting] = useState(false);
   const [answerFeedbackOpen, setAnswerFeedbackOpen] = useState<string | null>(null);
   const [answerComments, setAnswerComments] = useState<Record<string, string>>({});
   const [historyMenuId, setHistoryMenuId] = useState<string | null>(null);
@@ -331,7 +339,7 @@ export default function App() {
   const [teams, setTeams] = useState<Team[]>([]);
   const [favoriteAssistantIds, setFavoriteAssistantIds] = useState(loadFavoriteAssistantIds);
   const [assistantSort, setAssistantSort] = useState<AssistantSort>(loadAssistantSort);
-  const [responseMode, setResponseMode] = useState<ResponseMode>(loadResponseMode);
+  const [responseMode, setResponseMode] = useState<"auto" | "deep">(loadResponseMode);
   // 選んだアシスタントは端末に覚える。毎回選び直させると、結局
   // 誰も使わない機能になる（サーバーに持つほどの情報でもない）
   const [assistantId, setAssistantId] = useState(() => localStorage.getItem(ASSISTANT_KEY) ?? "");
@@ -566,6 +574,7 @@ export default function App() {
     const opening = !noticeOpen;
     setNoticeOpen(opening);
     setProfileOpen(false);
+    setFeedbackOpen(false);
     if (!opening || announcements.length === 0) return;
     const ids = announcements.map((announcement) => announcement.id);
     setReadAnnouncementIds(ids);
@@ -601,20 +610,24 @@ export default function App() {
     void refreshFeedbackItems();
   }
 
-  async function sendGeneralFeedback(reason: FeedbackReason, comment = generalComment) {
-    setGeneralReason(reason);
+  async function sendGeneralFeedback() {
+    if (!generalReason || generalSubmitting) return;
+    setGeneralSubmitting(true);
     try {
       await submitFeedback({
         clientId: generalFeedbackId,
         kind: "general",
-        reasons: [reason],
-        comment,
+        reasons: [generalReason],
+        comment: generalComment.trim(),
         page: view === "assistants" ? "assistants" : "chat",
       });
-      showToast(comment ? "補足も送信しました" : "フィードバックを送信しました");
+      setFeedbackOpen(false);
+      showToast("フィードバックを送信しました");
       void refreshFeedbackItems();
     } catch (error) {
       showToast(error instanceof Error ? error.message : "フィードバックを送信できませんでした");
+    } finally {
+      setGeneralSubmitting(false);
     }
   }
 
@@ -645,6 +658,7 @@ export default function App() {
       assistantName: turn.assistantName,
       responseMode: turn.responseMode,
       resolvedMode: turn.resolvedMode,
+      timings: turn.timings,
       chatId: chat.id,
       turnIndex,
       page: "chat",
@@ -1033,6 +1047,14 @@ export default function App() {
         case "status":
           patch((current) => ({ ...current, status: event.message, retryAt: event.retry_at }));
           break;
+        case "timing": {
+          const key: `${StageTimingName}Ms` = `${event.stage}Ms`;
+          patch((current) => ({
+            ...current,
+            timings: { ...current.timings, [key]: event.milliseconds },
+          }));
+          break;
+        }
         case "pages":
           patch((current) => ({ ...current, sources: event.pages }));
           break;
@@ -1273,29 +1295,29 @@ export default function App() {
                   <div className="feedback-popover-head">
                     <div>
                       <h2>気づいたことを送る</h2>
-                      <p>まず1つ選ぶだけで送信されます。文章は任意です。</p>
+                      <p>匿名で管理者にフィードバックを送れます</p>
                     </div>
                     <button type="button" className="popover-close" onClick={() => setFeedbackOpen(false)} aria-label="閉じる">×</button>
                   </div>
-                  <div className="feedback-choice-list">
-                    {GENERAL_REASONS.map((reason) => (
-                      <button
-                        type="button"
-                        key={reason}
-                        className={generalReason === reason ? "selected" : ""}
-                        onClick={() => void sendGeneralFeedback(reason)}
-                      >
-                        {FEEDBACK_LABELS[reason]}
-                      </button>
-                    ))}
-                  </div>
-                  {generalReason && (
-                    <form className="feedback-comment-form" onSubmit={(event) => {
-                      event.preventDefault();
-                      void sendGeneralFeedback(generalReason, generalComment.trim());
-                    }}>
+                  <form className="feedback-comment-form" onSubmit={(event) => {
+                    event.preventDefault();
+                    void sendGeneralFeedback();
+                  }}>
+                    <div className="feedback-choice-list" role="group" aria-label="フィードバックの種類">
+                      {GENERAL_REASONS.map((reason) => (
+                        <button
+                          type="button"
+                          key={reason}
+                          className={generalReason === reason ? "selected" : ""}
+                          aria-pressed={generalReason === reason}
+                          onClick={() => setGeneralReason(reason)}
+                        >
+                          {FEEDBACK_LABELS[reason]}
+                        </button>
+                      ))}
+                    </div>
                       <label>
-                        <span>補足があれば教えてください（任意）</span>
+                        <span>補足</span>
                         <textarea
                           value={generalComment}
                           onChange={(event) => setGeneralComment(event.target.value)}
@@ -1304,10 +1326,10 @@ export default function App() {
                           placeholder="どこで、何が起きたかなど"
                         />
                       </label>
-                      <button type="submit" disabled={!generalComment.trim()}>補足を送る</button>
-                    </form>
-                  )}
-                  <p className="feedback-privacy">利用者名は表示せず、選択内容と補足、現在の画面だけを保存します。</p>
+                    <button type="submit" disabled={!generalReason || generalSubmitting}>
+                      {generalSubmitting ? "送信中…" : "送信する"}
+                    </button>
+                  </form>
                   {isAdmin && (
                     <section className="feedback-admin">
                       <div className="feedback-admin-head">
@@ -1331,6 +1353,9 @@ export default function App() {
                             {item.question && <p><b>質問:</b> {item.question}</p>}
                             {item.comment && <p><b>補足:</b> {item.comment}</p>}
                             {item.answer && <p><b>回答:</b> {item.answer.slice(0, 500)}{item.answer.length > 500 ? "…" : ""}</p>}
+                            {item.timings && (
+                              <p><b>所要時間:</b> ページ {formatDuration(item.timings.pagesMs)} / 節 {formatDuration(item.timings.chunksMs)} / 回答 {formatDuration(item.timings.answerMs)} / 合計 {formatDuration(item.timings.totalMs)}</p>
+                            )}
                             <time dateTime={item.submittedAt}>{new Date(item.submittedAt).toLocaleString("ja-JP")}</time>
                           </details>
                         ))}
@@ -1381,6 +1406,7 @@ export default function App() {
                 onClick={() => {
                   setProfileOpen((open) => !open);
                   setNoticeOpen(false);
+                  setFeedbackOpen(false);
                 }}
               >
                 {Array.from(username)[0] ?? "W"}
@@ -1512,27 +1538,27 @@ export default function App() {
             ) : (
               <>
                 <header className="assistant-page-head">
-                  <div>
+                  <div className="assistant-page-copy">
                     <h2>アシスタント</h2>
                     <p className="muted">
                       口調や参照範囲を決めた設定です。誰でも作れて全員が使えます。
                     </p>
                   </div>
-                  <button type="button" className="primary" onClick={startCreate}>新しく作る</button>
+                  <div className="assistant-page-controls">
+                    <span className="assistant-count">{assistants.length + 1}件</span>
+                    <div className="assistant-sort">
+                      <span className="visually-hidden">並べ替え</span>
+                      <SelectMenu
+                        label="アシスタントの並べ替え"
+                        value={assistantSort}
+                        options={ASSISTANT_SORT_OPTIONS}
+                        onChange={changeAssistantSort}
+                      />
+                    </div>
+                    <button type="button" className="primary assistant-create" onClick={startCreate}>新しく作る</button>
+                  </div>
                 </header>
                 {assistantError && <p className="assistant-error" role="alert">{assistantError}</p>}
-                <div className="assistant-list-tools">
-                  <span>{assistants.length + 1}件</span>
-                  <div className="assistant-sort">
-                    <span>並べ替え</span>
-                    <SelectMenu
-                      label="アシスタントの並べ替え"
-                      value={assistantSort}
-                      options={ASSISTANT_SORT_OPTIONS}
-                      onChange={changeAssistantSort}
-                    />
-                  </div>
-                </div>
                 <ul className="assistant-grid">
                   <li>
                     <button type="button" className={`assistant-card assistant-card-default ${assistantId === "" ? "on" : ""}`} onClick={() => chooseAssistant("")}>
@@ -1747,7 +1773,7 @@ export default function App() {
                 value={responseMode}
                 options={RESPONSE_MODE_OPTIONS}
                 onChange={(value) => {
-                  const next = value as ResponseMode;
+                  const next = value === "deep" ? "deep" : "auto";
                   setResponseMode(next);
                   localStorage.setItem(RESPONSE_MODE_KEY, next);
                 }}

@@ -11,6 +11,13 @@ export type Source = {
 
 export type ResponseMode = "auto" | "fast" | "standard" | "deep";
 export type ResolvedResponseMode = Exclude<ResponseMode, "auto">;
+export type StageTimingName = "pages" | "chunks" | "answer" | "total";
+export type StageTimings = {
+  pagesMs?: number;
+  chunksMs?: number;
+  answerMs?: number;
+  totalMs?: number;
+};
 
 export type Turn = {
   question: string;
@@ -28,6 +35,7 @@ export type Turn = {
   /** 利用者が選んだモードと、自動判定後に実際に使われたモード。 */
   responseMode?: ResponseMode;
   resolvedMode?: ResolvedResponseMode;
+  timings?: StageTimings;
   feedbackRating?: "good" | "bad";
   feedbackReasons?: FeedbackReason[];
   feedbackComment?: string;
@@ -49,6 +57,7 @@ export type ConversationContextTurn = Pick<Turn, "question" | "answer">;
 export type Event =
   | { type: "mode"; mode: ResolvedResponseMode }
   | { type: "status"; message: string; retry_at?: string }
+  | { type: "timing"; stage: StageTimingName; milliseconds: number }
   | { type: "pages"; pages: Source[] }
   | { type: "delta"; text: string }
   | { type: "done" }
@@ -105,6 +114,7 @@ export type FeedbackPayload = {
   assistantName?: string;
   responseMode?: ResponseMode;
   resolvedMode?: ResolvedResponseMode;
+  timings?: StageTimings;
   chatId?: string;
   turnIndex?: number;
   page: "chat" | "assistants";

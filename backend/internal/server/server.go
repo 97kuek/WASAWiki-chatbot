@@ -350,6 +350,9 @@ func validateChat(chat *state.Chat, expectedID string) bool {
 				return false
 			}
 		}
+		if !validStageTimings(turn.Timings) {
+			return false
+		}
 		if turn.FeedbackRating != "" && turn.FeedbackRating != "good" && turn.FeedbackRating != "bad" ||
 			turn.FeedbackRating == "" && (len(turn.FeedbackReasons) > 0 || turn.FeedbackComment != "") ||
 			len(turn.FeedbackReasons) > 5 || len([]rune(turn.FeedbackComment)) > 500 ||
@@ -406,6 +409,24 @@ func (s *Server) handleDeleteChat(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------- フィードバック
 
 const maxFeedbackList = 100
+const maxStageTimingMS = int64((30 * time.Minute) / time.Millisecond)
+
+func validStageTimings(timings *state.StageTimings) bool {
+	if timings == nil {
+		return true
+	}
+	values := []int64{timings.PagesMS, timings.ChunksMS, timings.AnswerMS, timings.TotalMS}
+	for _, value := range values {
+		if value < 0 || value > maxStageTimingMS {
+			return false
+		}
+	}
+	if timings.TotalMS > 0 &&
+		(timings.PagesMS > timings.TotalMS || timings.ChunksMS > timings.TotalMS || timings.AnswerMS > timings.TotalMS) {
+		return false
+	}
+	return true
+}
 
 var feedbackReasons = map[string]bool{
 	"helpful": true, "clear": true, "good_sources": true,
@@ -487,21 +508,22 @@ func (s *Server) feedbackID(userKey, clientID string) string {
 
 func (s *Server) handleSaveFeedback(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		ClientID      string         `json:"clientId"`
-		Kind          string         `json:"kind"`
-		Rating        string         `json:"rating"`
-		Reasons       []string       `json:"reasons"`
-		Comment       string         `json:"comment"`
-		Question      string         `json:"question"`
-		Answer        string         `json:"answer"`
-		Sources       []state.Source `json:"sources"`
-		AssistantID   string         `json:"assistantId"`
-		AssistantName string         `json:"assistantName"`
-		ResponseMode  string         `json:"responseMode"`
-		ResolvedMode  string         `json:"resolvedMode"`
-		ChatID        string         `json:"chatId"`
-		TurnIndex     int            `json:"turnIndex"`
-		Page          string         `json:"page"`
+		ClientID      string              `json:"clientId"`
+		Kind          string              `json:"kind"`
+		Rating        string              `json:"rating"`
+		Reasons       []string            `json:"reasons"`
+		Comment       string              `json:"comment"`
+		Question      string              `json:"question"`
+		Answer        string              `json:"answer"`
+		Sources       []state.Source      `json:"sources"`
+		AssistantID   string              `json:"assistantId"`
+		AssistantName string              `json:"assistantName"`
+		ResponseMode  string              `json:"responseMode"`
+		ResolvedMode  string              `json:"resolvedMode"`
+		Timings       *state.StageTimings `json:"timings"`
+		ChatID        string              `json:"chatId"`
+		TurnIndex     int                 `json:"turnIndex"`
+		Page          string              `json:"page"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128<<10)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "フィードバックが不正です"})
@@ -516,10 +538,11 @@ func (s *Server) handleSaveFeedback(w http.ResponseWriter, r *http.Request) {
 		len([]rune(body.Comment)) > 500 || len([]rune(body.Question)) > 500 ||
 		len([]rune(body.Answer)) > 20_000 || !feedbackSourcesValid(body.Sources) ||
 		len(body.AssistantID) > 64 || len([]rune(body.AssistantName)) > 40 ||
+		!validStageTimings(body.Timings) ||
 		len(body.ChatID) > 64 || body.TurnIndex < 0 || body.TurnIndex > 99 ||
 		(body.Page != "chat" && body.Page != "assistants") ||
 		(body.Kind == "answer" && (body.Rating == "" || body.ChatID == "" || strings.TrimSpace(body.Question) == "")) ||
-		(body.Kind == "general" && (body.Rating != "" || len(body.Reasons) == 0 && body.Comment == "")) {
+		(body.Kind == "general" && (body.Rating != "" || body.Timings != nil || len(body.Reasons) == 0 && body.Comment == "")) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "フィードバックが不正です"})
 		return
 	}
@@ -541,7 +564,7 @@ func (s *Server) handleSaveFeedback(w http.ResponseWriter, r *http.Request) {
 		Kind: body.Kind, Rating: body.Rating, Reasons: body.Reasons, Comment: body.Comment,
 		Question: body.Question, Answer: body.Answer, Sources: body.Sources,
 		AssistantID: body.AssistantID, AssistantName: body.AssistantName,
-		ResponseMode: body.ResponseMode, ResolvedMode: body.ResolvedMode,
+		ResponseMode: body.ResponseMode, ResolvedMode: body.ResolvedMode, Timings: body.Timings,
 		ChatID: body.ChatID, TurnIndex: body.TurnIndex, Page: body.Page,
 		SubmittedAt: time.Now().UTC().Format(time.RFC3339),
 	}

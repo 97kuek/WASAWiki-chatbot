@@ -227,6 +227,34 @@ func TestResponseModeUsesDifferentProfilesByStage(t *testing.T) {
 	}
 }
 
+func TestRunEmitsStageTimings(t *testing.T) {
+	client := &stubLLM{titles: []string{"電装班"}}
+	pipe := New(testIndex(t), client)
+	var stages []string
+	timings := map[string]int64{}
+
+	if err := pipe.Run(context.Background(), "電装班について教えて", nil, nil, func(event Event) {
+		if event.Type == "timing" {
+			stages = append(stages, event.Stage)
+			timings[event.Stage] = event.Millis
+		}
+	}); err != nil {
+		t.Fatalf("Run が失敗: %v", err)
+	}
+	want := []string{"pages", "chunks", "answer", "total"}
+	if strings.Join(stages, ",") != strings.Join(want, ",") {
+		t.Fatalf("計測段階または順序が不正: got=%v want=%v", stages, want)
+	}
+	for _, stage := range want {
+		if timings[stage] < 1 {
+			t.Errorf("%sの所要時間が記録されていない: %d", stage, timings[stage])
+		}
+	}
+	if timings["total"] < timings["pages"] || timings["total"] < timings["answer"] {
+		t.Fatalf("合計時間が各段階より短い: %+v", timings)
+	}
+}
+
 func TestAutoResponseModeRaisesEffortOnlyForComplexQuestions(t *testing.T) {
 	cases := []struct {
 		question string

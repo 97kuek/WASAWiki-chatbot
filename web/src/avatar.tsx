@@ -64,14 +64,17 @@ export function AssistantAvatar({
   );
 }
 
-/** 汎用（アシスタント未選択）の印。名前の頭文字とは別物だと分かる形にする。 */
+/** 汎用はWASA Chatそのものなので、回答欄と同じ公式マークを使う。 */
 export function DefaultAvatar({ size = 40 }: { size?: number }) {
   return (
-    <span className="avatar avatar-default" aria-hidden="true" style={{ width: size, height: size }}>
-      <svg viewBox="0 0 24 24">
-        <path d="M12 3v3M7 9h10a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2ZM9 14h.01M15 14h.01" />
-      </svg>
-    </span>
+    <img
+      className="avatar avatar-default"
+      src="/assets/wasa-chat-mark-photo-trimmed.png"
+      alt=""
+      width={size}
+      height={size}
+      style={{ width: size, height: size }}
+    />
   );
 }
 

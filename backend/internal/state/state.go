@@ -13,6 +13,15 @@ type Source struct {
 	Origin     string `json:"origin,omitempty" firestore:"origin,omitempty"`
 }
 
+// StageTimingsは利用者が待った時間を処理段階ごとに保持する。
+// モデル内部のトークン数ではなく壁時計時間なので、API待機や再試行も含む。
+type StageTimings struct {
+	PagesMS  int64 `json:"pagesMs,omitempty" firestore:"pages_ms,omitempty"`
+	ChunksMS int64 `json:"chunksMs,omitempty" firestore:"chunks_ms,omitempty"`
+	AnswerMS int64 `json:"answerMs,omitempty" firestore:"answer_ms,omitempty"`
+	TotalMS  int64 `json:"totalMs,omitempty" firestore:"total_ms,omitempty"`
+}
+
 type Turn struct {
 	Question  string   `json:"question" firestore:"question"`
 	Answer    string   `json:"answer" firestore:"answer"`
@@ -29,8 +38,9 @@ type Turn struct {
 	AssistantName string `json:"assistantName,omitempty" firestore:"assistant_name,omitempty"`
 	// 回答時の指定と、自動判定後に実際に使ったモード。モデル名は履歴へ
 	// 保存しないため、将来モデルを更新しても画面表示が陳腐化しない。
-	ResponseMode string `json:"responseMode,omitempty" firestore:"response_mode,omitempty"`
-	ResolvedMode string `json:"resolvedMode,omitempty" firestore:"resolved_mode,omitempty"`
+	ResponseMode string        `json:"responseMode,omitempty" firestore:"response_mode,omitempty"`
+	ResolvedMode string        `json:"resolvedMode,omitempty" firestore:"resolved_mode,omitempty"`
+	Timings      *StageTimings `json:"timings,omitempty" firestore:"timings,omitempty"`
 	// 回答評価は履歴にも残し、再表示後に同じ回答へ何度も評価させない。
 	// 集計用の正本はトップレベルfeedbackコレクションに別途保存する。
 	FeedbackRating  string   `json:"feedbackRating,omitempty" firestore:"feedback_rating,omitempty"`
@@ -77,23 +87,24 @@ type Assistant struct {
 // Feedback は回答評価と画面全体への改善報告を同じ形で保存する。
 // ReporterKeyは利用者名のHMAC値であり、管理画面のJSONには出さない。
 type Feedback struct {
-	ID            string   `json:"id" firestore:"id"`
-	ReporterKey   string   `json:"-" firestore:"reporter_key"`
-	Kind          string   `json:"kind" firestore:"kind"`                         // answer | general
-	Rating        string   `json:"rating,omitempty" firestore:"rating,omitempty"` // good | bad
-	Reasons       []string `json:"reasons,omitempty" firestore:"reasons,omitempty"`
-	Comment       string   `json:"comment,omitempty" firestore:"comment,omitempty"`
-	Question      string   `json:"question,omitempty" firestore:"question,omitempty"`
-	Answer        string   `json:"answer,omitempty" firestore:"answer,omitempty"`
-	Sources       []Source `json:"sources,omitempty" firestore:"sources,omitempty"`
-	AssistantID   string   `json:"assistantId,omitempty" firestore:"assistant_id,omitempty"`
-	AssistantName string   `json:"assistantName,omitempty" firestore:"assistant_name,omitempty"`
-	ResponseMode  string   `json:"responseMode,omitempty" firestore:"response_mode,omitempty"`
-	ResolvedMode  string   `json:"resolvedMode,omitempty" firestore:"resolved_mode,omitempty"`
-	ChatID        string   `json:"chatId,omitempty" firestore:"chat_id,omitempty"`
-	TurnIndex     int      `json:"turnIndex,omitempty" firestore:"turn_index,omitempty"`
-	Page          string   `json:"page,omitempty" firestore:"page,omitempty"`
-	SubmittedAt   string   `json:"submittedAt" firestore:"submitted_at"`
+	ID            string        `json:"id" firestore:"id"`
+	ReporterKey   string        `json:"-" firestore:"reporter_key"`
+	Kind          string        `json:"kind" firestore:"kind"`                         // answer | general
+	Rating        string        `json:"rating,omitempty" firestore:"rating,omitempty"` // good | bad
+	Reasons       []string      `json:"reasons,omitempty" firestore:"reasons,omitempty"`
+	Comment       string        `json:"comment,omitempty" firestore:"comment,omitempty"`
+	Question      string        `json:"question,omitempty" firestore:"question,omitempty"`
+	Answer        string        `json:"answer,omitempty" firestore:"answer,omitempty"`
+	Sources       []Source      `json:"sources,omitempty" firestore:"sources,omitempty"`
+	AssistantID   string        `json:"assistantId,omitempty" firestore:"assistant_id,omitempty"`
+	AssistantName string        `json:"assistantName,omitempty" firestore:"assistant_name,omitempty"`
+	ResponseMode  string        `json:"responseMode,omitempty" firestore:"response_mode,omitempty"`
+	ResolvedMode  string        `json:"resolvedMode,omitempty" firestore:"resolved_mode,omitempty"`
+	Timings       *StageTimings `json:"timings,omitempty" firestore:"timings,omitempty"`
+	ChatID        string        `json:"chatId,omitempty" firestore:"chat_id,omitempty"`
+	TurnIndex     int           `json:"turnIndex,omitempty" firestore:"turn_index,omitempty"`
+	Page          string        `json:"page,omitempty" firestore:"page,omitempty"`
+	SubmittedAt   string        `json:"submittedAt" firestore:"submitted_at"`
 }
 
 // Storeの利用者キーには、利用者名そのものではなくサーバー側でHMAC化した値を渡す。
