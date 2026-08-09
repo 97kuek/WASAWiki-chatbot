@@ -40,6 +40,9 @@ MIN_INDEX_CHARS = 20  # これ未満は本当に空。チャンクを作らな�
 CHUNK_TARGET = 1200  # チャンクの目標サイズ
 CHUNK_MAX = 2500     # レンダリング後にこれを超えたら分割する
 CHUNK_MIN = 200      # これ未満の末尾チャンクは直前に吸収する
+# 目次の節一覧に2階層目まで載せるページの大きさ。これ未満は最上位見出しだけ。
+# 上位10ページ程度が対象になる大きさに置いている（目次の増分を抑えるため）
+DEEP_OUTLINE_CHARS = 8000
 
 # 個人情報のマスキング。氏名・役職・班は「40代の駆動班長は誰か」に答えるため残す。
 MASK_PII = True
@@ -425,6 +428,19 @@ def outline(text: str) -> tuple[str, list[str]]:
     levels = [s["level"] for s in sections if s["level"] > 0]
     top = min(levels) if levels else 0
     headings = [s["heading"] for s in sections if s["level"] == top and s["heading"]]
+
+    # 大きいページは、最上位見出しだけでは中身が表現できない。
+    # 「空力設計(41st)」は19,450字あるのに最上位見出しが4つ（設計諸元 / コンセプト /
+    # 詳細設計 / 尾翼設計）しかなく、他チームの墜落原因表が目次から見えないため、
+    # 「芝浦工業大学TBTの空力設計」を3回とも引けなかった（q17。M4以降ずっと未解決）。
+    # 小さいページまで深掘りすると目次が膨らむので、閾値を超えたページだけにする。
+    if len(text) >= DEEP_OUTLINE_CHARS:
+        second = [s["heading"] for s in sections if s["level"] == top + 1 and s["heading"]]
+        seen = set(headings)
+        for heading in second:
+            if heading not in seen:
+                seen.add(heading)
+                headings.append(heading)
 
     # リード文は本文の書き出し。表・図・箇条書き記号は目次では邪魔になる
     def readable(text: str) -> str:

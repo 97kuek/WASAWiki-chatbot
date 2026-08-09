@@ -140,6 +140,12 @@ def parse_args() -> argparse.Namespace:
         help="測定する設問IDをカンマ区切りで指定する（例: q32,q33）。省略時は全問",
     )
     parser.add_argument(
+        "--repeats",
+        type=int,
+        default=1,
+        help="同じ設問を何回測るか（既定: 1）。2以上にすると各回の値と範囲を出す",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=OUT,
@@ -148,24 +154,8 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
-    questions = json.loads(GOLDEN.read_text(encoding="utf-8"))["questions"]
-    if args.ids:
-        wanted = [item.strip() for item in args.ids.split(",") if item.strip()]
-        by_id = {question["id"]: question for question in questions}
-        missing = [question_id for question_id in wanted if question_id not in by_id]
-        if missing:
-            raise SystemExit(f"存在しない設問IDです: {', '.join(missing)}")
-        # 指定順を維持する。q32→q33のような会話回帰を読みやすい順で出すため。
-        questions = [by_id[question_id] for question_id in wanted]
-    if not questions:
-        raise SystemExit("測定対象の設問がありません")
-    load_dotenv()
-    llm = make_llm()
-    print(f'モデル: {llm.name()}')
-    pipeline = Pipeline(Path("data/index.json"), Path("data/toc.md"), llm)
-
+def measure(pipeline, llm, questions: list[dict]) -> tuple[list[dict], dict, dict]:
+    """1回分の測定。records / stats / 種別ごとの内訳を返す。"""
     records = []
     stats = {
         "page_hit": 0, "page_scored": 0,
@@ -219,31 +209,87 @@ def main() -> None:
               f"{'出典○' if cited else '出典×'} {'忠実○' if verdict['faithful'] else '忠実×'} "
               f"{' / '.join(answer.pages)}")
 
-    args.output.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+    return records, stats, per_type
+
+
+def main() -> None:
+    args = parse_args()
+    questions = json.loads(GOLDEN.read_text(encoding="utf-8"))["questions"]
+    if args.ids:
+        wanted = [item.strip() for item in args.ids.split(",") if item.strip()]
+        by_id = {question["id"]: question for question in questions}
+        missing = [question_id for question_id in wanted if question_id not in by_id]
+        if missing:
+            raise SystemExit(f"存在しない設問IDです: {', '.join(missing)}")
+        # 指定順を維持する。q32→q33のような会話回帰を読みやすい順で出すため。
+        questions = [by_id[question_id] for question_id in wanted]
+    if not questions:
+        raise SystemExit("測定対象の設問がありません")
+    load_dotenv()
+    llm = make_llm()
+    print(f'モデル: {llm.name()}')
+    pipeline = Pipeline(Path("data/index.json"), Path("data/toc.md"), llm)
+
+    runs = []
+    for i in range(args.repeats):
+        if args.repeats > 1:
+            print(f"\n--- {i + 1}回目 / {args.repeats} ---")
+        runs.append(measure(pipeline, llm, questions))
+
+    # 出力は全実行分を残す。1回目だけ見て判断しないため
+    all_records = [dict(r, run=i + 1) for i, (records, _, _) in enumerate(runs) for r in records]
+    args.output.write_text(json.dumps(all_records, ensure_ascii=False, indent=2), encoding="utf-8")
 
     n = len(questions)
-    ps = stats["page_scored"]
-    print(f"\n{'=' * 66}\nM2b: エンドツーエンドの回答品質（{n}問）\n{'=' * 66}")
+    ps = runs[0][1]["page_scored"]
+
+    def summarize(label: str, key: str, denom: int) -> str:
+        """反復したときは、値そのものではなく**範囲**を主に出す。
+
+        1回ずつの実行を比べて改善と読むのを、何度もやってしまった
+        （M25・M26・M27で「回答の出し方」が74.3〜88.6%の幅で動いた）。
+        範囲が重なっているなら、その差はばらつきと区別できない。
+        """
+        values = [stats[key] for _, stats, _ in runs]
+        if len(values) == 1:
+            return f"  {label}: {values[0]}/{denom} = {values[0] / denom * 100:.1f}%"
+        lo, hi = min(values), max(values)
+        mid = sorted(values)[len(values) // 2]
+        each = " ".join(str(v) for v in values)
+        return (f"  {label}: 中央値 {mid}/{denom} = {mid / denom * 100:.1f}%"
+                f"  範囲 {lo}〜{hi}（{lo / denom * 100:.1f}〜{hi / denom * 100:.1f}%）  各回 {each}")
+
+    title = f"M2b: エンドツーエンドの回答品質（{n}問"
+    title += f" × {args.repeats}回）" if args.repeats > 1 else "）"
+    print(f"\n{'=' * 78}\n{title}\n{'=' * 78}")
     print("【ルールベース（決定的）】")
-    print(f"  ページ選択が的中     : {stats['page_hit']}/{ps} = {stats['page_hit'] / ps * 100:.1f}%")
-    print(f"  出典を明示           : {stats['cited']}/{n} = {stats['cited'] / n * 100:.1f}%")
-    print(f"  回答の出し方が種別に対して適切     : "
-          f"{stats['said_no_info']}/{stats['should_say_no_info']} "
-          f"= {stats['said_no_info'] / stats['should_say_no_info'] * 100:.1f}%")
-    print(f"  照合で落とした架空ページ名          : {len(stats['dropped'])}件 {stats['dropped'] or ''}")
-    print(f"  文脈量               : 中央値 "
-          f"{sorted(r['context_chars'] for r in records)[n // 2]:,}字 / "
-          f"最大 {max(r['context_chars'] for r in records):,}字")
+    print(summarize("ページ選択が的中  ", "page_hit", ps))
+    print(summarize("出典を明示        ", "cited", n))
+    print(summarize("回答の出し方が適切", "said_no_info", n))
+    dropped = [d for _, stats, _ in runs for d in stats["dropped"]]
+    print(f"  照合で落とした架空ページ名: {len(dropped)}件 {dropped or ''}")
+    ctx = sorted(r["context_chars"] for r in all_records)
+    print(f"  文脈量            : 中央値 {ctx[len(ctx) // 2]:,}字 / 最大 {max(ctx):,}字")
 
-    print("\n【LLM-as-a-Judge（⚠️ 判定器がローカルモデルのため暫定値）】")
-    print(f"  Faithfulness         : {stats['faithful']}/{n} = {stats['faithful'] / n * 100:.1f}%")
+    print("\n【LLM-as-a-Judge（⚠️ 判定器と人手評価の一致度は未測定。確定値にしない）】")
+    print(summarize("Faithfulness      ", "faithful", n))
 
-    print("\n種別ごと（ページ的中 / 忠実性）:")
-    for qtype, v in sorted(per_type.items()):
-        print(f"  {qtype:<14} {v['page_hit']:>2}/{v['n']:<2}   {v['faithful']:>2}/{v['n']}")
+    print("\n種別ごと（ページ的中 / 忠実性。反復時は合計）:")
+    totals: dict[str, dict[str, int]] = {}
+    for _, _, per_type in runs:
+        for qtype, v in per_type.items():
+            t = totals.setdefault(qtype, {"n": 0, "page_hit": 0, "faithful": 0})
+            for key in t:
+                t[key] += v[key]
+    for qtype, v in sorted(totals.items()):
+        print(f"  {qtype:<14} {v['page_hit']:>3}/{v['n']:<3}  {v['faithful']:>3}/{v['n']}")
+
+    if args.repeats == 1:
+        print("\n⚠️ 1回だけの実行です。前回との差を改善と読まないでください"
+              "（--repeats 3 で範囲を見てから判断する）。")
 
     print(f"\nLLM呼び出し {llm.calls}回 / 合計 {llm.seconds:.0f}秒")
-    print(f"回答全文は {args.output} に保存（人手レビュー用）")
+    print(f"回答全文は {args.output} に保存（人手レビュー用。run列で実行回を区別）")
 
 
 if __name__ == "__main__":
