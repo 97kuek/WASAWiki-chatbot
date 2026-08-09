@@ -169,7 +169,8 @@ docker compose up --build   # → http://localhost:8080
 | `GEMINI_MAX_RETRIES` | 2 | 短時間の429、503、通信失敗時の追加試行回数。日次上限は再試行しない |
 | `VITE_WIKI_URL` | 本Wiki | プロフィールメニューから開くWiki |
 | `CLAUDE_MODEL` | `claude-opus-5` | 費用優先なら `claude-sonnet-5` |
-| `DATA_DIR` | `data` | index.json と toc.md の置き場所 |
+| `DATA_DIR` | `data` | index.json と toc.md の置き場所（ローカル） |
+| `INDEX_GCS` | (なし) | 索引をCloud Storageから読む場合の場所（例: `gs://wasa-chat-index`）。設定すると`DATA_DIR`より優先し、読めなければ起動しない |
 | `SPA_DIR` | (なし) | 指定するとビルド済みSPAも同じサーバーから配る |
 
 ### 確認

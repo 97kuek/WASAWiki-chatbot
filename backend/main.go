@@ -67,6 +67,25 @@ func envSeconds(key string, fallback float64) time.Duration {
 	return time.Duration(fallback * float64(time.Second))
 }
 
+// loadIndex は索引を読み込み、どこから読んだかを併せて返す。
+//
+// `INDEX_GCS`（例: `gs://wasa-chat-index`）があればそちらを正本とし、
+// 失敗したら起動を止める。イメージに焼いた古い索引で黙って動き続けると、
+// 「更新したのに反映されない」という一番分かりにくい壊れ方をするためである。
+// 設定が無ければ従来どおり `DATA_DIR` のファイルを読む（手元とdocker compose）。
+func loadIndex() (*index.Index, string, error) {
+	if location := os.Getenv("INDEX_GCS"); location != "" {
+		// 起動を待たせ続けないため上限を切る。同一リージョンなら3MBは1秒未満
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		ix, err := index.LoadGCS(ctx, location)
+		return ix, location, err
+	}
+	dir := env("DATA_DIR", "data")
+	ix, err := index.Load(dir)
+	return ix, dir, err
+}
+
 // seedAssistants は assistants/*.json のうち未登録のものを登録する。
 //
 // ⚠️ **ADMIN_USERS が未設定でもアプリの起動は止めない。** 初期アシスタントは
@@ -108,14 +127,14 @@ func main() {
 		}
 	}
 
-	dataDir := env("DATA_DIR", "data")
-	ix, err := index.Load(dataDir)
+	ix, source, err := loadIndex()
 	if err != nil {
 		log.Fatalf("インデックスを読み込めません（%s）: %v\n"+
-			"先に python build_index.py && python build_toc.py を実行してください", dataDir, err)
+			"先に python build_index.py && python build_toc.py を実行してください", source, err)
 	}
 	pages, chunks := ix.Stats()
-	log.Printf("インデックス読み込み完了: %dページ / %dチャンク / 目次%d字", pages, chunks, len([]rune(ix.TOC)))
+	log.Printf("インデックス読み込み完了（%s）: %dページ / %dチャンク / 目次%d字",
+		source, pages, chunks, len([]rune(ix.TOC)))
 
 	var client llm.Client
 	provider := env("LLM_PROVIDER", "ollama")

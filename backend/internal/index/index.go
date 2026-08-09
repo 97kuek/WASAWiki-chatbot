@@ -114,14 +114,26 @@ func Load(dir string) (*Index, error) {
 	if err != nil {
 		return nil, fmt.Errorf("index.json の読み込み: %w", err)
 	}
+	toc, err := os.ReadFile(filepath.Join(dir, "toc.md"))
+	if err != nil {
+		return nil, fmt.Errorf("toc.md の読み込み: %w", err)
+	}
+	return Build(raw, toc)
+}
+
+// Build は index.json と toc.md の中身から Index を組み立てる。
+//
+// 読み込み元（ファイル / Cloud Storage）と組み立てを分けているのは、
+// 索引の置き場所を運用側で選べるようにするためである。
+func Build(raw, toc []byte) (*Index, error) {
 	var parsed file
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return nil, fmt.Errorf("index.json の解析: %w", err)
 	}
-
-	toc, err := os.ReadFile(filepath.Join(dir, "toc.md"))
-	if err != nil {
-		return nil, fmt.Errorf("toc.md の読み込み: %w", err)
+	if len(parsed.Pages) == 0 {
+		// 空の索引で起動すると、全部の質問に「資料が見つかりません」と
+		// 答え続ける。壊れていることが分からないので、ここで止める
+		return nil, fmt.Errorf("index.json にページがありません")
 	}
 
 	ix := &Index{
