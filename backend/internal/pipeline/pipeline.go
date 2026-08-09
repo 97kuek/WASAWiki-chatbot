@@ -1,8 +1,8 @@
 // Package pipeline は「目次 → ページ選択 → チャンク絞り込み → 回答生成」を実装する。
 //
-// rag/pipeline.py（測定用）と同じ段構成・同じプロンプトである。
-// Python 側で測った数字（docs/02-測定結果.md M2a: Page Recall@3 = 93.1%）が
-// そのまま意味を持つよう、意図的に一致させている。片方だけ変えないこと。
+// rag/pipeline.py（測定用）と検索・回答の段構成とコアプロンプトを揃える。
+// 本番固有のsystem規則・参照範囲・SSEはGoだけにあるため実装全体は同一ではない。
+// 共通部分を片方だけ変えると測定値が本番を説明しなくなる（docs/05参照）。
 package pipeline
 
 import (
@@ -376,10 +376,9 @@ func contextualQuestion(question string, history []ConversationTurn) string {
 }
 
 func (p *Pipeline) selectPages(ctx context.Context, question string, a *state.Assistant, profile llm.Profile, onWait func(llm.WaitInfo)) ([]*index.Page, error) {
-	// 絞り込み中でも**目次そのものは削らない**。目次を差し替えるとアシスタントごとに
-	// プロンプトキャッシュが分裂し、使う人の少ないアシスタントほど単価が上がる
-	// （llm.Request のコメント参照）。候補を減らす指示だけを足し、
-	// 実際の除外は下の inScope で決定的に行う。
+	// 区分だけを絞る場合は全体目次を保ち、アシスタントごとのキャッシュ分裂を防ぐ。
+	// ただし「公式サイトのみ」は公開範囲の境界なので、scopedTOCで限定用目次へ
+	// 差し替える。どちらの場合もページ自体の除外は下のinScopeで決定的に行う。
 	scopeHint := ""
 	if scope := assistantpkg.ScopeLabel(a); scope != "" {
 		scopeHint = fmt.Sprintf(

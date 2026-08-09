@@ -66,6 +66,18 @@ func TestGeminiProfileSelectsServerConfiguredModelAndThinking(t *testing.T) {
 	}
 }
 
+func TestGeminiUsesFixedDefaultModel(t *testing.T) {
+	g := NewGeminiProfiles("test-key", ModelProfiles{}, 0, 0)
+	if g.model != "gemini-3.5-flash-lite" {
+		t.Fatalf("未指定時に固定モデルIDを使っていない: %q", g.model)
+	}
+	for _, profile := range []Profile{ProfileFast, ProfileStandard, ProfileDeep} {
+		if got := g.modelFor(profile); got != g.model {
+			t.Fatalf("未指定の段階が既定モデルへ戻っていない: profile=%s model=%q", profile, got)
+		}
+	}
+}
+
 func TestGeminiLegacyModelOmitsThinkingLevel(t *testing.T) {
 	g := NewGemini("test-key", "gemini-2.5-flash", 0, 0)
 	config := g.payload(Request{MaxTokens: 300, Profile: ProfileDeep}, "gemini-2.5-flash")["generationConfig"].(map[string]any)

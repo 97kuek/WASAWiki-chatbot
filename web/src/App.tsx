@@ -619,17 +619,32 @@ export default function App() {
     }
   }
 
-  function chooseAssistant(id: string) {
-    const name = assistants.find((item) => item.id === id)?.name ?? "汎用";
+  function chooseAssistant(id: string, selectedName?: string) {
+    if (streaming) {
+      showToast("回答が終わってからアシスタントを切り替えてください");
+      return;
+    }
+    const changed = id !== assistantId;
+    const name = selectedName ?? assistants.find((item) => item.id === id)?.name ?? "汎用";
     setAssistantId(id);
     localStorage.setItem(ASSISTANT_KEY, id);
     // 選んだらチャットへ戻る。選ぶために開いた画面なので、留まる理由がない
     closeAssistantForm();
     setView("chat");
-    showToast(`アシスタントを「${name}」に切り替えました`);
+    closeSidebarOnMobile();
+    if (!changed) return;
+    // 同じ履歴で参照範囲や一般知識の可否が途中から変わると、過去回答を
+    // どの規則で読めばよいか分からなくなる。切り替え時は会話を分離する。
+    setActiveChatId(null);
+    setQuestion("");
+    showToast(`「${name}」に切り替え、新しいチャットを開きました`);
   }
 
   function openAssistants() {
+    if (streaming) {
+      showToast("回答が終わってからアシスタントを切り替えてください");
+      return;
+    }
     setAssistantError("");
     closeAssistantForm();
     setView("assistants");
@@ -719,8 +734,8 @@ export default function App() {
       setAssistants((current) => [...current, created]);
       setAssistantDraft(emptyDraft);
       clearPendingIcon();
-      chooseAssistant(created.id);
-      showToast(`「${created.name}」を作成しました`);
+      chooseAssistant(created.id, created.name);
+      showToast(`「${created.name}」を作成し、新しいチャットを開きました`);
     } catch (error) {
       setAssistantError(error instanceof Error ? error.message : "保存できませんでした");
     }

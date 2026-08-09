@@ -57,7 +57,9 @@ func NewGeminiProfiles(key string, models ModelProfiles, minInterval time.Durati
 		maxRetries = 0
 	}
 	if models.Default == "" {
-		models.Default = "gemini-flash-latest"
+		// latest別名は中身が予告なく変わり、同じ評価条件を再現できない。
+		// main.goと同じ固定IDを直接利用時の既定にもする。
+		models.Default = "gemini-3.5-flash-lite"
 	}
 	configured := map[Profile]string{
 		ProfileFast:     models.Fast,

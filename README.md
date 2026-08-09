@@ -1,6 +1,6 @@
 # WASA Chat
 
-> 状態： 設計・検証フェーズ
+> 状態： 初期Webアプリ実装済み・精度検証／本番準備フェーズ
 
 - 早稲田大学宇宙航空研究会WASA 鳥人間プロジェクトの引き継ぎ資料Wiki（MediaWiki）に対して、自然言語で質問できるチャットボット
 - 新入生や代替わりした担当者が「どこに何が書いてあるか分からない」状態を解消することを目的にしている
@@ -15,13 +15,18 @@ backend/                                       Go       API（認証・SSE・レ
 web/                                           React    履歴・Markdown/TeX対応のチャットUI
 ```
 
-Python側の `rag/pipeline.py` と Go側の `backend/internal/pipeline` は、
-**同じ段構成・同じプロンプト**にしてある。Pythonで測った数字がそのまま意味を持つようにするため。
+Python側の `rag/pipeline.py` とGo側の `backend/internal/pipeline`は、検索・回答の
+**共通段構成とコアプロンプト**を揃える。Go側には認証、共有アシスタントのsystem規則、
+参照範囲の決定的な除外、SSEが追加されるため、実装全体が同一という意味ではない。
 
+- 引き継ぎの入口と文書の正本: [docs/00-引き継ぎガイド.md](docs/00-引き継ぎガイド.md)
 - 設計の詳細と判断の根拠: [docs/01-設計方針.md](docs/01-設計方針.md)
 - 実測値: [docs/02-測定結果.md](docs/02-測定結果.md)
-- 画面・履歴・認証の現行仕様: [docs/03-画面・認証仕様.md](docs/03-画面・認証仕様.md)
+- 画面・履歴・アシスタントの現行仕様: [docs/03-画面仕様.md](docs/03-画面仕様.md)
 - 本番へのデプロイと更新手順: [docs/04-デプロイ手順.md](docs/04-デプロイ手順.md)
+- システムプロンプト: [docs/05-システムプロンプト.md](docs/05-システムプロンプト.md)
+- コードで保証する規則: [docs/06-決定的ルール.md](docs/06-決定的ルール.md)
+- 認証とデータ保護: [docs/07-認証・データ保護.md](docs/07-認証・データ保護.md)
 
 ## セットアップ
 
@@ -81,6 +86,7 @@ docker compose up --build   # → http://localhost:8080
 - 質問は右寄せの吹き出し、回答はMarkdownとTeX数式で表示する
 - 入力欄は画面下部に固定し、`Enter` で送信、`Shift + Enter` で改行する
 - チャット履歴はWiki利用者ごとにFirestoreへ最大30件保存し、別端末でのログイン時にも同期する
+- アシスタントを切り替えると、参照範囲と口調を混ぜないため新しいチャットを開く
 - Firestore導入前に現在のタブへ残っていた履歴は、初回ログイン時に自動移行する
 - PCは履歴と会話の2カラムで、履歴欄は折りたためる。狭い画面では重ねて開く
 - 履歴は今日、昨日、過去7日間、年月で分け、各履歴からピン留め、タイトル変更、共有、削除ができる
@@ -100,7 +106,10 @@ docker compose up --build   # → http://localhost:8080
 | `ALLOW_ORIGIN` | (なし) | 本番のCloudflare Pages URL。複数はカンマ区切り。Cloud Runでは必須で、許可外OriginのPOSTを拒否する |
 | `LLM_PROVIDER` | `ollama` | 本番でGeminiを使う場合は `gemini` |
 | `GEMINI_API_KEY` | (なし) | WASAで共有するGeminiプロジェクトのAPIキー。サーバーの`.env`だけに置く |
-| `GEMINI_MODEL` | `gemini-flash-latest` | Geminiのモデル名 |
+| `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Geminiの固定モデルID。`latest`別名は本番で使わない |
+| `GEMINI_FAST_MODEL` | `GEMINI_MODEL` | 高速モード用。比較測定で改善を確認するまでは未設定 |
+| `GEMINI_STANDARD_MODEL` | `GEMINI_MODEL` | 標準モードのページ・節選択用 |
+| `GEMINI_DEEP_MODEL` | `GEMINI_MODEL` | じっくりモード用 |
 | `GEMINI_PAID_TIER` | `false` | Gemini有料枠を確認した場合だけ`true`にする |
 | `GEMINI_FREE_TIER_APPROVED` | `false` | 非公開WikiをGemini無料枠へ送る組織承認。2026-08-08のWASA会議で代表・PMが承認 |
 | `GEMINI_MIN_INTERVAL` | 4 | Goバックエンド全体でGeminiリクエスト間に空ける秒数 |
@@ -117,13 +126,14 @@ cd backend && go test ./...
 cd web && npm run build
 ```
 
-## 現在の対象データ規模
+## 現在の索引規模
 
 | 項目 | 実測値 |
 |---|---|
-| 本文ページ | 117（標準名前空間） |
-| 総文字数 | 約30万字 |
-| 添付画像 | 67枚（PNG / JPEG） |
+| Wiki実記事 | 114ページ |
+| 公式サイト | 500ページ |
+| 索引全体 | 614ページ / 911チャンク / 646,856字 |
+| Wiki添付画像 | 67枚（本文参照57箇所） |
 
 ## ライセンス
 

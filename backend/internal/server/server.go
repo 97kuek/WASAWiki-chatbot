@@ -41,7 +41,7 @@ type Config struct {
 	AllowOrigin   string // 開発時にViteのdev serverから叩くためのCORS設定
 	SPADir        string // 指定するとビルド済みSPAも同じサーバーから配る
 	// 他人のアシスタントも削除できるWiki利用者名。役割ではなく、
-	// 明らかなゴミを片付けるための最小限の権限（docs/03-画面・認証仕様.md）
+	// 明らかなゴミを片付けるための最小限の権限（docs/06-決定的ルール.md）
 	AdminUsers []string
 }
 

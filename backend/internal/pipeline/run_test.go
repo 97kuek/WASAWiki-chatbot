@@ -326,8 +326,8 @@ func TestRunReportsEmptyScope(t *testing.T) {
 	}
 }
 
-// 目次はアシスタントによらず同じでなければならない。差し替えるとプロンプト
-// キャッシュがアシスタントごとに分裂し、使う人の少ないものほど単価が上がる。
+// 区分の絞り込みは公開範囲の境界ではないため、目次を差し替えない。
+// 区分ごとに分けるとキャッシュが分裂し、使う人の少ないものほど単価が上がる。
 func TestRunKeepsTOCCacheable(t *testing.T) {
 	ix := testIndex(t)
 	var cached []string

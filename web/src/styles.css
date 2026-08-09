@@ -1786,7 +1786,7 @@ button:disabled {
 }
 
 /* 作成者名は必ず出す。匿名で共有できないことが、内容の管理を人手に
-   頼らずに済ませている仕組みそのもの（docs/03-画面・認証仕様.md） */
+   頼らずに済ませている仕組みそのもの（docs/06-決定的ルール.md） */
 .assistant-meta { font-size: 11px; line-height: 1.5; color: var(--muted); }
 
 .assistant-favorite {
