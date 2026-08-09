@@ -31,6 +31,11 @@ type Turn struct {
 	// 保存しないため、将来モデルを更新しても画面表示が陳腐化しない。
 	ResponseMode string `json:"responseMode,omitempty" firestore:"response_mode,omitempty"`
 	ResolvedMode string `json:"resolvedMode,omitempty" firestore:"resolved_mode,omitempty"`
+	// 回答評価は履歴にも残し、再表示後に同じ回答へ何度も評価させない。
+	// 集計用の正本はトップレベルfeedbackコレクションに別途保存する。
+	FeedbackRating  string   `json:"feedbackRating,omitempty" firestore:"feedback_rating,omitempty"`
+	FeedbackReasons []string `json:"feedbackReasons,omitempty" firestore:"feedback_reasons,omitempty"`
+	FeedbackComment string   `json:"feedbackComment,omitempty" firestore:"feedback_comment,omitempty"`
 }
 
 type Chat struct {
@@ -69,6 +74,28 @@ type Assistant struct {
 	UpdatedAt string `json:"updatedAt" firestore:"updated_at"`
 }
 
+// Feedback は回答評価と画面全体への改善報告を同じ形で保存する。
+// ReporterKeyは利用者名のHMAC値であり、管理画面のJSONには出さない。
+type Feedback struct {
+	ID            string   `json:"id" firestore:"id"`
+	ReporterKey   string   `json:"-" firestore:"reporter_key"`
+	Kind          string   `json:"kind" firestore:"kind"`                         // answer | general
+	Rating        string   `json:"rating,omitempty" firestore:"rating,omitempty"` // good | bad
+	Reasons       []string `json:"reasons,omitempty" firestore:"reasons,omitempty"`
+	Comment       string   `json:"comment,omitempty" firestore:"comment,omitempty"`
+	Question      string   `json:"question,omitempty" firestore:"question,omitempty"`
+	Answer        string   `json:"answer,omitempty" firestore:"answer,omitempty"`
+	Sources       []Source `json:"sources,omitempty" firestore:"sources,omitempty"`
+	AssistantID   string   `json:"assistantId,omitempty" firestore:"assistant_id,omitempty"`
+	AssistantName string   `json:"assistantName,omitempty" firestore:"assistant_name,omitempty"`
+	ResponseMode  string   `json:"responseMode,omitempty" firestore:"response_mode,omitempty"`
+	ResolvedMode  string   `json:"resolvedMode,omitempty" firestore:"resolved_mode,omitempty"`
+	ChatID        string   `json:"chatId,omitempty" firestore:"chat_id,omitempty"`
+	TurnIndex     int      `json:"turnIndex,omitempty" firestore:"turn_index,omitempty"`
+	Page          string   `json:"page,omitempty" firestore:"page,omitempty"`
+	SubmittedAt   string   `json:"submittedAt" firestore:"submitted_at"`
+}
+
 // Storeの利用者キーには、利用者名そのものではなくサーバー側でHMAC化した値を渡す。
 // ただしアシスタントは全員で共有するため、利用者ごとの区別を持たない。
 type Store interface {
@@ -79,6 +106,8 @@ type Store interface {
 	ListChats(context.Context, string, int) ([]Chat, error)
 	SaveChat(context.Context, string, Chat, int) error
 	DeleteChat(context.Context, string, string) error
+	SaveFeedback(context.Context, Feedback) error
+	ListFeedback(context.Context, int) ([]Feedback, error)
 
 	ListAssistants(context.Context) ([]Assistant, error)
 	// CreateAssistant は同じIDが無いときだけ書き込む。既にあれば ErrAssistantExists。

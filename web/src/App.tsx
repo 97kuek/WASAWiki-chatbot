@@ -6,14 +6,18 @@ import {
   deleteChat,
   listAssistants,
   listChats,
+  listFeedback,
   login,
   logout,
   saveChat,
   session,
+  submitFeedback,
   updateAssistant,
   type Assistant,
   type AssistantDraft,
   type Chat,
+  type Feedback,
+  type FeedbackReason,
   type ResponseMode,
   type Team,
   type Turn,
@@ -37,6 +41,27 @@ const ASSISTANT_SORT_KEY = "wasa-chat-assistant-sort";
 const RESPONSE_MODE_KEY = "wasa-chat-response-mode";
 const TOAST_DURATION_MS = 3000;
 const CENTER_ICON_POSITION: IconCropPosition = { x: 50, y: 50 };
+
+const FEEDBACK_LABELS: Record<FeedbackReason, string> = {
+  helpful: "知りたいことが分かった",
+  clear: "説明が分かりやすい",
+  good_sources: "出典が役立った",
+  incorrect: "内容が違う",
+  missing: "必要な情報がない",
+  unclear: "説明が分かりにくい",
+  wrong_sources: "出典が違う",
+  outdated: "情報が古い",
+  slow: "回答が遅い",
+  bug: "表示・動作がおかしい",
+  usability: "使いにくい",
+  feature: "機能の提案",
+  content: "回答・資料について",
+  other: "その他",
+};
+
+const GOOD_REASONS: FeedbackReason[] = ["helpful", "clear", "good_sources"];
+const BAD_REASONS: FeedbackReason[] = ["incorrect", "missing", "unclear", "wrong_sources", "outdated", "slow"];
+const GENERAL_REASONS: FeedbackReason[] = ["bug", "usability", "feature", "content", "other"];
 
 type AssistantSort = "favorite" | "name" | "author";
 
@@ -269,6 +294,7 @@ export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [username, setUsername] = useState("");
   const [remaining, setRemaining] = useState(0);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [form, setForm] = useState({ username: "", password: "" });
   const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState("");
@@ -281,6 +307,14 @@ export default function App() {
   const [readAnnouncementIds, setReadAnnouncementIds] = useState(loadReadAnnouncementIds);
   const [noticeOpen, setNoticeOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackItems, setFeedbackItems] = useState<Feedback[]>([]);
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
+  const [generalFeedbackId, setGeneralFeedbackId] = useState(makeId);
+  const [generalReason, setGeneralReason] = useState<FeedbackReason | null>(null);
+  const [generalComment, setGeneralComment] = useState("");
+  const [answerFeedbackOpen, setAnswerFeedbackOpen] = useState<string | null>(null);
+  const [answerComments, setAnswerComments] = useState<Record<string, string>>({});
   const [historyMenuId, setHistoryMenuId] = useState<string | null>(null);
   const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
   const [renameTitle, setRenameTitle] = useState("");
@@ -386,6 +420,7 @@ export default function App() {
       setAuthed(current.authenticated);
       setUsername(current.username);
       setRemaining(current.remaining);
+      setIsAdmin(current.admin);
       if (current.authenticated) {
         void restoreHistory(current.username);
         void refreshAssistants();
@@ -414,11 +449,12 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!noticeOpen && !profileOpen && !historyMenuId && !renamingChatId) return;
+    if (!noticeOpen && !profileOpen && !historyMenuId && !renamingChatId && !feedbackOpen) return;
     const closeOnOutsideClick = (event: PointerEvent) => {
       if (!headerMenus.current?.contains(event.target as Node)) {
         setNoticeOpen(false);
         setProfileOpen(false);
+        setFeedbackOpen(false);
       }
       if (!historyArea.current?.contains(event.target as Node)) setHistoryMenuId(null);
     };
@@ -426,6 +462,7 @@ export default function App() {
       if (event.key === "Escape") {
         setNoticeOpen(false);
         setProfileOpen(false);
+        setFeedbackOpen(false);
         setHistoryMenuId(null);
         setRenamingChatId(null);
       }
@@ -436,7 +473,7 @@ export default function App() {
       window.removeEventListener("pointerdown", closeOnOutsideClick);
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [historyMenuId, noticeOpen, profileOpen, renamingChatId]);
+  }, [feedbackOpen, historyMenuId, noticeOpen, profileOpen, renamingChatId]);
 
   useEffect(() => {
     const wide = window.matchMedia("(min-width: 901px)");
@@ -500,6 +537,7 @@ export default function App() {
     setAuthed(true);
     setUsername(current.username);
     setRemaining(current.remaining);
+    setIsAdmin(current.admin);
     void restoreHistory(current.username);
     void refreshAssistants();
   }
@@ -507,9 +545,11 @@ export default function App() {
   async function handleLogout() {
     setNoticeOpen(false);
     setProfileOpen(false);
+    setFeedbackOpen(false);
     await logout();
     setAuthed(false);
     setUsername("");
+    setIsAdmin(false);
     syncedChats.current.clear();
     setChats([]);
     setActiveChatId(null);
@@ -527,6 +567,135 @@ export default function App() {
       localStorage.setItem(ANNOUNCEMENT_READ_KEY, JSON.stringify(ids));
     } catch {
       // 保存できなくても、現在の表示中は既読状態を維持する。
+    }
+  }
+
+  async function refreshFeedbackItems() {
+    if (!isAdmin) return;
+    setFeedbackLoading(true);
+    try {
+      setFeedbackItems(await listFeedback());
+    } catch {
+      showToast("フィードバック一覧を読み込めませんでした");
+    } finally {
+      setFeedbackLoading(false);
+    }
+  }
+
+  function handleFeedbackToggle() {
+    const opening = !feedbackOpen;
+    setFeedbackOpen(opening);
+    setNoticeOpen(false);
+    setProfileOpen(false);
+    if (!opening) return;
+    setGeneralFeedbackId(makeId());
+    setGeneralReason(null);
+    setGeneralComment("");
+    void refreshFeedbackItems();
+  }
+
+  async function sendGeneralFeedback(reason: FeedbackReason, comment = generalComment) {
+    setGeneralReason(reason);
+    try {
+      await submitFeedback({
+        clientId: generalFeedbackId,
+        kind: "general",
+        reasons: [reason],
+        comment,
+        page: view === "assistants" ? "assistants" : "chat",
+      });
+      showToast(comment ? "補足も送信しました" : "フィードバックを送信しました");
+      void refreshFeedbackItems();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "フィードバックを送信できませんでした");
+    }
+  }
+
+  function patchTurnFeedback(chatId: string, turnIndex: number, update: Partial<Turn>) {
+    setChats((current) => current.map((chat) => chat.id === chatId
+      ? { ...chat, turns: chat.turns.map((turn, index) => index === turnIndex ? { ...turn, ...update } : turn) }
+      : chat));
+  }
+
+  async function sendAnswerFeedback(
+    chat: Chat,
+    turnIndex: number,
+    turn: Turn,
+    rating: "good" | "bad",
+    reasons: FeedbackReason[],
+    comment: string,
+  ) {
+    await submitFeedback({
+      clientId: `${chat.id}:${turnIndex}`,
+      kind: "answer",
+      rating,
+      reasons,
+      comment,
+      question: turn.question,
+      answer: turn.answer.slice(0, 20_000),
+      sources: turn.sources.slice(0, 8),
+      assistantId: turn.assistantId,
+      assistantName: turn.assistantName,
+      responseMode: turn.responseMode,
+      resolvedMode: turn.resolvedMode,
+      chatId: chat.id,
+      turnIndex,
+      page: "chat",
+    });
+  }
+
+  async function handleAnswerRating(chat: Chat, turnIndex: number, turn: Turn, rating: "good" | "bad") {
+    const key = `${chat.id}:${turnIndex}`;
+    const previous = {
+      feedbackRating: turn.feedbackRating,
+      feedbackReasons: turn.feedbackReasons,
+      feedbackComment: turn.feedbackComment,
+    };
+    const reasons = turn.feedbackRating === rating ? (turn.feedbackReasons ?? []) : [];
+    const comment = turn.feedbackRating === rating ? (turn.feedbackComment ?? "") : "";
+    patchTurnFeedback(chat.id, turnIndex, {
+      feedbackRating: rating,
+      feedbackReasons: reasons,
+      feedbackComment: comment,
+    });
+    setAnswerFeedbackOpen(key);
+    setAnswerComments((current) => ({ ...current, [key]: comment }));
+    try {
+      await sendAnswerFeedback(chat, turnIndex, turn, rating, reasons, comment);
+      showToast("評価を送信しました。理由は任意です");
+      void refreshFeedbackItems();
+    } catch (error) {
+      patchTurnFeedback(chat.id, turnIndex, previous);
+      showToast(error instanceof Error ? error.message : "評価を送信できませんでした");
+    }
+  }
+
+  async function toggleAnswerReason(chat: Chat, turnIndex: number, turn: Turn, reason: FeedbackReason) {
+    if (!turn.feedbackRating) return;
+    const current = turn.feedbackReasons ?? [];
+    const reasons = current.includes(reason) ? current.filter((item) => item !== reason) : [...current, reason];
+    patchTurnFeedback(chat.id, turnIndex, { feedbackReasons: reasons });
+    try {
+      await sendAnswerFeedback(chat, turnIndex, turn, turn.feedbackRating, reasons, turn.feedbackComment ?? "");
+      showToast("理由を追加しました");
+      void refreshFeedbackItems();
+    } catch (error) {
+      patchTurnFeedback(chat.id, turnIndex, { feedbackReasons: current });
+      showToast(error instanceof Error ? error.message : "理由を送信できませんでした");
+    }
+  }
+
+  async function submitAnswerComment(chat: Chat, turnIndex: number, turn: Turn) {
+    if (!turn.feedbackRating) return;
+    const key = `${chat.id}:${turnIndex}`;
+    const comment = (answerComments[key] ?? "").trim();
+    patchTurnFeedback(chat.id, turnIndex, { feedbackComment: comment });
+    try {
+      await sendAnswerFeedback(chat, turnIndex, turn, turn.feedbackRating, turn.feedbackReasons ?? [], comment);
+      showToast("補足を送信しました");
+      void refreshFeedbackItems();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "補足を送信できませんでした");
     }
   }
 
@@ -1077,7 +1246,92 @@ export default function App() {
             <h1>{view === "assistants" ? "アシスタント" : activeChat?.title ?? "新しいチャット"}</h1>
           </div>
           <div className="header-actions" ref={headerMenus}>
-            <span className="header-organization">WASA</span>
+            <div className="header-menu-wrap">
+              <button
+                type="button"
+                className="feedback-trigger"
+                aria-expanded={feedbackOpen}
+                aria-controls="feedback-popover"
+                onClick={handleFeedbackToggle}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-5 4v-4.5A2.5 2.5 0 0 1 4 13.5v-8Z" />
+                  <path d="M8 8h8M8 12h5" />
+                </svg>
+                <span>改善を送る</span>
+              </button>
+              {feedbackOpen && (
+                <section className="header-popover feedback-popover" id="feedback-popover" aria-label="フィードバック">
+                  <div className="feedback-popover-head">
+                    <div>
+                      <h2>気づいたことを送る</h2>
+                      <p>まず1つ選ぶだけで送信されます。文章は任意です。</p>
+                    </div>
+                    <button type="button" className="popover-close" onClick={() => setFeedbackOpen(false)} aria-label="閉じる">×</button>
+                  </div>
+                  <div className="feedback-choice-list">
+                    {GENERAL_REASONS.map((reason) => (
+                      <button
+                        type="button"
+                        key={reason}
+                        className={generalReason === reason ? "selected" : ""}
+                        onClick={() => void sendGeneralFeedback(reason)}
+                      >
+                        {FEEDBACK_LABELS[reason]}
+                      </button>
+                    ))}
+                  </div>
+                  {generalReason && (
+                    <form className="feedback-comment-form" onSubmit={(event) => {
+                      event.preventDefault();
+                      void sendGeneralFeedback(generalReason, generalComment.trim());
+                    }}>
+                      <label>
+                        <span>補足があれば教えてください（任意）</span>
+                        <textarea
+                          value={generalComment}
+                          onChange={(event) => setGeneralComment(event.target.value)}
+                          maxLength={500}
+                          rows={3}
+                          placeholder="どこで、何が起きたかなど"
+                        />
+                      </label>
+                      <button type="submit" disabled={!generalComment.trim()}>補足を送る</button>
+                    </form>
+                  )}
+                  <p className="feedback-privacy">利用者名は表示せず、選択内容と補足、現在の画面だけを保存します。</p>
+                  {isAdmin && (
+                    <section className="feedback-admin">
+                      <div className="feedback-admin-head">
+                        <h3>最近の報告</h3>
+                        <button type="button" onClick={() => void refreshFeedbackItems()} disabled={feedbackLoading}>
+                          {feedbackLoading ? "読込中" : "更新"}
+                        </button>
+                      </div>
+                      <div className="feedback-summary">
+                        <span>良い {feedbackItems.filter((item) => item.rating === "good").length}</span>
+                        <span>改善 {feedbackItems.filter((item) => item.rating === "bad").length}</span>
+                        <span>全体 {feedbackItems.filter((item) => item.kind === "general").length}</span>
+                      </div>
+                      <div className="feedback-admin-list">
+                        {feedbackItems.length === 0 ? <p>まだ報告はありません</p> : feedbackItems.slice(0, 12).map((item) => (
+                          <details key={item.id}>
+                            <summary>
+                              <span>{item.rating === "good" ? "良い" : item.rating === "bad" ? "改善" : "全体"}</span>
+                              <strong>{item.reasons?.[0] ? FEEDBACK_LABELS[item.reasons[0]] : item.comment || "理由なし"}</strong>
+                            </summary>
+                            {item.question && <p><b>質問:</b> {item.question}</p>}
+                            {item.comment && <p><b>補足:</b> {item.comment}</p>}
+                            {item.answer && <p><b>回答:</b> {item.answer.slice(0, 500)}{item.answer.length > 500 ? "…" : ""}</p>}
+                            <time dateTime={item.submittedAt}>{new Date(item.submittedAt).toLocaleString("ja-JP")}</time>
+                          </details>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+                </section>
+              )}
+            </div>
             <div className="header-menu-wrap">
               <button
                 type="button"
@@ -1389,6 +1643,64 @@ export default function App() {
                       {turn.retryAt && <small>{retryLabel(turn.retryAt, clock)}</small>}
                     </div>
                   ) : <div className="error" role="alert">{turn.error}</div>)}
+
+                  {!turn.streaming && turn.answer && !turn.error && activeChat && (
+                    <section className="answer-feedback" aria-label="回答の評価">
+                      <div className="answer-feedback-row">
+                        <span>
+                          {turn.feedbackRating ? "評価済み" : "この回答は役に立ちましたか？"}
+                          {!turn.feedbackRating && <small>質問・回答も送信</small>}
+                        </span>
+                        <button
+                          type="button"
+                          className={turn.feedbackRating === "good" ? "selected" : ""}
+                          aria-label="役に立った"
+                          aria-pressed={turn.feedbackRating === "good"}
+                          onClick={() => void handleAnswerRating(activeChat, index, turn, "good")}
+                        >👍</button>
+                        <button
+                          type="button"
+                          className={turn.feedbackRating === "bad" ? "selected" : ""}
+                          aria-label="改善が必要"
+                          aria-pressed={turn.feedbackRating === "bad"}
+                          onClick={() => void handleAnswerRating(activeChat, index, turn, "bad")}
+                        >👎</button>
+                      </div>
+                      {answerFeedbackOpen === `${activeChat.id}:${index}` && turn.feedbackRating && (
+                        <div className="answer-feedback-detail">
+                          <div className="feedback-chips">
+                            {(turn.feedbackRating === "good" ? GOOD_REASONS : BAD_REASONS).map((reason) => (
+                              <button
+                                type="button"
+                                key={reason}
+                                className={turn.feedbackReasons?.includes(reason) ? "selected" : ""}
+                                onClick={() => void toggleAnswerReason(activeChat, index, turn, reason)}
+                              >
+                                {FEEDBACK_LABELS[reason]}
+                              </button>
+                            ))}
+                          </div>
+                          <div className="answer-feedback-comment">
+                            <textarea
+                              value={answerComments[`${activeChat.id}:${index}`] ?? turn.feedbackComment ?? ""}
+                              onChange={(event) => setAnswerComments((current) => ({
+                                ...current,
+                                [`${activeChat.id}:${index}`]: event.target.value,
+                              }))}
+                              maxLength={500}
+                              rows={2}
+                              placeholder="補足があれば入力（任意）"
+                            />
+                            <button type="button" onClick={() => void submitAnswerComment(activeChat, index, turn)}>
+                              補足を送る
+                            </button>
+                            <button type="button" className="linkish" onClick={() => setAnswerFeedbackOpen(null)}>閉じる</button>
+                          </div>
+                          <p>評価時は、この質問・回答・出典も改善確認のため保存します。</p>
+                        </div>
+                      )}
+                    </section>
+                  )}
 
                   {turn.sources.length > 0 && (
                     <section className="sources">

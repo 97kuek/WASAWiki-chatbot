@@ -79,6 +79,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/chats", s.requireAuth(s.handleListChats))
 	mux.HandleFunc("PUT /api/chats/{id}", s.requireAuth(s.handleSaveChat))
 	mux.HandleFunc("DELETE /api/chats/{id}", s.requireAuth(s.handleDeleteChat))
+	mux.HandleFunc("POST /api/feedback", s.requireAuth(s.handleSaveFeedback))
+	mux.HandleFunc("GET /api/feedback", s.requireAuth(s.handleListFeedback))
 	mux.HandleFunc("GET /api/assistants", s.requireAuth(s.handleListAssistants))
 	mux.HandleFunc("POST /api/assistants", s.requireAuth(s.handleCreateAssistant))
 	mux.HandleFunc("PUT /api/assistants/{id}", s.requireAuth(s.handleUpdateAssistant))
@@ -254,7 +256,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		expireUsageCookie(w)
 	}
 	writeJSON(w, http.StatusOK,
-		map[string]any{"authenticated": ok, "username": user, "remaining": remaining})
+		map[string]any{"authenticated": ok, "username": user, "remaining": remaining, "admin": ok && s.isAdmin(user)})
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, _ *http.Request) {
@@ -278,6 +280,15 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+func (s *Server) isAdmin(user string) bool {
+	for _, admin := range s.cfg.AdminUsers {
+		if user == admin {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------- チャット履歴
@@ -339,6 +350,13 @@ func validateChat(chat *state.Chat, expectedID string) bool {
 				return false
 			}
 		}
+		if turn.FeedbackRating != "" && turn.FeedbackRating != "good" && turn.FeedbackRating != "bad" ||
+			turn.FeedbackRating == "" && (len(turn.FeedbackReasons) > 0 || turn.FeedbackComment != "") ||
+			len(turn.FeedbackReasons) > 5 || len([]rune(turn.FeedbackComment)) > 500 ||
+			!validFeedbackReasons(turn.FeedbackReasons) ||
+			!feedbackReasonsMatch("answer", turn.FeedbackRating, turn.FeedbackReasons) {
+			return false
+		}
 		for _, source := range turn.Sources {
 			parsed, err := url.Parse(source.URL)
 			if err != nil || parsed.Host == "" || parsed.Scheme != "http" && parsed.Scheme != "https" ||
@@ -383,6 +401,171 @@ func (s *Server) handleDeleteChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ---------------------------------------------------------------- フィードバック
+
+const maxFeedbackList = 100
+
+var feedbackReasons = map[string]bool{
+	"helpful": true, "clear": true, "good_sources": true,
+	"incorrect": true, "missing": true, "unclear": true, "wrong_sources": true,
+	"outdated": true, "slow": true,
+	"bug": true, "usability": true, "feature": true, "content": true, "other": true,
+}
+
+var goodFeedbackReasons = map[string]bool{"helpful": true, "clear": true, "good_sources": true}
+var badFeedbackReasons = map[string]bool{
+	"incorrect": true, "missing": true, "unclear": true, "wrong_sources": true,
+	"outdated": true, "slow": true,
+}
+var generalFeedbackReasons = map[string]bool{
+	"bug": true, "usability": true, "feature": true, "content": true, "other": true,
+}
+
+func validFeedbackReasons(reasons []string) bool {
+	seen := map[string]bool{}
+	for _, reason := range reasons {
+		if !feedbackReasons[reason] || seen[reason] {
+			return false
+		}
+		seen[reason] = true
+	}
+	return true
+}
+
+func feedbackReasonsMatch(kind, rating string, reasons []string) bool {
+	allowed := generalFeedbackReasons
+	if kind == "answer" && rating == "good" {
+		allowed = goodFeedbackReasons
+	} else if kind == "answer" && rating == "bad" {
+		allowed = badFeedbackReasons
+	} else if kind == "answer" && rating == "" {
+		return len(reasons) == 0
+	}
+	for _, reason := range reasons {
+		if !allowed[reason] {
+			return false
+		}
+	}
+	return true
+}
+
+func validFeedbackClientID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	for _, char := range id {
+		if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' ||
+			char >= '0' && char <= '9' || char == '-' || char == '_' || char == ':' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func feedbackSourcesValid(sources []state.Source) bool {
+	if len(sources) > 8 {
+		return false
+	}
+	for _, source := range sources {
+		parsed, err := url.Parse(source.URL)
+		if err != nil || parsed.Host == "" || parsed.Scheme != "http" && parsed.Scheme != "https" ||
+			len([]rune(source.Title)) > 300 || len(source.URL) > 4_000 {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Server) feedbackID(userKey, clientID string) string {
+	mac := hmac.New(sha256.New, []byte(s.cfg.SessionSecret))
+	fmt.Fprintf(mac, "feedback|%s|%s", userKey, clientID)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func (s *Server) handleSaveFeedback(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ClientID      string         `json:"clientId"`
+		Kind          string         `json:"kind"`
+		Rating        string         `json:"rating"`
+		Reasons       []string       `json:"reasons"`
+		Comment       string         `json:"comment"`
+		Question      string         `json:"question"`
+		Answer        string         `json:"answer"`
+		Sources       []state.Source `json:"sources"`
+		AssistantID   string         `json:"assistantId"`
+		AssistantName string         `json:"assistantName"`
+		ResponseMode  string         `json:"responseMode"`
+		ResolvedMode  string         `json:"resolvedMode"`
+		ChatID        string         `json:"chatId"`
+		TurnIndex     int            `json:"turnIndex"`
+		Page          string         `json:"page"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128<<10)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "フィードバックが不正です"})
+		return
+	}
+	body.Comment = strings.TrimSpace(body.Comment)
+	validKind := body.Kind == "answer" || body.Kind == "general"
+	validRating := body.Rating == "" || body.Rating == "good" || body.Rating == "bad"
+	if !validFeedbackClientID(body.ClientID) || !validKind || !validRating ||
+		len(body.Reasons) > 5 || !validFeedbackReasons(body.Reasons) ||
+		!feedbackReasonsMatch(body.Kind, body.Rating, body.Reasons) ||
+		len([]rune(body.Comment)) > 500 || len([]rune(body.Question)) > 500 ||
+		len([]rune(body.Answer)) > 20_000 || !feedbackSourcesValid(body.Sources) ||
+		len(body.AssistantID) > 64 || len([]rune(body.AssistantName)) > 40 ||
+		len(body.ChatID) > 64 || body.TurnIndex < 0 || body.TurnIndex > 99 ||
+		(body.Page != "chat" && body.Page != "assistants") ||
+		(body.Kind == "answer" && (body.Rating == "" || body.ChatID == "" || strings.TrimSpace(body.Question) == "")) ||
+		(body.Kind == "general" && (body.Rating != "" || len(body.Reasons) == 0 && body.Comment == "")) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "フィードバックが不正です"})
+		return
+	}
+	if _, ok := pipeline.ParseResponseMode(body.ResponseMode); !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "回答モードが不正です"})
+		return
+	}
+	if body.ResolvedMode != "" {
+		mode, ok := pipeline.ParseResponseMode(body.ResolvedMode)
+		if !ok || mode == pipeline.ModeAuto {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "回答モードが不正です"})
+			return
+		}
+	}
+	user, _ := s.currentUser(r)
+	userKey := s.userKey(user)
+	item := state.Feedback{
+		ID: s.feedbackID(userKey, body.ClientID), ReporterKey: userKey,
+		Kind: body.Kind, Rating: body.Rating, Reasons: body.Reasons, Comment: body.Comment,
+		Question: body.Question, Answer: body.Answer, Sources: body.Sources,
+		AssistantID: body.AssistantID, AssistantName: body.AssistantName,
+		ResponseMode: body.ResponseMode, ResolvedMode: body.ResolvedMode,
+		ChatID: body.ChatID, TurnIndex: body.TurnIndex, Page: body.Page,
+		SubmittedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := s.state.SaveFeedback(r.Context(), item); err != nil {
+		log.Printf("フィードバックの保存に失敗: %v", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "フィードバックを送信できませんでした"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleListFeedback(w http.ResponseWriter, r *http.Request) {
+	user, _ := s.currentUser(r)
+	if !s.isAdmin(user) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "フィードバックを閲覧する権限がありません"})
+		return
+	}
+	items, err := s.state.ListFeedback(r.Context(), maxFeedbackList)
+	if err != nil {
+		log.Printf("フィードバックの読み込みに失敗: %v", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "フィードバックを読み込めませんでした"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"feedback": items})
 }
 
 // ---------------------------------------------------------------- アシスタント

@@ -28,6 +28,9 @@ export type Turn = {
   /** 利用者が選んだモードと、自動判定後に実際に使われたモード。 */
   responseMode?: ResponseMode;
   resolvedMode?: ResolvedResponseMode;
+  feedbackRating?: "good" | "bad";
+  feedbackReasons?: FeedbackReason[];
+  feedbackComment?: string;
 };
 
 export type Chat = {
@@ -53,7 +56,7 @@ export type Event =
 
 const base = import.meta.env.VITE_API_ORIGIN ?? "";
 
-export type Session = { authenticated: boolean; username: string; remaining: number };
+export type Session = { authenticated: boolean; username: string; remaining: number; admin: boolean };
 
 /**
  * Wikiのアカウントでログインする。
@@ -80,8 +83,56 @@ export async function logout(): Promise<void> {
 
 export async function session(): Promise<Session> {
   const res = await fetch(`${base}/api/session`, { credentials: "include" });
-  if (!res.ok) return { authenticated: false, username: "", remaining: 0 };
+  if (!res.ok) return { authenticated: false, username: "", remaining: 0, admin: false };
   return res.json();
+}
+
+export type FeedbackReason =
+  | "helpful" | "clear" | "good_sources"
+  | "incorrect" | "missing" | "unclear" | "wrong_sources" | "outdated" | "slow"
+  | "bug" | "usability" | "feature" | "content" | "other";
+
+export type FeedbackPayload = {
+  clientId: string;
+  kind: "answer" | "general";
+  rating?: "good" | "bad";
+  reasons?: FeedbackReason[];
+  comment?: string;
+  question?: string;
+  answer?: string;
+  sources?: Source[];
+  assistantId?: string;
+  assistantName?: string;
+  responseMode?: ResponseMode;
+  resolvedMode?: ResolvedResponseMode;
+  chatId?: string;
+  turnIndex?: number;
+  page: "chat" | "assistants";
+};
+
+export type Feedback = Omit<FeedbackPayload, "clientId"> & {
+  id: string;
+  submittedAt: string;
+};
+
+export async function submitFeedback(payload: FeedbackPayload): Promise<void> {
+  const res = await fetch(`${base}/api/feedback`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? "フィードバックを送信できませんでした");
+  }
+}
+
+export async function listFeedback(): Promise<Feedback[]> {
+  const res = await fetch(`${base}/api/feedback`, { credentials: "include" });
+  if (!res.ok) throw new Error("フィードバックを読み込めませんでした");
+  const body = await res.json() as { feedback?: Feedback[] };
+  return Array.isArray(body.feedback) ? body.feedback : [];
 }
 
 /** 全員で共有するアシスタント。作成者名は隠さない（誰に聞けばよいか分かるため）。 */

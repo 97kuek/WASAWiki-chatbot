@@ -63,7 +63,7 @@ OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q8_0 OLLAMA_CONTEXT_LENGTH=32768 \
 | 形態素解析 | **kagome に一本化**（Go側）。索引と検索で分かち書きが違うとBM25が壊れる |
 | バックエンド | Go on Cloud Run（`min-instances=0` 固定） |
 | フロントエンド | TypeScript + React (Vite) on Cloudflare Pages |
-| データストア | 索引はJSON（現行約3.1MB）。利用回数と最大30件の履歴だけFirestoreで端末間同期 |
+| データストア | 索引はJSON（現行約3.1MB）。利用回数、最大30件の履歴、共有アシスタント、利用者フィードバックをFirestoreへ保存 |
 | 認証 | **Wikiのアカウント**（`action=clientlogin` に中継）+ 利用者名を載せた署名付きCookie |
 | 更新反映 | **手動 rebuild**（定期バッチは一人保守の方針と噛み合わない） |
 | アシスタント | **全員が作って共有できる。内容の審査はしない。** 代わりに構造で縛る（範囲は狭める指定のみでGo側が決定的に除外／出典は索引から組み立ててモデルに触らせない／規則はsystem側へ／作成者名を必ず出す／他人のものは複製のみ）。⚠️ **保証の強さが違うものを混同しない**（コードの保証／緩和策／社会的な抑止）。詳細は [docs/03](docs/03-画面仕様.md)、[docs/05](docs/05-システムプロンプト.md)、[docs/06](docs/06-決定的ルール.md) |

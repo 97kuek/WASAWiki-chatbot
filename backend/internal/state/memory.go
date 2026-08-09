@@ -11,6 +11,7 @@ type Memory struct {
 	mu         sync.Mutex
 	usage      map[string]int
 	chats      map[string]map[string]Chat
+	feedback   map[string]Feedback
 	assistants map[string]Assistant
 }
 
@@ -18,6 +19,7 @@ func NewMemory() *Memory {
 	return &Memory{
 		usage:      map[string]int{},
 		chats:      map[string]map[string]Chat{},
+		feedback:   map[string]Feedback{},
 		assistants: map[string]Assistant{},
 	}
 }
@@ -101,6 +103,27 @@ func (m *Memory) DeleteChat(_ context.Context, user, chatID string) error {
 	defer m.mu.Unlock()
 	delete(m.chats[user], chatID)
 	return nil
+}
+
+func (m *Memory) SaveFeedback(_ context.Context, feedback Feedback) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.feedback[feedback.ID] = feedback
+	return nil
+}
+
+func (m *Memory) ListFeedback(_ context.Context, limit int) ([]Feedback, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	list := make([]Feedback, 0, len(m.feedback))
+	for _, item := range m.feedback {
+		list = append(list, item)
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].SubmittedAt > list[j].SubmittedAt })
+	if len(list) > limit {
+		list = list[:limit]
+	}
+	return list, nil
 }
 
 func (m *Memory) ListAssistants(_ context.Context) ([]Assistant, error) {

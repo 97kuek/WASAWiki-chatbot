@@ -170,6 +170,31 @@ func (f *Firestore) DeleteChat(ctx context.Context, user, chatID string) error {
 	return err
 }
 
+func (f *Firestore) SaveFeedback(ctx context.Context, feedback Feedback) error {
+	_, err := f.client.Collection("feedback").Doc(feedback.ID).Set(ctx, feedback)
+	return err
+}
+
+func (f *Firestore) ListFeedback(ctx context.Context, limit int) ([]Feedback, error) {
+	snapshots, err := f.client.Collection("feedback").
+		OrderBy("submitted_at", firestore.Desc).
+		Limit(limit).
+		Documents(ctx).
+		GetAll()
+	if err != nil {
+		return nil, err
+	}
+	list := make([]Feedback, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		var item Feedback
+		if err := snapshot.DataTo(&item); err != nil {
+			return nil, err
+		}
+		list = append(list, item)
+	}
+	return list, nil
+}
+
 // アシスタントは全員で共有するため users/ の下ではなくトップレベルに置く。
 func (f *Firestore) assistantCollection() *firestore.CollectionRef {
 	return f.client.Collection("assistants")
