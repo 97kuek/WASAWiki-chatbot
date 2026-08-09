@@ -51,6 +51,19 @@ CITATION_LINE = re.compile(
 CITATION = CITATION_LINE
 
 
+# 「一般知識（WASA資料外）」の節。2026-08-09にアシスタントでも一般知識を
+# 許したため、ここを判定対象へ残すと**正しい一般知識が必ず「裏付けなし」になる**。
+# Faithfulnessは資料に対する忠実性であって、一般論の正しさは測れない
+# （docs/01 §9。一般部分は少量の人手評価で見る）。
+GENERAL_SECTION = re.compile(r"^\s*#{0,6}\s*\**\s*一般知識（WASA資料外）.*$", re.M)
+
+
+def strip_general_knowledge(text: str) -> str:
+    """一般知識の見出し以降を落とす。見出しが無ければそのまま返す。"""
+    m = GENERAL_SECTION.search(text)
+    return text[: m.start()].strip() if m else text
+
+
 def strip_citations(text: str) -> str:
     """出典行を落とす。出典はメタデータであって、回答の主張ではない。"""
     return CITATION_LINE.sub("", text).strip()
@@ -95,7 +108,7 @@ def judge_faithfulness(llm, context: str, answer: str, toc: str = "") -> dict:
     # 出典行はメタデータであって主張ではない。判定対象から外さないと
     # 「出典: X（最終更新: Y）」そのものを裏付け無しと指摘してくる（M3で対処済み）。
     # M7で出典形式をMarkdownリンクへ変えた際、ここも新形式に合わせる必要がある
-    answer = strip_citations(answer)
+    answer = strip_general_knowledge(strip_citations(answer))
     prompt = f"""以下の「資料」と「回答」を読み、回答の内容が資料だけで裏付けられるかを判定してください。
 
 手順:

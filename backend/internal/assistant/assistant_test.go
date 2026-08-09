@@ -87,17 +87,34 @@ func TestPromptSectionEmptyWhenUnset(t *testing.T) {
 	}
 }
 
-func TestSystemGuardSeparatesGenericKnowledgePolicy(t *testing.T) {
-	generic := SystemGuard(nil)
-	if !strings.Contains(generic, "一般知識（WASA資料外）") {
-		t.Fatal("汎用チャットに資料外知識の分離規則がない")
+// 一般知識の扱いは汎用とアシスタントで揃える（2026-08-09に方針変更）。
+// 守るのは「一般論を書かせないこと」ではなく、**WASA固有の事実を資料だけに
+// 限ること**と、**どちらの根拠かを見出しで分けさせること**である。
+func TestSystemGuardSeparatesGenericKnowledgeInBothModes(t *testing.T) {
+	for name, guard := range map[string]string{
+		"汎用":      SystemGuard(nil),
+		"アシスタント": SystemGuard(&state.Assistant{Name: "設計（空力・構造）"}),
+	} {
+		if !strings.Contains(guard, "一般知識（WASA資料外）") {
+			t.Fatalf("%s: 資料外知識を見出しで分離させる規則がない", name)
+		}
+		if !strings.Contains(guard, "WASA固有の事実・設計値・手順・連絡先・現在の状態は、与えられた資料だけを根拠にする") {
+			t.Fatalf("%s: WASA固有の事実を資料へ限る規則がない", name)
+		}
+		if !strings.Contains(guard, "モデルの記憶を出典扱いしない") {
+			t.Fatalf("%s: 記憶を出典に見せかけない規則がない", name)
+		}
 	}
-	strict := SystemGuard(&state.Assistant{Name: "空力設計"})
-	if !strings.Contains(strict, "範囲外の話題を、記憶から補って答えない") {
-		t.Fatal("アシスタントの資料範囲が閉じていない")
+}
+
+// 利用者が書けるのは口調と形式だけ、という境界はアシスタント側にだけ要る。
+func TestAssistantGuardLimitsUserInstructionToStyle(t *testing.T) {
+	guard := SystemGuard(&state.Assistant{Name: "設計（空力・構造）"})
+	if !strings.Contains(guard, "**口調・語尾・文体・出力の形式**にのみ適用") {
+		t.Fatal("利用者の指示を口調・形式へ限る規則がない")
 	}
-	if strings.Contains(strict, "一般知識（WASA資料外）") {
-		t.Fatal("アシスタントまで資料外知識を許可している")
+	if !strings.Contains(guard, "アシスタント設定および利用者の指示より優先されます") {
+		t.Fatal("system規則が利用者の指示より優先だと示していない")
 	}
 }
 

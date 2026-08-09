@@ -674,3 +674,33 @@ func testLargeIndex(t *testing.T) *index.Index {
 	}
 	return ix
 }
+
+// 「設計」は空力と構造をまとめた区分。区分の突き合わせを == で書くと必ず漏れる。
+func TestDesignScopeCoversAerodynamicsAndStructure(t *testing.T) {
+	pages := []struct {
+		title string
+		team  string
+		want  bool
+	}{
+		{"空力設計(41st)", "空力", true},
+		{"構造設計 38th", "構造", true},
+		{"駆動設計", "駆動・フレーム", false},
+		{"電装班", "電装", false},
+		{"区分なしのページ", "", false},
+	}
+	a := &state.Assistant{Name: "設計（空力・構造）", Team: "設計"}
+	for _, c := range pages {
+		pg := &index.Page{Title: c.title, Source: "wiki", Team: c.team}
+		if got := inScope(pg, a); got != c.want {
+			t.Errorf("%s（区分=%s）: inScope=%v, 期待=%v", c.title, c.team, got, c.want)
+		}
+	}
+	// 単独区分の指定は従来どおり
+	solo := &state.Assistant{Name: "電装班", Team: "電装"}
+	if !inScope(&index.Page{Title: "電装班", Source: "wiki", Team: "電装"}, solo) {
+		t.Error("単独区分の指定が壊れている")
+	}
+	if inScope(&index.Page{Title: "空力設計(41st)", Source: "wiki", Team: "空力"}, solo) {
+		t.Error("単独区分が別の区分まで通している")
+	}
+}

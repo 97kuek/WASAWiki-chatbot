@@ -237,7 +237,8 @@ func inScope(pg *index.Page, a *state.Assistant) bool {
 	if a.Origin != "" && a.Origin != origin {
 		return false
 	}
-	if a.Team != "" && pg.Team != a.Team {
+	// 「設計」のように複数の区分をまとめたものがあるため、直接比較しない
+	if !assistantpkg.TeamMatches(a.Team, pg.Team) {
 		return false
 	}
 	return true
