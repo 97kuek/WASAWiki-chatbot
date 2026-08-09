@@ -116,6 +116,7 @@ def main() -> None:
     all_pages = json.loads(INDEX.read_text(encoding="utf-8"))["pages"]
     pages = [p for p in all_pages if p.get("source", "wiki") == "wiki"]
     site = [p for p in all_pages if p.get("source") == "site"]
+    fee = [p for p in all_pages if p.get("source") == "fee"]
 
     order = {team: i for i, team in enumerate(TEAM_ORDER)}
     pages.sort(
@@ -130,9 +131,11 @@ def main() -> None:
     lines = facts + [
         "# WASA 資料の目次",
         "",
-        "出所が2つある。**引き継ぎWiki**（部内限定・作業手順や設計の詳細）と、",
-        "**公式サイト**（一般公開・団体紹介や活動報告）。",
-        "対外的な説明や歴代機体は公式サイト、作り方や反省点はWikiにある。",
+        "出所が3つある。**引き継ぎWiki**（部内限定・作業手順や設計の詳細）、",
+        "**公式サイト**（一般公開・団体紹介や活動報告）、",
+        "**フライトシミュレータ**（FlightEnvironmentEmulatorの利用ガイド）。",
+        "対外的な説明や歴代機体は公式サイト、作り方や反省点はWiki、",
+        "シミュレータの導入・操作・設定はフライトシミュレータのガイドにある。",
         "",
         f"## 引き継ぎWiki（部内限定）全{len(pages)}ページ",
         "",
@@ -160,6 +163,12 @@ def main() -> None:
             lines += ["", "### 活動報告（ブログ・新しい年から）", ""]
             lines += render_posts(posts)
 
+    if fee:
+        lines += ["", f"## フライトシミュレータのガイド（FlightEnvironmentEmulator）全{len(fee)}ページ", ""]
+        lines += ["機体の資料ではなく、飛行シミュレータというソフトの使い方・設定・開発の資料。", ""]
+        for page in sorted(fee, key=lambda p: (p.get("kind") != "紹介", p["title"])):
+            lines += render_page(page)
+
     toc = "\n".join(lines) + "\n"
     OUT.parent.mkdir(exist_ok=True)
     OUT.write_text(toc, encoding="utf-8")
@@ -169,10 +178,11 @@ def main() -> None:
     chars = len(toc)
     print("=" * 56)
     print(f"目次を生成      : {OUT}")
-    print(f"ページ数        : {len(pages) + len(site)}（Wiki {len(pages)} / 公式サイト {len(site)}）")
+    print(f"ページ数        : {len(pages) + len(site) + len(fee)}"
+          f"（Wiki {len(pages)} / 公式サイト {len(site)} / フライトシミュレータ {len(fee)}）")
     print(f"文字数          : {chars:,} 字（うち事実カード {len(chr(10).join(facts)):,} 字）")
     print(f"推定トークン数  : {int(chars / 1.5):,} 〜 {chars:,}")
-    print(f"1ページあたり   : {chars // max(1, len(pages) + len(site))} 字")
+    print(f"1ページあたり   : {chars // max(1, len(pages) + len(site) + len(fee))} 字")
 
     # プロンプトキャッシュに載る前提での概算（Sonnet 5 / 1時間TTL、$1=150円）
     tokens = chars  # 上振れ側で見積もる

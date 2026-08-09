@@ -74,6 +74,10 @@ class Answer:
     context_chars: int = 0
 
 
+# 出所の表示名。Go側の OriginLabel と揃える
+ORIGIN_LABELS = {"site": "公式サイト", "fee": "フライトシミュレータ"}
+
+
 def era_label(era: dict | None) -> str:
     """build_index.py の extract_era が入れた年代を、プロンプト用の短い表記にする。
 
@@ -420,7 +424,7 @@ class Pipeline:
         blocks = []
         for cid in chunk_ids:
             page = self.pages[self.chunk_page[cid]]
-            origin = "公式サイト" if page.get("source") == "site" else "Wiki"
+            origin = ORIGIN_LABELS.get(page.get("source"), "Wiki")
             # 年代は拾えないことがある（実測で38%）。空欄を出すとモデルが
             # 「不明」を「古い」と読み替えるので、その場合は項目ごと省く
             era = era_label(self.chunks[cid].get("era"))

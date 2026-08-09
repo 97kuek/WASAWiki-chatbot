@@ -68,7 +68,7 @@ var Teams = []Team{
 	{"運営", "運営"},
 }
 
-var origins = map[string]bool{"": true, "wiki": true, "site": true}
+var origins = map[string]bool{"": true, "wiki": true, "site": true, "fee": true}
 
 // TeamLabel は区分の呼び方を返す。未知の値はそのまま返す
 // （build_index.py 側の分類が増えても画面が壊れないようにするため）。
@@ -257,6 +257,8 @@ func ScopeLabel(a *state.Assistant) string {
 		parts = append(parts, "引き継ぎWikiのみ")
 	case "site":
 		parts = append(parts, "公式サイトのみ（部外に出せる情報だけ）")
+	case "fee":
+		parts = append(parts, "フライトシミュレータのガイドのみ")
 	}
 	if a.Team != "" {
 		parts = append(parts, TeamLabel(a.Team)+"の資料のみ")

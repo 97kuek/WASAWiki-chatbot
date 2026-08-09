@@ -72,7 +72,7 @@ type Assistant struct {
 	Instruction string `json:"instruction" firestore:"instruction"`
 	// 参照範囲の絞り込み。空なら絞らない。**広げる方向の指定は存在しない**
 	Team   string `json:"team,omitempty" firestore:"team,omitempty"`
-	Origin string `json:"origin,omitempty" firestore:"origin,omitempty"` // "" | "wiki" | "site"
+	Origin string `json:"origin,omitempty" firestore:"origin,omitempty"` // "" | "wiki" | "site" | "fee"
 
 	// Icon は data URI の画像。空なら画面側が名前の頭文字で描く。
 	// 外部URLを許さないのは、部内Wikiの利用状況が外部ホストへ漏れるのと、

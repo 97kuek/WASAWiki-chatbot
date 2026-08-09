@@ -27,6 +27,7 @@ from pathlib import Path
 
 DUMP = Path("dump/pages.jsonl")
 SITE_DUMP = Path("dump/site.jsonl")  # 公式サイト。dump_site.py が作る（無ければWikiだけで作る）
+FEE_DUMP = Path("dump/fee.jsonl")   # フライトシミュレータのガイド。dump_fee.py が作る（任意）
 OUT = Path("data/index.json")
 PAGE_URL_BASE = "https://wasabirdman.sakura.ne.jp/wbwiki/w/index.php/"
 
@@ -642,7 +643,8 @@ def extract_team(title: str, body: str) -> str | None:
 
 # ==========================================================================
 
-def load_site_pages(used_titles: set[str]) -> list[dict]:
+def load_external_pages(path: Path, source: str, label: str, prefix: str,
+                       used_titles: set[str], default_kind: str) -> list[dict]:
     """公式サイトのページを、Wikiのページと同じ形に揃える。
 
     出所を混ぜてしまうと「引き継ぎ資料に書いてある」のか「対外的な紹介文」なのかが
@@ -651,26 +653,26 @@ def load_site_pages(used_titles: set[str]) -> list[dict]:
     本文はすでに dump_site.py が「== 見出し ==」形式に整えてあるので、
     wikitext の整形（clean）を通さずにそのままチャンク化の経路に乗せられる。
     """
-    if not SITE_DUMP.exists():
+    if not path.exists():
         return []
 
     pages: list[dict] = []
-    for n, line in enumerate(SITE_DUMP.open(encoding="utf-8"), 1):
+    for n, line in enumerate(path.open(encoding="utf-8"), 1):
         raw = json.loads(line)
         body = mask_emails(raw["text"]) if MASK_PII else raw["text"]
 
         # 同名ページがWikiにあると resolve() が引けなくなるので注記で分ける
         title = raw["title"]
         if title in used_titles:
-            title = f"{title}（公式サイト）"
+            title = f"{title}（{label}）"
         used_titles.add(title)
 
         lead, headings = outline(body)
         pages.append(
             {
-                "id": f"s{n}",
-                "source": "site",
-                "kind": raw.get("kind", "投稿"),  # 固定ページ / 投稿。目次の粒度を分ける
+                "id": f"{prefix}{n}",
+                "source": source,
+                "kind": raw.get("kind", default_kind),  # 目次の粒度を分ける
                 "title": title,
                 "aliases": [],
                 "url": raw["url"],
@@ -686,7 +688,7 @@ def load_site_pages(used_titles: set[str]) -> list[dict]:
                 "images": [],
                 "links": [],
                 "chunks": (
-                    build_chunks(f"s{n}", title, body) if len(body) >= MIN_INDEX_CHARS else []
+                    build_chunks(f"{prefix}{n}", title, body) if len(body) >= MIN_INDEX_CHARS else []
                 ),
             }
         )
@@ -738,8 +740,13 @@ def main() -> None:
             }
         )
 
-    site_pages = load_site_pages({p["title"] for p in pages})
+    used = {p["title"] for p in pages}
+    site_pages = load_external_pages(SITE_DUMP, "site", "公式サイト", "s", used, "投稿")
     pages.extend(site_pages)
+    # フライトシミュレータのガイドは3つ目の出所。Wikiから参照されているのに
+    # 本文がWikiの外にあり、URLしか答えられなかったため取り込む
+    fee_pages = load_external_pages(FEE_DUMP, "fee", "フライトシミュレータ", "f", used, "ガイド")
+    pages.extend(fee_pages)
 
     OUT.parent.mkdir(exist_ok=True)
     OUT.write_text(json.dumps({"pages": pages}, ensure_ascii=False, indent=1), encoding="utf-8")

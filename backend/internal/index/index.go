@@ -56,7 +56,7 @@ type Page struct {
 	URL        string   `json:"url"`
 	LastEdited string   `json:"last_edited"`
 	Team       string   `json:"team"`
-	Source     string   `json:"source"` // "wiki" | "site"。出典表示で出所を区別する
+	Source     string   `json:"source"` // "wiki" | "site" | "fee"。出典表示で出所を区別する
 	Gen        *int     `json:"gen"`
 	Chars      int      `json:"chars"`
 	IsStub     bool     `json:"is_stub"`

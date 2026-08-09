@@ -17,11 +17,13 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
+import dump_fee
 import dump_site
 
 
 WIKI_DUMP = Path("dump/pages.jsonl")
 SITE_DUMP = Path("dump/site.jsonl")
+FEE_DUMP = Path("dump/fee.jsonl")
 DELAY_SEC = 1.0  # さくらのサーバーへ負荷をかけない。縮めないこと
 
 
@@ -94,6 +96,31 @@ def site_dates() -> dict[str, str]:
     return dates
 
 
+def load_fee_pages() -> dict[str, str]:
+    """取得済みガイドの、ページURLと本文の長さ。
+
+    このサイトは Last-Modified を返さないため、更新日では比べられない。
+    一覧に載るページの顔ぶれと、各ページの本文量の変化で「変わったか」を見る。
+    """
+    if not FEE_DUMP.exists():
+        return {}
+    return {
+        row["url"]: str(len(row["text"]))
+        for row in (json.loads(line) for line in FEE_DUMP.open(encoding="utf-8"))
+    }
+
+
+def fee_pages() -> dict[str, str]:
+    paths = dump_fee.page_paths(dump_fee.fetch(dump_fee.SITE + dump_fee.INDEX_PATH))
+    time.sleep(dump_fee.DELAY)
+    out: dict[str, str] = {}
+    for path in paths:
+        url = dump_fee.SITE + ("" if path == "/" else path)
+        out[url] = str(len(dump_fee.extract_text(dump_fee.fetch(url))))
+        time.sleep(dump_fee.DELAY)
+    return out
+
+
 def describe_changes(label: str, local: dict, remote: dict) -> bool:
     added = remote.keys() - local.keys()
     removed = local.keys() - remote.keys()
@@ -115,6 +142,8 @@ def main() -> int:
     wiki.login()
     changed = describe_changes("Wiki", load_wiki_revisions(), wiki.revisions())
     changed = describe_changes("公式サイト", load_site_dates(), site_dates()) or changed
+    if FEE_DUMP.exists():
+        changed = describe_changes("フライトシミュレータ", load_fee_pages(), fee_pages()) or changed
     if changed:
         print("公開元に変更があります。python rebuild.py で内容を確認してください。")
         return 2

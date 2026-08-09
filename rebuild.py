@@ -18,6 +18,7 @@ import sys
 STEPS = (
     ("Wikiを取得", "dump_wiki.py"),
     ("公式サイトを取得", "dump_site.py"),
+    ("フライトシミュレータのガイドを取得", "dump_fee.py"),
     ("検索索引を作成", "build_index.py"),
     ("目次を作成", "build_toc.py"),
     ("検索精度を検査", "eval/retrieval_eval.py"),
@@ -41,7 +42,7 @@ def main() -> int:
         if not args.dry_run:
             subprocess.run(command, check=True)
     if args.dry_run:
-        print("上の5処理を実行します（今回は確認だけで、ファイルを変更していません）。")
+        print(f"上の{len(steps)}処理を実行します（今回は確認だけで、ファイルを変更していません）。")
     else:
         print("更新処理が完了しました。差分を確認してからデプロイしてください。")
     return 0

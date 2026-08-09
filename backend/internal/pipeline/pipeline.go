@@ -53,7 +53,8 @@ type Source struct {
 	Title      string `json:"title"`
 	URL        string `json:"url"`
 	LastEdited string `json:"last_edited"`
-	// "wiki"（部内限定の引き継ぎ資料）か "site"（一般公開の公式サイト）か。
+	// "wiki"（部内限定の引き継ぎ資料）/ "site"（一般公開の公式サイト）/
+	// "fee"（フライトシミュレータのガイド）。
 	// 画面で見分けられないと、部外に出せる情報かどうかが判断できない
 	Origin string `json:"origin"`
 }
@@ -330,10 +331,7 @@ func (p *Pipeline) RunWithMode(ctx context.Context, question string, history []C
 		if !ok {
 			continue
 		}
-		origin := "Wiki"
-		if pg.Source == "site" {
-			origin = "公式サイト"
-		}
+		origin := OriginLabel(pg.Source)
 		// 年代は拾えないことがある（実測で38%）。空欄を出すとモデルが
 		// 「不明」を「古い」と読み替えるので、その場合は項目ごと省く
 		era := ""
@@ -481,12 +479,36 @@ func (p *Pipeline) deterministicPages(question string, a *state.Assistant) []*in
 	return out
 }
 
+// OriginLabel は出所を利用者に見せる名前へ直す。出所が増えるたびに
+// 分岐を書き足すと表示が食い違うので、ここ1か所に集める。
+func OriginLabel(source string) string {
+	switch source {
+	case "site":
+		return "公式サイト"
+	case "fee":
+		return "フライトシミュレータ"
+	default:
+		return "Wiki"
+	}
+}
+
 // questionAllowsOrigin は「WASA Wikiにあるか」のように出所を明記した質問で、
 // 公式サイトの似たページが出典へ混ざるのを防ぐ。両方を明記した比較質問は絞らない。
 func questionAllowsOrigin(question string, pg *index.Page) bool {
 	lower := strings.ToLower(question)
 	wantsWiki := strings.Contains(lower, "wiki") || strings.Contains(question, "引き継ぎ資料")
 	wantsSite := strings.Contains(question, "公式サイト")
+	// フライトシミュレータは別ソフトの資料なので、名指しされたらそこだけに絞る。
+	// 逆に名指しされていない質問へ紛れ込むと、機体の話にソフトの手順が混ざる
+	wantsFEE := strings.Contains(question, "シミュレータ") || strings.Contains(question, "シミュレーター") ||
+		strings.Contains(lower, "flightgear") || strings.Contains(lower, "fee") ||
+		strings.Contains(lower, "flightenvironment")
+	if wantsFEE && !wantsWiki && !wantsSite {
+		return pg.Source == "fee"
+	}
+	if pg.Source == "fee" {
+		return wantsFEE
+	}
 	if wantsWiki && !wantsSite {
 		return pg.Source != "site"
 	}
