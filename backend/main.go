@@ -199,7 +199,7 @@ func main() {
 	}
 
 	// 他人のアシスタントも消せる利用者。役割を作るのではなく、
-	// 明らかなゴミを片付けるための最小限の権限（docs/06-決定的ルール.md）
+	// 明らかなゴミを片付けるための最小限の権限（docs/06-ルールベース.md）
 	admins := splitList(os.Getenv("ADMIN_USERS"))
 	if len(admins) == 0 {
 		log.Println("警告: ADMIN_USERS が未設定です。アシスタントは作成者本人しか削除できず、初期アシスタントも登録されません")

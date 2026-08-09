@@ -47,7 +47,7 @@ type Config struct {
 	SPADir           string // 指定するとビルド済みSPAも同じサーバーから配る
 	FeedbackNotifier FeedbackNotifier
 	// 他人のアシスタントも削除できるWiki利用者名。役割ではなく、
-	// 明らかなゴミを片付けるための最小限の権限（docs/06-決定的ルール.md）
+	// 明らかなゴミを片付けるための最小限の権限（docs/06-ルールベース.md）
 	AdminUsers []string
 }
 
