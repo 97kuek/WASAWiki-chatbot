@@ -106,7 +106,7 @@ button:disabled {
 }
 
 .brand-logo-large {
-  width: min(286px, 88%);
+  width: min(340px, 92%);
   height: auto;
   object-fit: contain;
 }
@@ -125,7 +125,7 @@ button:disabled {
 }
 
 .loading-wordmark {
-  width: min(300px, 72vw);
+  width: min(360px, 80vw);
   height: auto;
 }
 
@@ -329,7 +329,7 @@ button:disabled {
 }
 
 .brand-logo {
-  width: 154px;
+  width: 174px;
   height: auto;
   object-fit: contain;
 }
@@ -793,7 +793,7 @@ button:disabled {
 }
 
 .intro-logo {
-  width: min(292px, 70vw);
+  width: min(360px, 76vw);
   height: auto;
   margin-bottom: 8px;
 }
@@ -958,7 +958,8 @@ button:disabled {
 
 @media (prefers-reduced-motion: reduce) {
   .flight-loader-orbit,
-  .caret {
+  .caret,
+  .toast {
     animation: none;
   }
 }
@@ -1060,7 +1061,7 @@ button:disabled {
 .toast {
   position: fixed;
   z-index: 120;
-  bottom: 24px;
+  top: max(18px, env(safe-area-inset-top));
   left: 50%;
   max-width: calc(100vw - 32px);
   display: flex;
@@ -1073,6 +1074,13 @@ button:disabled {
   color: var(--surface);
   box-shadow: var(--shadow);
   font-size: 13px;
+  animation: toast-peek 3s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes toast-peek {
+  0% { opacity: 0; transform: translate(-50%, -18px) scale(0.97); }
+  9%, 86% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -12px) scale(0.98); }
 }
 
 .toast button {
@@ -1418,7 +1426,7 @@ button:disabled {
 
 @media (max-width: 560px) {
   .gate { padding: 28px 22px; }
-  .brand-logo { width: 138px; }
+  .brand-logo { width: 154px; }
   .brand { font-size: 15px; }
   .chat-header { min-height: 60px; padding-block: 9px; }
   .chat-header h1 { max-width: 48vw; font-size: 15px; }
@@ -1429,7 +1437,7 @@ button:disabled {
   .conversation { padding-inline: 16px; }
   .suggestions { grid-template-columns: 1fr; }
   .intro { align-content: start; padding-top: 14px; }
-  .intro-logo { width: min(250px, 72vw); }
+  .intro-logo { width: min(310px, 78vw); }
   .question { max-width: 92%; }
   .assistant-row { grid-template-columns: 28px minmax(0, 1fr); gap: 10px; }
   .assistant-avatar { width: 28px; height: 28px; }

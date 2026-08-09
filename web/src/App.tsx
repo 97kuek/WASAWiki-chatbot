@@ -848,7 +848,7 @@ export default function App() {
 
   if (authed === null) return (
     <div className="center app-loading" role="status" aria-label="WASA Chatを読み込んでいます">
-      <img src="/assets/wasa-chat-logo.svg" alt="WASA Chat" className="loading-wordmark" />
+      <img src="/assets/wasa-chat-logo-photo-trimmed.png" alt="WASA Chat" className="loading-wordmark" />
       <FlightLoader />
       <span className="muted">離陸準備中…</span>
     </div>
@@ -858,7 +858,7 @@ export default function App() {
     return (
       <div className="center login-page">
         <form className="card gate" onSubmit={handleLogin}>
-          <img src="/assets/wasa-chat-logo.svg" alt="WASA Chat" className="brand-logo-large" />
+          <img src="/assets/wasa-chat-logo-photo-trimmed.png" alt="WASA Chat" className="brand-logo-large" />
           <div className="login-heading">
             <h1 className="visually-hidden">WASA Chat</h1>
             <p className="muted">WASA Wikiと同じ利用者名・パスワードでログイン</p>
@@ -919,7 +919,7 @@ export default function App() {
       <aside className="history-panel" aria-label="チャット履歴" aria-hidden={!sidebarOpen}>
         <div className="brand-row">
           <div className="brand">
-            <img src="/assets/wasa-chat-logo.svg" alt="WASA Chat" className="brand-logo" />
+            <img src="/assets/wasa-chat-logo-photo-trimmed.png" alt="WASA Chat" className="brand-logo" />
           </div>
           <button type="button" className="sidebar-close" onClick={() => setSidebarOpen(false)} aria-label="履歴を閉じる">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6" /></svg>
@@ -1269,7 +1269,7 @@ export default function App() {
         <main className="conversation" aria-live="polite">
           {!activeChat && (
             <div className="intro">
-              <img src="/assets/wasa-chat-logo.svg" alt="WASA Chat" className="intro-logo" />
+              <img src="/assets/wasa-chat-logo-photo-trimmed.png" alt="WASA Chat" className="intro-logo" />
               <h2>引き継ぎ資料を、会話で探す</h2>
               <p className="muted">
                 部内Wikiと公式サイトを横断して回答し、参照した資料を示します。
@@ -1302,7 +1302,7 @@ export default function App() {
                     WASAロゴのままだと、口調が変わった理由が画面から分からない */}
                 {turn.assistantName
                   ? <AssistantAvatar name={turn.assistantName} icon={assistants.find((a) => a.id === turn.assistantId)?.icon} size={34} />
-                  : <img src="/assets/wasa-chat-mark.svg" alt="" className="assistant-avatar" />}
+                  : <img src="/assets/wasa-chat-mark-photo-trimmed.png" alt="" className="assistant-avatar" />}
                 <div className="assistant-content">
                   <div className="answer-author">{turn.assistantName ?? "WASA Chat"}</div>
                   {turn.status && (
@@ -1421,7 +1421,7 @@ export default function App() {
         </div>
       )}
       {toast && (
-        <div className="toast">
+        <div className="toast" key={toast}>
           <span role="status">{toast}</span>
           <button type="button" onClick={hideToast} aria-label="通知を閉じる">×</button>
         </div>
