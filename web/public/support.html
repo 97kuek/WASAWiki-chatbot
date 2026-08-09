@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>ヘルプとポリシー | WASA Chat</title>
+<link rel="icon" href="/assets/wasa-chat-mark-photo-trimmed.png">
+<style>
+/* アプリ本体（web/src/styles.css）と同じ配色・字面に合わせてある。
+   SPAの初回JavaScriptを増やさないため、ここは素のHTMLで完結させる。 */
+:root {
+  --bg: #f8f8f7;
+  --surface: #ffffff;
+  --surface-soft: #f5f4f2;
+  --line: #e5e3df;
+  --text: #242321;
+  --muted: #66625d;
+  --accent: #1717e8;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.85;
+  -webkit-font-smoothing: antialiased;
+}
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+a { color: var(--accent); }
+header.top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+header.top img { height: 26px; }
+header.top a { margin-left: auto; font-size: 14px; }
+main { max-width: 760px; margin: 0 auto; padding: 28px 20px 72px; }
+h1 { margin: 8px 0 4px; font-size: 26px; line-height: 1.4; }
+h2 {
+  margin: 44px 0 12px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+  font-size: 20px;
+  scroll-margin-top: 20px;
+}
+h3 { margin: 26px 0 6px; font-size: 16px; }
+p, li { margin: 8px 0; }
+ul, ol { padding-left: 1.4em; }
+code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--surface-soft);
+  font-size: 14px;
+}
+nav.toc {
+  margin: 20px 0 8px;
+  padding: 14px 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+nav.toc p { margin: 0 0 6px; font-weight: 600; font-size: 14px; }
+nav.toc ul { margin: 0; }
+.note {
+  margin: 18px 0;
+  padding: 14px 18px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 8px 8px 0;
+  background: var(--surface);
+}
+.muted { color: var(--muted); }
+.updated { color: var(--muted); font-size: 14px; }
+table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 15px; }
+th, td { padding: 8px 10px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+th { background: var(--surface-soft); }
+.wrap { overflow-x: auto; }
+footer {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 0 20px 48px;
+  color: var(--muted);
+  font-size: 14px;
+}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <img src="/assets/wasa-chat-logo-photo-trimmed.png" alt="WASA Chat">
+  <a href="/">← WASA Chatへ戻る</a>
+</header>
+
+<main>
+
+<h1>ヘルプとポリシー</h1>
+<p class="updated">最終更新: 2026-08-09</p>
+
+<p>
+WASA Chatの使い方と、利用にあたって知っておいてほしいことをまとめたページです。
+困ったときは、まず「よくある質問」を見てみてください。
+</p>
+
+<nav class="toc" aria-label="このページの目次">
+  <p>このページの内容</p>
+  <ul>
+    <li><a href="#help">1. 使い方</a></li>
+    <li><a href="#faq">2. よくある質問</a></li>
+    <li><a href="#terms">3. 利用上の注意事項</a></li>
+    <li><a href="#privacy">4. プライバシーポリシー</a></li>
+    <li><a href="#contact">5. 問い合わせ</a></li>
+  </ul>
+</nav>
+
+<h2 id="help">1. 使い方</h2>
+
+<p>
+WASA Chatは、WASA鳥人間プロジェクトの引き継ぎ資料Wikiと公式サイトの内容から、
+質問に答えるチャットボットです。資料のどこに書いてあるか分からなくても、
+普通の言葉で聞けば探して答えてくれます。
+</p>
+
+<h3>ログイン</h3>
+<p>
+普段WASA Wikiで使っている<strong>利用者名とパスワード</strong>をそのまま使います。
+WASA Chat専用のアカウントを作る必要はありません。
+</p>
+
+<h3>質問する</h3>
+<ul>
+  <li>質問は500文字以内です</li>
+  <li><code>Enter</code>で送信、<code>Shift + Enter</code>で改行します</li>
+  <li>1日に質問できる回数には上限があります（既定は30回）</li>
+</ul>
+
+<h3>回答の見方</h3>
+<p>
+回答の下に<strong>出典カード</strong>が出ます。これは実際に読んだ資料のページで、
+サーバー側が索引から組み立てているため、存在しないページが出ることはありません。
+</p>
+<p>
+出典には引き継ぎWikiと公式サイトの区別が表示されます。
+<strong>大事な判断をするときは、必ず出典のページ本体も確認してください。</strong>
+</p>
+
+<h3>回答モード</h3>
+<ul>
+  <li><strong>自動</strong>: 質問の内容からWASA Chatが判断します。ふだんはこれで十分です</li>
+  <li><strong>じっくり</strong>: 比較や変遷など、複数の資料を突き合わせる質問に向きます。そのぶん時間がかかります</li>
+</ul>
+
+<h3>アシスタント</h3>
+<p>
+口調や参照範囲を決めた設定です。<strong>ログインしていれば誰でも作れて、全員が使えます。</strong>
+</p>
+<p>
+なお、アシスタントは別の賢いAIではありません。中身のモデルは汎用と同じで、
+違うのは参照する範囲、一般知識を使ってよいかどうか、口調だけです。
+</p>
+<p>
+アシスタントを切り替えると新しいチャットが始まります。
+これは、参照範囲や口調が違う回答が同じ履歴に混ざらないようにするためです。
+</p>
+
+<h3>履歴</h3>
+<ul>
+  <li>利用者ごとに<strong>最大30件</strong>まで保存されます</li>
+  <li>サーバーに保存されるので、別の端末でログインしても同じ履歴が見られます</li>
+  <li>ピン留め、タイトル変更、共有、削除ができます</li>
+</ul>
+
+<h2 id="faq">2. よくある質問</h2>
+
+<h3>答えが「資料に記載がありません」になります</h3>
+<p>
+本当に書かれていない場合と、書かれているのに探せなかった場合があります。
+言い方を変えて聞き直すと見つかることがあります。特に、
+<strong>資料でのページ名や正式な型番をそのまま入れる</strong>と当たりやすくなります。
+</p>
+<p>
+それでも出てこないときは、👎を押して「必要な情報がない」を選んでください。改善に使われます。
+</p>
+
+<h3>答えの内容が間違っています</h3>
+<p>
+👎から「内容が違う」または「出典が違う」を選んで送ってください。
+どの質問でどう間違えたかが分かると直せます。
+</p>
+<p class="note">
+WASA Chatの回答は<strong>必ず正しいとは限りません。</strong>
+資料に書かれていることをもとに文章を作っているので、読み違えることがあります。
+出典のページを確認する習慣をつけてください。
+</p>
+
+<h3>情報が古い気がします</h3>
+<p>
+WASA Chatは、あらかじめ取り込んだ資料に答えています。
+<strong>Wikiを編集しても、すぐには反映されません。</strong>
+管理者が取り込み直したときに新しくなります。
+</p>
+
+<h3>今日の質問回数を使い切りました</h3>
+<p>
+日本時間の日付が変わるとリセットされます。
+この上限は、API費用が想定外に膨らむのを防ぐためのものです。
+</p>
+
+<h3>回答が遅いです</h3>
+<p>
+資料を探す→読む→文章を作る、という段階を踏むため時間がかかります。
+また、AIの利用が混み合っていると待つことがあります。その場合は画面に待機理由が出ます。
+</p>
+<p>
+極端に遅いと感じたら、👎から「回答が遅い」を送ってください。
+その回答にかかった時間が段階ごとに記録されているので、原因を調べられます。
+</p>
+
+<h2 id="terms">3. 利用上の注意事項</h2>
+
+<p>WASA Chatを使ううえで、必ず守ってほしいことです。</p>
+
+<h3>部内限定です</h3>
+<ul>
+  <li>WASA Chatが扱う引き継ぎWikiの内容は<strong>非公開情報</strong>です</li>
+  <li>回答や出典を、部外の人やSNS、外部のサービスへそのまま貼らないでください</li>
+  <li>履歴の共有機能を使うときも、共有先が部内かどうかを確認してください</li>
+</ul>
+
+<h3>回答をそのまま信用しないでください</h3>
+<ul>
+  <li>WASA Chatの回答は<strong>資料を探す手がかり</strong>であって、正式な引き継ぎ資料そのものではありません</li>
+  <li>機体の設計値、申請の手順、金銭や安全に関わることは、必ず出典のページ本体を確認してください</li>
+  <li>資料に書かれていないことを、書かれているかのように答えてしまう可能性があります</li>
+</ul>
+
+<h3>質問に個人情報を書かないでください</h3>
+<p>
+質問文は外部のAIサービスへ送信され、評価のために保存されることがあります。
+他人の連絡先や個人的な事情を質問文に含めないでください。
+</p>
+
+<h3>アシスタントを作るときは</h3>
+<ul>
+  <li>作成者名が全員に表示されます</li>
+  <li>他人が作ったものは直接編集できません。複製して自分のものとして直してください</li>
+  <li>明らかに不適切なものは、管理者が削除することがあります</li>
+</ul>
+
+<h3>アカウントについて</h3>
+<ul>
+  <li>WASA Wikiのアカウントを他人と共有しないでください</li>
+  <li>退部などでWiki側のアカウントが止まると、WASA Chatも使えなくなります</li>
+</ul>
+
+<h2 id="privacy">4. プライバシーポリシー</h2>
+
+<p>
+WASA Chatが、利用者のどんな情報を、何のために、どれくらいの期間扱うのかを説明します。
+</p>
+
+<h3>取得する情報</h3>
+
+<div class="wrap">
+<table>
+  <thead>
+    <tr><th>情報</th><th>目的</th><th>保存期間</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>WASA Wikiの利用者名</td>
+      <td>ログインしている本人の確認、1日の質問回数の管理</td>
+      <td>ログイン状態が続く間（Cookieは30日）</td>
+    </tr>
+    <tr>
+      <td>1日の質問回数</td>
+      <td>API費用が想定を超えないようにするため</td>
+      <td>日付ごとに記録。上限判定は当日のみ使用</td>
+    </tr>
+    <tr>
+      <td>チャット履歴（質問・回答・出典）</td>
+      <td>過去のやりとりを別の端末からも見られるようにするため</td>
+      <td><strong>新しい30件のみ。</strong>31件目を保存すると古いものから自動で消えます</td>
+    </tr>
+    <tr>
+      <td>フィードバック（👍／👎、理由、補足、対象の質問と回答）</td>
+      <td>回答精度と使い勝手の改善のため</td>
+      <td><strong>1年。</strong>期限を過ぎたものはサーバーが自動で削除します</td>
+    </tr>
+    <tr>
+      <td>作成した共有アシスタント（名前・説明・指示・作成者名）</td>
+      <td>全員で共有して使うため</td>
+      <td>作成者または管理者が削除するまで</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h3>パスワードの扱い</h3>
+<p class="note">
+入力されたWASA Wikiのパスワードは、Wikiへ本人確認を行うためだけに使い、
+<strong>保存も記録もしません。</strong>
+ログの中にも、Cookieにも、履歴にも残りません。
+</p>
+
+<h3>利用者名の扱い</h3>
+<p>
+サーバー内部では、利用者名をそのまま保存先の名前に使っていません。
+鍵を使って変換した値（HMAC）を使っています。
+そのため、保存されているデータを見ただけでは誰のものか分かりません。
+</p>
+<p>
+フィードバックも同じで、<strong>誰が送ったかは管理者にも表示されません。</strong>
+ただし、共有アシスタントの作成者名だけは、責任の所在を示すために表示されます。
+</p>
+
+<h3>外部のAIサービスへ送信する情報</h3>
+<p>回答を作るために、次の内容を外部のAIサービス（Google Gemini）へ送信します。</p>
+<ul>
+  <li>入力された質問</li>
+  <li>資料の目次と、その質問のために選んだ資料の本文</li>
+  <li>直前2往復の会話（「それ」などの言葉を解決するため）</li>
+  <li>選んだアシスタントの指示</li>
+</ul>
+<p>次のものは送信しません。</p>
+<ul>
+  <li>WASA Wikiのパスワード</li>
+  <li>利用者名やログイン用のCookie</li>
+  <li>過去の履歴全体</li>
+</ul>
+<p>
+なお、非公開Wikiの本文を外部のAIサービスへ送ることについては、
+<strong>2026-08-08のWASA会議で、代表・PMの承認を得ています。</strong>
+</p>
+
+<h3>資料に含まれる個人情報</h3>
+<p>
+資料を取り込むときに、生年月日と個人用のメールアドレスは自動で伏せ字にしています。
+一方で、申請先の窓口アドレスのような<strong>業務上必要な連絡先は残しています</strong>
+（伏せると引き継ぎ資料として使えなくなるためです）。
+氏名や役職も、検索に必要なため残しています。
+</p>
+
+<h3>データの保存場所</h3>
+<ul>
+  <li>履歴・利用回数・アシスタント・フィードバックは、Google CloudのFirestore（東京リージョン）に保存されます</li>
+  <li>ブラウザから直接アクセスすることはできず、ログイン済みのAPIを通してのみ読み書きされます</li>
+  <li>ブラウザ内（localStorage）には、選んだアシスタント、回答モード、お気に入りと並び順だけを保存します</li>
+</ul>
+
+<h3>削除の求め方</h3>
+<ul>
+  <li>チャット履歴は、履歴のメニューから自分で削除できます</li>
+  <li>自分が作ったアシスタントは、自分で削除できます</li>
+  <li>フィードバックは匿名で保存されるため、あとから個別に特定して削除することができません。
+    送る内容には気をつけてください</li>
+</ul>
+
+<h3>アクセス解析</h3>
+<p>
+WASA Chatは、広告やアクセス解析のためのトラッキングを一切使っていません。
+外部のスクリプトも読み込まないよう設定しています。
+</p>
+
+<h2 id="contact">5. 問い合わせ</h2>
+
+<p>質問や不具合の報告は、次のどちらかでお願いします。</p>
+<ul>
+  <li>画面右上の<strong>「改善を送る」</strong>から報告する（匿名で管理者に届きます）</li>
+  <li>回答が違っていた場合は、その回答の<strong>👎</strong>から理由を選んで送る</li>
+</ul>
+<p>
+急ぎの場合や、このページに書かれていないことについては、
+部内の連絡手段でWASA Chatの管理者へ直接お問い合わせください。
+</p>
+
+</main>
+
+<footer>
+  WASA Chat — 早稲田大学宇宙航空研究会WASA 鳥人間プロジェクト<br>
+  このページは部内向けです。内容は変更されることがあります。
+</footer>
+
+</body>
+</html>

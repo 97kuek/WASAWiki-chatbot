@@ -48,3 +48,38 @@ func TestMemoryKeepsNewestThirtyChats(t *testing.T) {
 		t.Fatalf("新しい30件が残っていない: first=%s last=%s", chats[0].ID, chats[len(chats)-1].ID)
 	}
 }
+
+// プライバシーポリシーに「1年で削除する」と書いた以上、期限の判定が
+// 実際に効いていることを固定しておく。境界（ちょうど期限の値）は消さない。
+func TestMemoryPurgesFeedbackOlderThanCutoff(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemory()
+	items := map[string]string{
+		"古い":  "2025-08-08T23:59:59Z",
+		"境界":  "2025-08-09T00:00:00Z",
+		"新しい": "2026-08-09T00:00:00Z",
+	}
+	for id, at := range items {
+		if err := store.SaveFeedback(ctx, Feedback{ID: id, Kind: "general", SubmittedAt: at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	removed, err := store.PurgeFeedback(ctx, "2025-08-09T00:00:00Z")
+	if err != nil || removed != 1 {
+		t.Fatalf("期限より古い1件だけを消していない: removed=%d err=%v", removed, err)
+	}
+
+	list, err := store.ListFeedback(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("残る件数が違う: %d", len(list))
+	}
+	for _, item := range list {
+		if item.ID == "古い" {
+			t.Fatal("期限を過ぎた報告が残っている")
+		}
+	}
+}

@@ -155,6 +155,29 @@ func (f *Firestore) SaveFeedback(ctx context.Context, feedback Feedback) error {
 	return err
 }
 
+// 保存期間を過ぎた報告を消す。1回で消す件数に上限を置き、溜まっていた場合でも
+// 利用者のリクエストを長く待たせない。残りは次回の送信時に消える。
+const maxFeedbackPurge = 100
+
+func (f *Firestore) PurgeFeedback(ctx context.Context, before string) (int, error) {
+	snapshots, err := f.client.Collection("feedback").
+		Where("submitted_at", "<", before).
+		Limit(maxFeedbackPurge).
+		Documents(ctx).
+		GetAll()
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, snapshot := range snapshots {
+		if _, err := snapshot.Ref.Delete(ctx); err != nil {
+			return removed, err
+		}
+		removed++
+	}
+	return removed, nil
+}
+
 func (f *Firestore) ListFeedback(ctx context.Context, limit int) ([]Feedback, error) {
 	snapshots, err := f.client.Collection("feedback").
 		OrderBy("submitted_at", firestore.Desc).

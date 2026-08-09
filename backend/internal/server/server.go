@@ -538,6 +538,15 @@ func (s *Server) handleSaveFeedback(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "フィードバックを送信できませんでした"})
 		return
 	}
+	// 保存のたびに保存期限を過ぎた報告を消す。定期実行の仕組みを別に持たない方針なので、
+	// ここで消さないとプライバシーポリシーに書いた1年が守られない。
+	// 削除に失敗しても保存済みの報告は正しいため、記録だけしてエラーにはしない。
+	cutoff := time.Now().UTC().AddDate(-1, 0, 0).Format(time.RFC3339)
+	if removed, err := s.state.PurgeFeedback(r.Context(), cutoff); err != nil {
+		log.Printf("保存期限を過ぎたフィードバックの削除に失敗: %v", err)
+	} else if removed > 0 {
+		log.Printf("保存期限を過ぎたフィードバックを%d件削除した", removed)
+	}
 	status := "disabled"
 	if s.cfg.FeedbackNotifier != nil {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), feedbackNotificationTimeout)

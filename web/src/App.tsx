@@ -106,6 +106,9 @@ function slugify(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, ASSISTANT_ID_MAX);
 }
 const WIKI_URL = import.meta.env.VITE_WIKI_URL ?? "https://wasabirdman.sakura.ne.jp/wbwiki/w/index.php";
+// 使い方・注意事項・プライバシーポリシーの静的ページ。SPAの初回JavaScriptを
+// 増やさないよう、web/public/support.html として素のHTMLで置いてある。
+const SUPPORT_URL = "/support.html";
 
 /**
  * 回答末尾の「出典: ページ名（最終更新: YYYY-MM）」を落とす。
@@ -235,22 +238,9 @@ function HistoryIcon() {
   );
 }
 
-/** 検索待ちを鳥人間らしく見せる、小さな人力飛行機の周回表示。 */
-function FlightLoader() {
-  return (
-    <span className="flight-loader" aria-hidden="true">
-      <span className="flight-loader-orbit">
-        <span className="flight-loader-plane">
-          <span className="flight-loader-trail" />
-          <svg viewBox="0 0 30 16">
-            <path className="plane-wing" d="M1.5 7.8 14 5.4 28.5 8.1 14 9.2Z" />
-            <path className="plane-body" d="M13.2 6.5 17.7 1.4 19 1.8 17 7.4 24.7 9.7 24.1 10.8 16.1 9.1 13.3 14.7 12 14.2 13.7 8.8Z" />
-            <path className="plane-tail" d="m16.2 11.2 4.1 2.3-4.9-.8" />
-          </svg>
-        </span>
-      </span>
-    </span>
-  );
+/** 読込中を示す円形スピナー。待ち時間の表示に凝ると、待っている事実が伝わりにくい。 */
+function Spinner() {
+  return <span className="spinner" aria-hidden="true" />;
 }
 
 export default function App() {
@@ -1051,8 +1041,8 @@ export default function App() {
   if (authed === null) return (
     <div className="center app-loading" role="status" aria-label="WASA Chatを読み込んでいます">
       <img src="/assets/wasa-chat-logo-photo-trimmed.png" alt="WASA Chat" className="loading-wordmark" />
-      <FlightLoader />
-      <span className="muted">離陸準備中…</span>
+      <Spinner />
+      <span className="muted">読み込み中…</span>
     </div>
   );
 
@@ -1111,6 +1101,12 @@ export default function App() {
             {busy ? "Wikiで確認中…" : "ログイン"}
           </button>
           <p className="note">パスワードはWikiで本人確認をするためだけに使用します</p>
+          {/* ログイン前に読めないと、初めて使う人が何に同意して入るのか分からない */}
+          <p className="login-links">
+            <a href={SUPPORT_URL} target="_blank" rel="noreferrer noopener">使い方</a>
+            <a href={`${SUPPORT_URL}#terms`} target="_blank" rel="noreferrer noopener">注意事項</a>
+            <a href={`${SUPPORT_URL}#privacy`} target="_blank" rel="noreferrer noopener">プライバシーポリシー</a>
+          </p>
         </form>
       </div>
     );
@@ -1322,6 +1318,7 @@ export default function App() {
                     <strong>{username}</strong>
                   </div>
                   <a href={WIKI_URL} target="_blank" rel="noreferrer noopener">WASA Wikiを開く</a>
+                  <a href={SUPPORT_URL} target="_blank" rel="noreferrer noopener">ヘルプとポリシー</a>
                   <button type="button" onClick={handleLogout}>ログアウト</button>
                 </section>
               )}
@@ -1559,7 +1556,7 @@ export default function App() {
                   </div>
                   {turn.status && (
                     <div className="status">
-                      <FlightLoader />
+                      <Spinner />
                       <span>{turn.status}</span>
                       {turn.retryAt && <small>{retryLabel(turn.retryAt, clock)}</small>}
                     </div>

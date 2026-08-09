@@ -102,6 +102,20 @@ func (m *Memory) SaveFeedback(_ context.Context, feedback Feedback) error {
 	return nil
 }
 
+func (m *Memory) PurgeFeedback(_ context.Context, before string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	removed := 0
+	for id, item := range m.feedback {
+		// SubmittedAtはRFC3339のUTC固定なので、文字列の辞書順が時刻順と一致する。
+		if item.SubmittedAt < before {
+			delete(m.feedback, id)
+			removed++
+		}
+	}
+	return removed, nil
+}
+
 func (m *Memory) ListFeedback(_ context.Context, limit int) ([]Feedback, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

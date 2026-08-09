@@ -118,6 +118,10 @@ type Store interface {
 	DeleteChat(context.Context, string, string) error
 	SaveFeedback(context.Context, Feedback) error
 	ListFeedback(context.Context, int) ([]Feedback, error)
+	// PurgeFeedback は submitted_at が before より古い報告を消し、消した件数を返す。
+	// プライバシーポリシーで保存期間を1年と示している以上、管理者の手作業に頼らず
+	// コード側で期限切れを消す必要がある。beforeはRFC3339のUTC文字列。
+	PurgeFeedback(ctx context.Context, before string) (int, error)
 
 	ListAssistants(context.Context) ([]Assistant, error)
 	// CreateAssistant は同じIDが無いときだけ書き込む。既にあれば ErrAssistantExists。
