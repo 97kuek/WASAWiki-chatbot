@@ -25,6 +25,13 @@ import {
 } from "./api";
 import { AssistantAvatar, DefaultAvatar, toIconDataURL, type IconCropPosition } from "./avatar";
 import { SelectMenu, type SelectOption } from "./SelectMenu";
+import {
+  AnswerFeedback,
+  FEEDBACK_ANSWER_MAX,
+  FEEDBACK_SOURCE_MAX,
+  FeedbackPopover,
+  feedbackNotificationMessage,
+} from "./feedback";
 
 // KaTeXは初期JSの大半を占めるが、回答が表示されるまでは不要である。
 // 質問送信時に先読みし、ログイン画面の初期表示と回答開始時の待ち時間を両立する。
@@ -42,6 +49,11 @@ type Announcement = {
 };
 
 const MAX_CHATS = 30;
+const CHAT_TITLE_RUNES = 28;
+const RECENT_HISTORY_DAYS = 7;
+const CONVERSATION_CONTEXT_TURNS = 2;
+const CONVERSATION_ANSWER_RUNES = 2_000;
+const ASSISTANT_ID_MAX = 64;
 const ANNOUNCEMENT_READ_KEY = "wasa-chat-read-announcements";
 const ASSISTANT_KEY = "wasa-chat-assistant";
 const ASSISTANT_FAVORITES_KEY = "wasa-chat-assistant-favorites";
@@ -49,27 +61,6 @@ const ASSISTANT_SORT_KEY = "wasa-chat-assistant-sort";
 const RESPONSE_MODE_KEY = "wasa-chat-response-mode";
 const TOAST_DURATION_MS = 3000;
 const CENTER_ICON_POSITION: IconCropPosition = { x: 50, y: 50 };
-
-const FEEDBACK_LABELS: Record<FeedbackReason, string> = {
-  helpful: "知りたいことが分かった",
-  clear: "説明が分かりやすい",
-  good_sources: "出典が役立った",
-  incorrect: "内容が違う",
-  missing: "必要な情報がない",
-  unclear: "説明が分かりにくい",
-  wrong_sources: "出典が違う",
-  outdated: "情報が古い",
-  slow: "回答が遅い",
-  bug: "表示・動作がおかしい",
-  usability: "使いにくい",
-  feature: "機能の提案",
-  content: "回答・資料について",
-  other: "その他",
-};
-
-const GOOD_REASONS: FeedbackReason[] = ["helpful", "clear", "good_sources"];
-const BAD_REASONS: FeedbackReason[] = ["incorrect", "missing", "unclear", "wrong_sources", "outdated", "slow"];
-const GENERAL_REASONS: FeedbackReason[] = ["bug", "usability", "feature", "content", "other"];
 
 type AssistantSort = "favorite" | "name" | "author";
 
@@ -108,17 +99,11 @@ function loadResponseMode(): "auto" | "deep" {
   return saved === "deep" ? "deep" : "auto";
 }
 
-function formatDuration(milliseconds: number | undefined): string {
-  if (milliseconds === undefined) return "—";
-  if (milliseconds < 1_000) return `${milliseconds}ms`;
-  return `${(milliseconds / 1_000).toFixed(milliseconds < 10_000 ? 1 : 0)}秒`;
-}
-
 const emptyDraft: AssistantDraft = { id: "", name: "", description: "", instruction: "" };
 
 /** 名前からIDの候補を作る。日本語名だとほぼ空になるので、そのときは呼び出し側で補う。 */
 function slugify(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, ASSISTANT_ID_MAX);
 }
 const WIKI_URL = import.meta.env.VITE_WIKI_URL ?? "https://wasabirdman.sakura.ne.jp/wbwiki/w/index.php";
 
@@ -151,10 +136,10 @@ const SUGGESTIONS: { title: string; body: string }[] = [
   { title: "WASAの成り立ち", body: "WASAはどんなサークルですか？設立年や歴代の機体名も教えてください" },
 ];
 
-const storageKey = (username: string) => `wasa-chat-history:${encodeURIComponent(username)}`;
 const makeId = () => crypto.randomUUID();
 const chatTitle = (question: string) =>
-  Array.from(question.trim()).slice(0, 28).join("") + (Array.from(question.trim()).length > 28 ? "…" : "");
+  Array.from(question.trim()).slice(0, CHAT_TITLE_RUNES).join("") +
+  (Array.from(question.trim()).length > CHAT_TITLE_RUNES ? "…" : "");
 
 type HistorySection = { label: string; chats: Chat[] };
 
@@ -178,7 +163,7 @@ function groupChats(chats: Chat[]): HistorySection[] {
       const daysAgo = Math.round((today.getTime() - day.getTime()) / 86_400_000);
       if (daysAgo === 0) label = "今日";
       else if (daysAgo === 1) label = "昨日";
-      else if (daysAgo <= 7) label = "過去7日間";
+      else if (daysAgo <= RECENT_HISTORY_DAYS) label = "過去7日間";
       else label = `${updated.getFullYear()}年${updated.getMonth() + 1}月`;
     }
     const section = sections.get(label) ?? [];
@@ -215,14 +200,6 @@ function retryLabel(value: string | undefined, now: number): string {
   return `再開目安: ${duration}（${clock}頃）`;
 }
 
-function clearLegacyChats(username: string) {
-  try {
-    sessionStorage.removeItem(storageKey(username));
-  } catch {
-    // ストレージが無効でも、React上の履歴消去とログアウトは続ける。
-  }
-}
-
 function loadReadAnnouncementIds(): string[] {
   try {
     const parsed = JSON.parse(localStorage.getItem(ANNOUNCEMENT_READ_KEY) ?? "[]") as unknown;
@@ -247,34 +224,6 @@ function loadAssistantSort(): AssistantSort {
     return saved === "name" || saved === "author" ? saved : "favorite";
   } catch {
     return "favorite";
-  }
-}
-
-/**
- * Firestore導入前のsessionStorage履歴を初回ログイン時に移行する。
- * 読み込み時には途中だったストリーミング状態を解除する。
- */
-function loadLegacyChats(username: string): Chat[] {
-  try {
-    const parsed = JSON.parse(sessionStorage.getItem(storageKey(username)) ?? "[]") as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter(
-        (chat): chat is Chat =>
-          typeof chat === "object" &&
-          chat !== null &&
-          typeof (chat as Chat).id === "string" &&
-          typeof (chat as Chat).title === "string" &&
-          Array.isArray((chat as Chat).turns),
-      )
-      .slice(0, MAX_CHATS)
-      .map((chat) => ({
-        ...chat,
-        pinned: chat.pinned === true,
-        turns: chat.turns.map((turn) => ({ ...turn, status: "", streaming: false })),
-      }));
-  } catch {
-    return [];
   }
 }
 
@@ -394,38 +343,24 @@ export default function App() {
     }, TOAST_DURATION_MS);
   }
 
-  async function restoreHistory(user: string) {
-    const legacy = loadLegacyChats(user);
+  async function restoreHistory() {
     try {
-      const remote = await listChats();
-      const merged = new Map(remote.map((chat) => [chat.id, chat]));
-      const migrate: Chat[] = [];
-      for (const chat of legacy) {
-        const saved = merged.get(chat.id);
-        if (!saved || chat.updatedAt > saved.updatedAt) {
-          merged.set(chat.id, chat);
-          migrate.push(chat);
-        }
-      }
-      const restored = Array.from(merged.values())
+      const restored = (await listChats())
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
         .slice(0, MAX_CHATS)
         .map((chat) => ({
           ...chat,
           turns: chat.turns.map((turn) => ({ ...turn, status: "", streaming: false })),
         }));
-      await Promise.all(migrate.map((chat) => saveChat(chat)));
-      clearLegacyChats(user);
       syncedChats.current = new Map(restored.map((chat) => [chat.id, JSON.stringify(chat)]));
       setChats(restored);
       setActiveChatId((current) => current && restored.some((chat) => chat.id === current)
         ? current
         : restored[0]?.id ?? null);
     } catch {
-      // 一時的にFirestoreへ接続できない場合も、移行前の現在タブの履歴は失わない。
       syncedChats.current = new Map();
-      setChats(legacy);
-      setActiveChatId(legacy[0]?.id ?? null);
+      setChats([]);
+      setActiveChatId(null);
       showToast("チャット履歴を同期できませんでした");
     }
   }
@@ -437,7 +372,7 @@ export default function App() {
       setRemaining(current.remaining);
       setIsAdmin(current.admin);
       if (current.authenticated) {
-        void restoreHistory(current.username);
+        void restoreHistory();
         void refreshAssistants();
       }
     });
@@ -553,7 +488,7 @@ export default function App() {
     setUsername(current.username);
     setRemaining(current.remaining);
     setIsAdmin(current.admin);
-    void restoreHistory(current.username);
+    void restoreHistory();
     void refreshAssistants();
   }
 
@@ -614,7 +549,7 @@ export default function App() {
     if (!generalReason || generalSubmitting) return;
     setGeneralSubmitting(true);
     try {
-      await submitFeedback({
+      const notification = await submitFeedback({
         clientId: generalFeedbackId,
         kind: "general",
         reasons: [generalReason],
@@ -622,7 +557,7 @@ export default function App() {
         page: view === "assistants" ? "assistants" : "chat",
       });
       setFeedbackOpen(false);
-      showToast("フィードバックを送信しました");
+      showToast(feedbackNotificationMessage(notification));
       void refreshFeedbackItems();
     } catch (error) {
       showToast(error instanceof Error ? error.message : "フィードバックを送信できませんでした");
@@ -645,15 +580,15 @@ export default function App() {
     reasons: FeedbackReason[],
     comment: string,
   ) {
-    await submitFeedback({
+    return submitFeedback({
       clientId: `${chat.id}:${turnIndex}`,
       kind: "answer",
       rating,
       reasons,
       comment,
       question: turn.question,
-      answer: turn.answer.slice(0, 20_000),
-      sources: turn.sources.slice(0, 8),
+      answer: turn.answer.slice(0, FEEDBACK_ANSWER_MAX),
+      sources: turn.sources.slice(0, FEEDBACK_SOURCE_MAX),
       assistantId: turn.assistantId,
       assistantName: turn.assistantName,
       responseMode: turn.responseMode,
@@ -682,8 +617,8 @@ export default function App() {
     setAnswerFeedbackOpen(key);
     setAnswerComments((current) => ({ ...current, [key]: comment }));
     try {
-      await sendAnswerFeedback(chat, turnIndex, turn, rating, reasons, comment);
-      showToast("評価を送信しました。理由は任意です");
+      const notification = await sendAnswerFeedback(chat, turnIndex, turn, rating, reasons, comment);
+      showToast(feedbackNotificationMessage(notification, "評価"));
       void refreshFeedbackItems();
     } catch (error) {
       patchTurnFeedback(chat.id, turnIndex, previous);
@@ -697,8 +632,8 @@ export default function App() {
     const reasons = current.includes(reason) ? current.filter((item) => item !== reason) : [...current, reason];
     patchTurnFeedback(chat.id, turnIndex, { feedbackReasons: reasons });
     try {
-      await sendAnswerFeedback(chat, turnIndex, turn, turn.feedbackRating, reasons, turn.feedbackComment ?? "");
-      showToast("理由を追加しました");
+      const notification = await sendAnswerFeedback(chat, turnIndex, turn, turn.feedbackRating, reasons, turn.feedbackComment ?? "");
+      showToast(feedbackNotificationMessage(notification, "理由"));
       void refreshFeedbackItems();
     } catch (error) {
       patchTurnFeedback(chat.id, turnIndex, { feedbackReasons: current });
@@ -712,8 +647,8 @@ export default function App() {
     const comment = (answerComments[key] ?? "").trim();
     patchTurnFeedback(chat.id, turnIndex, { feedbackComment: comment });
     try {
-      await sendAnswerFeedback(chat, turnIndex, turn, turn.feedbackRating, turn.feedbackReasons ?? [], comment);
-      showToast("補足を送信しました");
+      const notification = await sendAnswerFeedback(chat, turnIndex, turn, turn.feedbackRating, turn.feedbackReasons ?? [], comment);
+      showToast(feedbackNotificationMessage(notification, "補足"));
       void refreshFeedbackItems();
     } catch (error) {
       showToast(error instanceof Error ? error.message : "補足を送信できませんでした");
@@ -787,7 +722,7 @@ export default function App() {
       await deleteChat(chat.id);
     } catch {
       showToast("チャット履歴を削除できませんでした");
-      void restoreHistory(username);
+      void restoreHistory();
     }
   }
 
@@ -996,8 +931,8 @@ export default function App() {
     // 出典やエラー状態はサーバーへ再送しない。長さの上限はサーバー側でも検証する。
     const context = (activeChat?.turns ?? [])
       .filter((item) => !item.streaming && item.question.trim() && item.answer.trim())
-      .slice(-2)
-      .map((item) => ({ question: item.question, answer: item.answer.slice(0, 2000) }));
+      .slice(-CONVERSATION_CONTEXT_TURNS)
+      .map((item) => ({ question: item.question, answer: item.answer.slice(0, CONVERSATION_ANSWER_RUNES) }));
     const turn: Turn = {
       question: q,
       answer: "",
@@ -1291,78 +1226,19 @@ export default function App() {
                 <span>改善を送る</span>
               </button>
               {feedbackOpen && (
-                <section className="header-popover feedback-popover" id="feedback-popover" aria-label="フィードバック">
-                  <div className="feedback-popover-head">
-                    <div>
-                      <h2>気づいたことを送る</h2>
-                      <p>匿名で管理者にフィードバックを送れます</p>
-                    </div>
-                    <button type="button" className="popover-close" onClick={() => setFeedbackOpen(false)} aria-label="閉じる">×</button>
-                  </div>
-                  <form className="feedback-comment-form" onSubmit={(event) => {
-                    event.preventDefault();
-                    void sendGeneralFeedback();
-                  }}>
-                    <div className="feedback-choice-list" role="group" aria-label="フィードバックの種類">
-                      {GENERAL_REASONS.map((reason) => (
-                        <button
-                          type="button"
-                          key={reason}
-                          className={generalReason === reason ? "selected" : ""}
-                          aria-pressed={generalReason === reason}
-                          onClick={() => setGeneralReason(reason)}
-                        >
-                          {FEEDBACK_LABELS[reason]}
-                        </button>
-                      ))}
-                    </div>
-                      <label>
-                        <span>補足</span>
-                        <textarea
-                          value={generalComment}
-                          onChange={(event) => setGeneralComment(event.target.value)}
-                          maxLength={500}
-                          rows={3}
-                          placeholder="どこで、何が起きたかなど"
-                        />
-                      </label>
-                    <button type="submit" disabled={!generalReason || generalSubmitting}>
-                      {generalSubmitting ? "送信中…" : "送信する"}
-                    </button>
-                  </form>
-                  {isAdmin && (
-                    <section className="feedback-admin">
-                      <div className="feedback-admin-head">
-                        <h3>最近の報告</h3>
-                        <button type="button" onClick={() => void refreshFeedbackItems()} disabled={feedbackLoading}>
-                          {feedbackLoading ? "読込中" : "更新"}
-                        </button>
-                      </div>
-                      <div className="feedback-summary">
-                        <span>良い {feedbackItems.filter((item) => item.rating === "good").length}</span>
-                        <span>改善 {feedbackItems.filter((item) => item.rating === "bad").length}</span>
-                        <span>全体 {feedbackItems.filter((item) => item.kind === "general").length}</span>
-                      </div>
-                      <div className="feedback-admin-list">
-                        {feedbackItems.length === 0 ? <p>まだ報告はありません</p> : feedbackItems.slice(0, 12).map((item) => (
-                          <details key={item.id}>
-                            <summary>
-                              <span>{item.rating === "good" ? "良い" : item.rating === "bad" ? "改善" : "全体"}</span>
-                              <strong>{item.reasons?.[0] ? FEEDBACK_LABELS[item.reasons[0]] : item.comment || "理由なし"}</strong>
-                            </summary>
-                            {item.question && <p><b>質問:</b> {item.question}</p>}
-                            {item.comment && <p><b>補足:</b> {item.comment}</p>}
-                            {item.answer && <p><b>回答:</b> {item.answer.slice(0, 500)}{item.answer.length > 500 ? "…" : ""}</p>}
-                            {item.timings && (
-                              <p><b>所要時間:</b> ページ {formatDuration(item.timings.pagesMs)} / 節 {formatDuration(item.timings.chunksMs)} / 回答 {formatDuration(item.timings.answerMs)} / 合計 {formatDuration(item.timings.totalMs)}</p>
-                            )}
-                            <time dateTime={item.submittedAt}>{new Date(item.submittedAt).toLocaleString("ja-JP")}</time>
-                          </details>
-                        ))}
-                      </div>
-                    </section>
-                  )}
-                </section>
+                <FeedbackPopover
+                  reason={generalReason}
+                  comment={generalComment}
+                  submitting={generalSubmitting}
+                  isAdmin={isAdmin}
+                  items={feedbackItems}
+                  loading={feedbackLoading}
+                  onReason={setGeneralReason}
+                  onComment={setGeneralComment}
+                  onSubmit={() => void sendGeneralFeedback()}
+                  onClose={() => setFeedbackOpen(false)}
+                  onRefresh={() => void refreshFeedbackItems()}
+                />
               )}
             </div>
             <div className="header-menu-wrap">
@@ -1681,61 +1557,16 @@ export default function App() {
                   ) : <div className="error" role="alert">{turn.error}</div>)}
 
                   {!turn.streaming && turn.answer && !turn.error && activeChat && (
-                    <section className="answer-feedback" aria-label="回答の評価">
-                      <div className="answer-feedback-row">
-                        <span>
-                          {turn.feedbackRating ? "評価済み" : "この回答は役に立ちましたか？"}
-                          {!turn.feedbackRating && <small>質問・回答も送信</small>}
-                        </span>
-                        <button
-                          type="button"
-                          className={turn.feedbackRating === "good" ? "selected" : ""}
-                          aria-label="役に立った"
-                          aria-pressed={turn.feedbackRating === "good"}
-                          onClick={() => void handleAnswerRating(activeChat, index, turn, "good")}
-                        >👍</button>
-                        <button
-                          type="button"
-                          className={turn.feedbackRating === "bad" ? "selected" : ""}
-                          aria-label="改善が必要"
-                          aria-pressed={turn.feedbackRating === "bad"}
-                          onClick={() => void handleAnswerRating(activeChat, index, turn, "bad")}
-                        >👎</button>
-                      </div>
-                      {answerFeedbackOpen === `${activeChat.id}:${index}` && turn.feedbackRating && (
-                        <div className="answer-feedback-detail">
-                          <div className="feedback-chips">
-                            {(turn.feedbackRating === "good" ? GOOD_REASONS : BAD_REASONS).map((reason) => (
-                              <button
-                                type="button"
-                                key={reason}
-                                className={turn.feedbackReasons?.includes(reason) ? "selected" : ""}
-                                onClick={() => void toggleAnswerReason(activeChat, index, turn, reason)}
-                              >
-                                {FEEDBACK_LABELS[reason]}
-                              </button>
-                            ))}
-                          </div>
-                          <div className="answer-feedback-comment">
-                            <textarea
-                              value={answerComments[`${activeChat.id}:${index}`] ?? turn.feedbackComment ?? ""}
-                              onChange={(event) => setAnswerComments((current) => ({
-                                ...current,
-                                [`${activeChat.id}:${index}`]: event.target.value,
-                              }))}
-                              maxLength={500}
-                              rows={2}
-                              placeholder="補足があれば入力（任意）"
-                            />
-                            <button type="button" onClick={() => void submitAnswerComment(activeChat, index, turn)}>
-                              補足を送る
-                            </button>
-                            <button type="button" className="linkish" onClick={() => setAnswerFeedbackOpen(null)}>閉じる</button>
-                          </div>
-                          <p>評価時は、この質問・回答・出典も改善確認のため保存します。</p>
-                        </div>
-                      )}
-                    </section>
+                    <AnswerFeedback
+                      turn={turn}
+                      open={answerFeedbackOpen === `${activeChat.id}:${index}`}
+                      comment={answerComments[`${activeChat.id}:${index}`] ?? turn.feedbackComment ?? ""}
+                      onRating={(rating) => void handleAnswerRating(activeChat, index, turn, rating)}
+                      onReason={(reason) => void toggleAnswerReason(activeChat, index, turn, reason)}
+                      onComment={(comment) => setAnswerComments((current) => ({ ...current, [`${activeChat.id}:${index}`]: comment }))}
+                      onSubmitComment={() => void submitAnswerComment(activeChat, index, turn)}
+                      onClose={() => setAnswerFeedbackOpen(null)}
+                    />
                   )}
 
                   {turn.sources.length > 0 && (

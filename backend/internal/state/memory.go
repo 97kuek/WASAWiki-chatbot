@@ -32,16 +32,6 @@ func (m *Memory) Remaining(_ context.Context, user, day string, limit int) (int,
 	return max(limit-m.usage[usageKey(user, day)], 0), nil
 }
 
-func (m *Memory) RestoreUsage(_ context.Context, user, day string, used, limit int) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	key := usageKey(user, day)
-	if used > m.usage[key] {
-		m.usage[key] = min(used, limit)
-	}
-	return nil
-}
-
 func (m *Memory) Take(_ context.Context, user, day string, limit int) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

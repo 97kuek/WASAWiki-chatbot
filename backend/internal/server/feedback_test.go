@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +11,16 @@ import (
 
 	"github.com/97kuek/wasa-chat/backend/internal/state"
 )
+
+type feedbackNotifierStub struct {
+	item state.Feedback
+	err  error
+}
+
+func (n *feedbackNotifierStub) Notify(_ context.Context, item state.Feedback) error {
+	n.item = item
+	return n.err
+}
 
 func feedbackTestServer() *Server {
 	return &Server{
@@ -68,6 +80,36 @@ func TestGeneralFeedbackRequiresAReasonOrComment(t *testing.T) {
 	srv.handleSaveFeedback(recorder, req)
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("空の改善報告を受け付けた: status=%d", recorder.Code)
+	}
+}
+
+func TestGeneralFeedbackIsSavedAndEmailed(t *testing.T) {
+	notifier := &feedbackNotifierStub{}
+	srv := feedbackTestServer()
+	srv.cfg.FeedbackNotifier = notifier
+	req := authenticatedRequest(srv, http.MethodPost, "/api/feedback",
+		`{"clientId":"report-1","kind":"general","reasons":["feature"],"comment":"会話を引き継いでほしい","page":"chat"}`, "利用者")
+	recorder := httptest.NewRecorder()
+	srv.handleSaveFeedback(recorder, req)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"notification":"sent"`) {
+		t.Fatalf("保存と通知が完了しない: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if notifier.item.Comment != "会話を引き継いでほしい" || notifier.item.ReporterKey == "" {
+		t.Fatalf("保存した内容が通知へ渡っていない: %+v", notifier.item)
+	}
+}
+
+func TestMailFailureDoesNotDiscardFeedback(t *testing.T) {
+	notifier := &feedbackNotifierStub{err: errors.New("一時的なSMTP障害")}
+	srv := feedbackTestServer()
+	srv.cfg.FeedbackNotifier = notifier
+	req := authenticatedRequest(srv, http.MethodPost, "/api/feedback",
+		`{"clientId":"report-2","kind":"general","reasons":["bug"],"page":"chat"}`, "利用者")
+	recorder := httptest.NewRecorder()
+	srv.handleSaveFeedback(recorder, req)
+	items, err := srv.state.ListFeedback(t.Context(), 100)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"notification":"failed"`) || err != nil || len(items) != 1 {
+		t.Fatalf("メール障害時に保存されない: status=%d body=%s count=%d err=%v", recorder.Code, recorder.Body.String(), len(items), err)
 	}
 }
 

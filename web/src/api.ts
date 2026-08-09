@@ -125,7 +125,9 @@ export type Feedback = Omit<FeedbackPayload, "clientId"> & {
   submittedAt: string;
 };
 
-export async function submitFeedback(payload: FeedbackPayload): Promise<void> {
+export type FeedbackNotification = "sent" | "failed" | "disabled";
+
+export async function submitFeedback(payload: FeedbackPayload): Promise<FeedbackNotification> {
   const res = await fetch(`${base}/api/feedback`, {
     method: "POST",
     credentials: "include",
@@ -136,6 +138,8 @@ export async function submitFeedback(payload: FeedbackPayload): Promise<void> {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? "フィードバックを送信できませんでした");
   }
+  const body = await res.json().catch(() => ({})) as { notification?: FeedbackNotification };
+  return body.notification ?? "disabled";
 }
 
 export async function listFeedback(): Promise<Feedback[]> {

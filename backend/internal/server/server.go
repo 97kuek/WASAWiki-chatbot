@@ -30,16 +30,22 @@ import (
 )
 
 const (
-	cookieName      = "wasa_session"
-	usageCookieName = "wasa_daily_usage"
-	sessionMaxAge   = 30 * 24 * time.Hour
+	cookieName    = "wasa_session"
+	sessionMaxAge = 30 * 24 * time.Hour
 )
 
+// FeedbackNotifier は、保存済みのフィードバックを管理者へ知らせる。
+// 保存先と通知先を分けることで、メール障害で報告そのものを失わない。
+type FeedbackNotifier interface {
+	Notify(context.Context, state.Feedback) error
+}
+
 type Config struct {
-	SessionSecret string // Cookie署名用。未設定なら起動時に生成する
-	DailyLimit    int    // 利用者1人あたりの1日の質問数上限
-	AllowOrigin   string // 開発時にViteのdev serverから叩くためのCORS設定
-	SPADir        string // 指定するとビルド済みSPAも同じサーバーから配る
+	SessionSecret    string // Cookie署名用。未設定なら起動時に生成する
+	DailyLimit       int    // 利用者1人あたりの1日の質問数上限
+	AllowOrigin      string // 開発時にViteのdev serverから叩くためのCORS設定
+	SPADir           string // 指定するとビルド済みSPAも同じサーバーから配る
+	FeedbackNotifier FeedbackNotifier
 	// 他人のアシスタントも削除できるWiki利用者名。役割ではなく、
 	// 明らかなゴミを片付けるための最小限の権限（docs/06-決定的ルール.md）
 	AdminUsers []string
@@ -145,55 +151,6 @@ func (s *Server) userKey(user string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// signUsageは旧版のCookieをFirestoreへ一度だけ移行するために残す。
-func (s *Server) signUsage(user, day string, used int) string {
-	encoded := base64.RawURLEncoding.EncodeToString([]byte(user))
-	body := fmt.Sprintf("%s|%s|%d", encoded, day, used)
-	mac := hmac.New(sha256.New, []byte(s.cfg.SessionSecret))
-	fmt.Fprintf(mac, "usage|%s", body)
-	return body + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-}
-
-func (s *Server) verifyUsage(token, expectedUser string) (string, int, bool) {
-	body, signature, ok := strings.Cut(token, ".")
-	if !ok {
-		return "", 0, false
-	}
-	parts := strings.Split(body, "|")
-	if len(parts) != 3 {
-		return "", 0, false
-	}
-	user, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil || string(user) != expectedUser {
-		return "", 0, false
-	}
-	used, err := strconv.Atoi(parts[2])
-	if err != nil || used < 0 || used > s.cfg.DailyLimit {
-		return "", 0, false
-	}
-	expected := strings.TrimPrefix(s.signUsage(string(user), parts[1], used), body+".")
-	if !hmac.Equal([]byte(expected), []byte(signature)) {
-		return "", 0, false
-	}
-	return parts[1], used, true
-}
-
-func (s *Server) restoreUsage(ctx context.Context, r *http.Request, user string) error {
-	cookie, err := r.Cookie(usageCookieName)
-	if err != nil {
-		return nil
-	}
-	day, used, ok := s.verifyUsage(cookie.Value, user)
-	if ok && day == today() {
-		return s.state.RestoreUsage(ctx, s.userKey(user), day, used, s.cfg.DailyLimit)
-	}
-	return nil
-}
-
-func expireUsageCookie(w http.ResponseWriter) {
-	http.SetCookie(w, appCookie(usageCookieName, "", -1))
-}
-
 func appCookie(name, value string, maxAge int) *http.Cookie {
 	return &http.Cookie{
 		Name: name, Value: value, Path: "/", MaxAge: maxAge,
@@ -240,11 +197,6 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.currentUser(r)
 	remaining := 0
 	if ok {
-		if err := s.restoreUsage(r.Context(), r, user); err != nil {
-			log.Printf("旧利用回数の移行に失敗: %v", err)
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "利用回数を読み込めませんでした"})
-			return
-		}
 		var err error
 		remaining, err = s.state.Remaining(r.Context(), s.userKey(user), today(), s.cfg.DailyLimit)
 		if err != nil {
@@ -252,8 +204,6 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "利用回数を読み込めませんでした"})
 			return
 		}
-		// 以後はFirestoreを正本にする。古い端末Cookieが新しい回数を巻き戻さないよう削除する。
-		expireUsageCookie(w)
 	}
 	writeJSON(w, http.StatusOK,
 		map[string]any{"authenticated": ok, "username": user, "remaining": remaining, "admin": ok && s.isAdmin(user)})
@@ -408,8 +358,23 @@ func (s *Server) handleDeleteChat(w http.ResponseWriter, r *http.Request) {
 
 // ---------------------------------------------------------------- フィードバック
 
-const maxFeedbackList = 100
-const maxStageTimingMS = int64((30 * time.Minute) / time.Millisecond)
+const (
+	maxFeedbackList             = 100
+	maxFeedbackBodyBytes        = 128 << 10
+	maxFeedbackReasons          = 5
+	maxFeedbackCommentRunes     = 500
+	maxFeedbackQuestionRunes    = 500
+	maxFeedbackAnswerRunes      = 20_000
+	maxFeedbackSources          = 8
+	maxFeedbackAssistantID      = 64
+	maxFeedbackAssistantRunes   = 40
+	maxFeedbackChatID           = 64
+	maxFeedbackTurnIndex        = 99
+	maxFeedbackSourceTitle      = 300
+	maxFeedbackSourceURL        = 4_000
+	maxStageTimingMS            = int64((30 * time.Minute) / time.Millisecond)
+	feedbackNotificationTimeout = 10 * time.Second
+)
 
 func validStageTimings(timings *state.StageTimings) bool {
 	if timings == nil {
@@ -487,13 +452,13 @@ func validFeedbackClientID(id string) bool {
 }
 
 func feedbackSourcesValid(sources []state.Source) bool {
-	if len(sources) > 8 {
+	if len(sources) > maxFeedbackSources {
 		return false
 	}
 	for _, source := range sources {
 		parsed, err := url.Parse(source.URL)
 		if err != nil || parsed.Host == "" || parsed.Scheme != "http" && parsed.Scheme != "https" ||
-			len([]rune(source.Title)) > 300 || len(source.URL) > 4_000 {
+			len([]rune(source.Title)) > maxFeedbackSourceTitle || len(source.URL) > maxFeedbackSourceURL {
 			return false
 		}
 	}
@@ -525,7 +490,7 @@ func (s *Server) handleSaveFeedback(w http.ResponseWriter, r *http.Request) {
 		TurnIndex     int                 `json:"turnIndex"`
 		Page          string              `json:"page"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128<<10)).Decode(&body); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxFeedbackBodyBytes)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "フィードバックが不正です"})
 		return
 	}
@@ -533,13 +498,13 @@ func (s *Server) handleSaveFeedback(w http.ResponseWriter, r *http.Request) {
 	validKind := body.Kind == "answer" || body.Kind == "general"
 	validRating := body.Rating == "" || body.Rating == "good" || body.Rating == "bad"
 	if !validFeedbackClientID(body.ClientID) || !validKind || !validRating ||
-		len(body.Reasons) > 5 || !validFeedbackReasons(body.Reasons) ||
+		len(body.Reasons) > maxFeedbackReasons || !validFeedbackReasons(body.Reasons) ||
 		!feedbackReasonsMatch(body.Kind, body.Rating, body.Reasons) ||
-		len([]rune(body.Comment)) > 500 || len([]rune(body.Question)) > 500 ||
-		len([]rune(body.Answer)) > 20_000 || !feedbackSourcesValid(body.Sources) ||
-		len(body.AssistantID) > 64 || len([]rune(body.AssistantName)) > 40 ||
+		len([]rune(body.Comment)) > maxFeedbackCommentRunes || len([]rune(body.Question)) > maxFeedbackQuestionRunes ||
+		len([]rune(body.Answer)) > maxFeedbackAnswerRunes || !feedbackSourcesValid(body.Sources) ||
+		len(body.AssistantID) > maxFeedbackAssistantID || len([]rune(body.AssistantName)) > maxFeedbackAssistantRunes ||
 		!validStageTimings(body.Timings) ||
-		len(body.ChatID) > 64 || body.TurnIndex < 0 || body.TurnIndex > 99 ||
+		len(body.ChatID) > maxFeedbackChatID || body.TurnIndex < 0 || body.TurnIndex > maxFeedbackTurnIndex ||
 		(body.Page != "chat" && body.Page != "assistants") ||
 		(body.Kind == "answer" && (body.Rating == "" || body.ChatID == "" || strings.TrimSpace(body.Question) == "")) ||
 		(body.Kind == "general" && (body.Rating != "" || body.Timings != nil || len(body.Reasons) == 0 && body.Comment == "")) {
@@ -573,7 +538,21 @@ func (s *Server) handleSaveFeedback(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "フィードバックを送信できませんでした"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	status := "disabled"
+	if s.cfg.FeedbackNotifier != nil {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), feedbackNotificationTimeout)
+		err := s.cfg.FeedbackNotifier.Notify(ctx, item)
+		cancel()
+		if err != nil {
+			// 保存は完了している。メール障害を500にすると利用者が再送し、
+			// 同じ報告が増えるため、通知状態だけを画面へ返す。
+			status = "failed"
+			log.Printf("フィードバックのメール通知に失敗: %v", err)
+		} else {
+			status = "sent"
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "notification": status})
 }
 
 func (s *Server) handleListFeedback(w http.ResponseWriter, r *http.Request) {
@@ -784,15 +763,23 @@ func (s *Server) lookupAssistant(ctx context.Context, id string) (*state.Assista
 
 // ---------------------------------------------------------------- 質問
 
+const (
+	maxConversationTurns         = 2
+	maxConversationQuestionRunes = 500
+	maxConversationAnswerRunes   = 2_000
+	maxQuestionRunes             = 500
+	maxAskBodyBytes              = 32 * 1024
+)
+
 func validConversationContext(context []pipeline.ConversationTurn) bool {
 	// 全履歴を毎回送ると入力費用が会話の長さに比例して増える。指示語の解決には
 	// 直近2往復で足りるため、サーバー側でも上限を固定する。
-	if len(context) > 2 {
+	if len(context) > maxConversationTurns {
 		return false
 	}
 	for _, turn := range context {
 		if strings.TrimSpace(turn.Question) == "" || strings.TrimSpace(turn.Answer) == "" ||
-			len([]rune(turn.Question)) > 500 || len([]rune(turn.Answer)) > 2_000 {
+			len([]rune(turn.Question)) > maxConversationQuestionRunes || len([]rune(turn.Answer)) > maxConversationAnswerRunes {
 			return false
 		}
 	}
@@ -806,13 +793,13 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		ResponseMode string                      `json:"responseMode"`
 		Context      []pipeline.ConversationTurn `json:"context"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32*1024)).Decode(&body); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxAskBodyBytes)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "リクエストが不正です"})
 		return
 	}
 	// 質問をURLに載せない。非公開Wikiに関する文面がアクセスログへ残るのを避けるため。
 	question := strings.TrimSpace(body.Question)
-	if question == "" || len([]rune(question)) > 500 {
+	if question == "" || len([]rune(question)) > maxQuestionRunes {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "質問を入力してください（500文字以内）"})
 		return
 	}

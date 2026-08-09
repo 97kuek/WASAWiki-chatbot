@@ -29,20 +29,6 @@ func TestMemoryUsageIsSharedByUserAndDay(t *testing.T) {
 	}
 }
 
-func TestMemoryRestoreDoesNotRollBackUsage(t *testing.T) {
-	ctx := context.Background()
-	store := NewMemory()
-	if err := store.RestoreUsage(ctx, "利用者", "2026-08-08", 7, 30); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.RestoreUsage(ctx, "利用者", "2026-08-08", 3, 30); err != nil {
-		t.Fatal(err)
-	}
-	if remaining, _ := store.Remaining(ctx, "利用者", "2026-08-08", 30); remaining != 23 {
-		t.Fatalf("古い値で回数が巻き戻った: remaining=%d", remaining)
-	}
-}
-
 func TestMemoryKeepsNewestThirtyChats(t *testing.T) {
 	ctx := context.Background()
 	store := NewMemory()

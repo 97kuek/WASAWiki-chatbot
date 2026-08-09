@@ -250,8 +250,25 @@ func TestRunUsesRecentConversationWithoutTreatingItAsEvidence(t *testing.T) {
 		t.Fatal("ページ選択に直近の会話が渡っていない")
 	}
 	if !strings.Contains(client.lastAnswer, "以前の回答: 以前の回答には誤り") ||
-		!strings.Contains(client.lastAnswer, "事実の根拠にせず") {
+		!strings.Contains(client.lastAnswer, "事実の根拠にせず") ||
+		!strings.Contains(client.lastAnswer, "対象が一つに定まるなら、その対象を直接解説") {
 		t.Fatal("回答生成に会話の位置づけが明示されていない")
+	}
+}
+
+func TestRunResolvesTailDesignFollowUp(t *testing.T) {
+	client := &stubLLM{titles: []string{"電装班"}}
+	pipe := New(testIndex(t), client)
+	history := []ConversationTurn{
+		{Question: "空力設計の手順を説明して", Answer: "主翼の設計手順を説明しました。"},
+		{Question: "尾翼設計について書かれていないようですが", Answer: "尾翼設計では飛行力学の式を理解します。"},
+	}
+	if err := pipe.Run(context.Background(), "それについて解説して", history, nil, func(Event) {}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(client.lastSelect, "尾翼設計について書かれていない") ||
+		!strings.Contains(client.lastAnswer, "現在の質問") {
+		t.Fatal("直前の尾翼設計を検索と回答へ引き継いでいない")
 	}
 }
 
@@ -371,6 +388,49 @@ func TestSelectPagesKeepsDirectTitleMatchAlongsideModelChoice(t *testing.T) {
 	}
 	if len(pages) != 2 || pages[0].Title != "HPA交流会" || pages[1].Title != "人物ページ" {
 		t.Fatalf("タイトル一致とLLM候補が合流していない: %+v", pages)
+	}
+}
+
+func TestLinkQuestionFindsWikiMainPageAndExcludesOfficialSite(t *testing.T) {
+	dir := t.TempDir()
+	payload := map[string]any{"pages": []map[string]any{
+		{"id": "1", "source": "wiki", "title": "メインページ", "url": "https://wiki.example/main", "chars": 100,
+			"chunks": []map[string]any{{"id": "p1-c0", "breadcrumb": "メインページ > 活動には直接関係しないもの", "chars": 100,
+				"text": "[情報理工・情報通信学科 過去問・レポート](https://drive.example/past)"}}},
+		{"id": "s1", "source": "site", "title": "公式サイト", "url": "https://site.example", "chars": 100,
+			"chunks": []map[string]any{{"id": "ps1-c0", "breadcrumb": "公式サイト", "chars": 100, "text": "情報通信の紹介"}}},
+	}}
+	raw, _ := json.Marshal(payload)
+	if err := os.WriteFile(filepath.Join(dir, "index.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "toc.md"), []byte("# 目次"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ix, err := index.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &stubLLM{titles: []string{"公式サイト"}}
+	pipe := New(ix, client)
+	pages, err := pipe.selectPages(context.Background(), "WASA Wikiには情報通信学科の過去問がありますか？リンクを教えてください", nil, llm.ProfileStandard, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) != 1 || pages[0].Title != "メインページ" || pages[0].Source != "wiki" {
+		t.Fatalf("本文中のリンクを持つWikiページだけを選べていない: %+v", pages)
+	}
+}
+
+func TestAnswerPromptLeavesSourceListToServer(t *testing.T) {
+	client := &stubLLM{titles: []string{"電装班"}}
+	pipe := New(testIndex(t), client)
+	if err := pipe.Run(context.Background(), "電装班について", nil, nil, func(Event) {}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(client.lastAnswer, "出典一覧は画面が索引から別に表示") ||
+		strings.Contains(client.lastAnswer, "[ページ名](URL)") {
+		t.Fatal("モデルに出典一覧を作らせる古い規則が残っている")
 	}
 }
 

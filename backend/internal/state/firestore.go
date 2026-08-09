@@ -53,26 +53,6 @@ func (f *Firestore) Remaining(ctx context.Context, user, day string, limit int) 
 	return max(limit-usedFromSnapshot(snapshot), 0), nil
 }
 
-func (f *Firestore) RestoreUsage(ctx context.Context, user, day string, used, limit int) error {
-	ref := f.usageDoc(user, day)
-	return f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
-		current := 0
-		snapshot, err := tx.Get(ref)
-		if err == nil {
-			current = usedFromSnapshot(snapshot)
-		} else if status.Code(err) != codes.NotFound {
-			return err
-		}
-		if used <= current {
-			return nil
-		}
-		return tx.Set(ref, map[string]any{
-			"used":       min(used, limit),
-			"updated_at": time.Now().UTC(),
-		})
-	})
-}
-
 func (f *Firestore) Take(ctx context.Context, user, day string, limit int) (bool, error) {
 	ref := f.usageDoc(user, day)
 	taken := false

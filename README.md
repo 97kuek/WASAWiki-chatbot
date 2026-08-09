@@ -8,7 +8,7 @@
 ## 構成
 
 ```
-dump_wiki.py / build_index.py / build_toc.py   Python   Wiki取得 → 整形 → 目次生成
+check_updates.py / rebuild.py                  Python   更新確認 → 取得 → 索引生成 → 検査
 rag/                                           Python   回答パイプライン（測定用の正本）
 eval/                                          Python   精度測定
 backend/                                       Go       API（認証・SSE・レート制限）
@@ -41,10 +41,8 @@ cp .env.example .env   # Wiki取得に使う通常アカウントの認証情報
 ## 1. データを作る
 
 ```bash
-python dump_wiki.py     # Wiki全体を取得    → dump/pages.jsonl
-python dump_site.py     # 公式サイト取得     → dump/site.jsonl
-python build_index.py   # 整形・チャンク化   → data/index.json
-python build_toc.py     # 目次を生成        → data/toc.md
+python check_updates.py # 取得後に公開元が変わったか確認する
+python rebuild.py       # 取得、索引作成、検索検査をまとめて実行する
 ```
 
 - `dump_wiki.py` はさくらインターネットのレンタルサーバ上のWikiを叩くため、リクエスト間に1秒の間隔を入れている。全ページの取得には数分かかる。
@@ -91,12 +89,12 @@ docker compose up --build   # → http://localhost:8080
 - 入力欄は画面下部に固定し、`Enter` で送信、`Shift + Enter` で改行する
 - チャット履歴はWiki利用者ごとにFirestoreへ最大30件保存し、別端末でのログイン時にも同期する
 - アシスタントを切り替えると、参照範囲と口調を混ぜないため新しいチャットを開く
-- Firestore導入前に現在のタブへ残っていた履歴は、初回ログイン時に自動移行する
 - PCは履歴と会話の2カラムで、履歴欄は折りたためる。狭い画面では重ねて開く
 - 履歴は今日、昨日、過去7日間、年月で分け、各履歴からピン留め、タイトル変更、共有、削除ができる
 - ベルからリポジトリ管理のお知らせ、利用者アイコンからWikiとログアウトを開く
 - 各回答は👍／👎を1タップで送れ、理由と補足は任意にする
-- 右上の「改善を送る」から、画面・使い勝手・機能提案を1タップで報告できる
+- 右上の「改善を送る」では分類を選び、送信ボタンで画面・使い勝手・機能提案を報告する
+- フィードバックはFirestoreへ保存し、設定済みなら管理者へメールでも通知する
 
 ### 環境変数
 
@@ -109,6 +107,10 @@ docker compose up --build   # → http://localhost:8080
 | `DAILY_LIMIT` | 30 | 利用者ひとりあたり・日本時間1日の質問数。API費用の安全弁 |
 | `FIRESTORE_PROJECT_ID` | (なし) | 利用回数、最大30件の履歴、共有アシスタント、フィードバックを保存するGoogle Cloudプロジェクト。本番では必須 |
 | `ALLOW_ORIGIN` | (なし) | 本番のCloudflare Pages URL。複数はカンマ区切り。Cloud Runでは必須で、許可外OriginのPOSTを拒否する |
+| `FEEDBACK_EMAIL_TO` | (なし) | フィードバック通知を受け取る管理者のメールアドレス。複数はカンマ区切り |
+| `SMTP_HOST` / `SMTP_PORT` | (なし) / `587` | メール送信サービスの接続先 |
+| `SMTP_USERNAME` / `SMTP_PASSWORD` | (なし) | メール送信サービスの認証情報。パスワードはSecret Managerへ置く |
+| `SMTP_FROM` | `SMTP_USERNAME` | 通知メールの送信元 |
 | `LLM_PROVIDER` | `ollama` | 本番でGeminiを使う場合は `gemini` |
 | `GEMINI_API_KEY` | (なし) | WASAで共有するGeminiプロジェクトのAPIキー。サーバーの`.env`だけに置く |
 | `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Geminiの固定モデルID。`latest`別名は本番で使わない |

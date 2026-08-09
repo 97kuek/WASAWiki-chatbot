@@ -111,7 +111,6 @@ type Feedback struct {
 // ただしアシスタントは全員で共有するため、利用者ごとの区別を持たない。
 type Store interface {
 	Remaining(context.Context, string, string, int) (int, error)
-	RestoreUsage(context.Context, string, string, int, int) error
 	Take(context.Context, string, string, int) (bool, error)
 	Refund(context.Context, string, string) error
 	ListChats(context.Context, string, int) ([]Chat, error)
