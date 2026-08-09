@@ -422,6 +422,58 @@ func TestLinkQuestionFindsWikiMainPageAndExcludesOfficialSite(t *testing.T) {
 	}
 }
 
+// 「リンクを教えて」だけでなく「どこにありますか」でもリンク検索が要る。
+// 実索引で、前者は メインページ を選べるのに後者は選べなかった（2026-08-09）。
+// あわせて、実在タイトルの一致を本文スコアより先に採ることも固定する。
+// 「どこ」を足しただけの版では、q26「合宿で39代はどこに行きましたか」で
+// リンク検索が 合宿 ページを押し出し、決定的候補の的中が19→18へ下がった。
+func TestWhereQuestionFindsLinkPageWithoutPushingOutTitleMatch(t *testing.T) {
+	dir := t.TempDir()
+	payload := map[string]any{"pages": []map[string]any{
+		{"id": "1", "source": "wiki", "title": "メインページ", "url": "https://wiki.example/main", "chars": 100,
+			"chunks": []map[string]any{{"id": "p1-c0", "breadcrumb": "メインページ", "chars": 100,
+				"text": "[情報通信学科　過去問](https://drive.example/past)"}}},
+		{"id": "2", "source": "wiki", "title": "合宿", "url": "https://wiki.example/camp", "chars": 100,
+			"chunks": []map[string]any{{"id": "p2-c0", "breadcrumb": "合宿", "chars": 100,
+				"text": "39代の合宿は中止になった。行き先の検討経緯はここに残す。"}}},
+		{"id": "3", "source": "wiki", "title": "大学に出す書類", "url": "https://wiki.example/doc", "chars": 100,
+			"chunks": []map[string]any{{"id": "p3-c0", "breadcrumb": "大学に出す書類", "chars": 100,
+				"text": "合宿の届出はどこに出すか。39代の様式を残す。"}}},
+	}}
+	raw, _ := json.Marshal(payload)
+	if err := os.WriteFile(filepath.Join(dir, "index.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "toc.md"), []byte("# 目次"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ix, err := index.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pipe := New(ix, &stubLLM{})
+
+	// 1. 「どこにありますか」でもリンクを含むページを保持する
+	got := pipe.deterministicPages("情報通信学科の過去問はどこにありますか？", nil)
+	if len(got) == 0 || got[0].Title != "メインページ" {
+		t.Fatalf("「どこ」の質問でリンク先ページを保持できていない: %+v", titlesOf(got))
+	}
+
+	// 2. タイトルが一致するページを、本文スコアで押し出さない
+	got = pipe.deterministicPages("合宿で39代はどこに行きましたか？", nil)
+	if len(got) == 0 || got[0].Title != "合宿" {
+		t.Fatalf("実在タイトルの一致が本文スコアに負けている: %+v", titlesOf(got))
+	}
+}
+
+func titlesOf(pages []*index.Page) []string {
+	var out []string
+	for _, p := range pages {
+		out = append(out, p.Title)
+	}
+	return out
+}
+
 func TestAnswerPromptLeavesSourceListToServer(t *testing.T) {
 	client := &stubLLM{titles: []string{"電装班"}}
 	pipe := New(testIndex(t), client)

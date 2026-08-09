@@ -167,7 +167,7 @@ var generationOrdinalPattern = regexp.MustCompile(`(?i)([0-9]+)(?:st|nd|rd|th)`)
 var generationLabelPattern = regexp.MustCompile(`[0-9]+代`)
 var shortASCIIPageTitlePattern = regexp.MustCompile(`^[a-z0-9]{1,3}$`)
 var asciiWordPattern = regexp.MustCompile(`[a-z0-9]+`)
-var linkRequestPattern = regexp.MustCompile(`(?i)リンク|URL|https?|github|drive|資料.*場所`)
+var linkRequestPattern = regexp.MustCompile(`(?i)リンク|URL|https?|github|drive|資料.*場所|どこ|ありか`)
 
 const answerPrompt = `# タスク
 
@@ -465,7 +465,7 @@ func (p *Pipeline) selectPages(ctx context.Context, question string, a *state.As
 func (p *Pipeline) deterministicPages(question string, a *state.Assistant) []*index.Page {
 	var out []*index.Page
 	seen := map[string]bool{}
-	for _, candidates := range [][]*index.Page{p.linkPages(question, a), p.identifierPages(question, a), p.directTitlePages(question, a)} {
+	for _, candidates := range [][]*index.Page{p.directTitlePages(question, a), p.identifierPages(question, a), p.linkPages(question, a)} {
 		for _, pg := range candidates {
 			if pg == nil || seen[pg.Title] {
 				continue
