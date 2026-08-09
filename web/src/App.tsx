@@ -304,6 +304,12 @@ export default function App() {
   const bottom = useRef<HTMLDivElement>(null);
   const headerMenus = useRef<HTMLDivElement>(null);
   const historyArea = useRef<HTMLElement>(null);
+  // ポップオーバーを閉じたときの戻り先。保持しないとフォーカスがbodyへ落ち、
+  // キーボードだけの利用者はタブ順の最初からやり直しになる
+  const feedbackTrigger = useRef<HTMLButtonElement>(null);
+  const noticeTrigger = useRef<HTMLButtonElement>(null);
+  const profileTrigger = useRef<HTMLButtonElement>(null);
+  const historyMenuTrigger = useRef<HTMLButtonElement>(null);
   const syncedChats = useRef<Map<string, string>>(new Map());
   const toastTimer = useRef<number | null>(null);
   const toastMessage = useRef("");
@@ -409,13 +415,19 @@ export default function App() {
       if (!historyArea.current?.contains(event.target as Node)) setHistoryMenuId(null);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setNoticeOpen(false);
-        setProfileOpen(false);
-        setFeedbackOpen(false);
-        setHistoryMenuId(null);
-        setRenamingChatId(null);
-      }
+      if (event.key !== "Escape") return;
+      // 開いていたものを開いた元へ戻す。同時に開くのは1つなので上から順で決まる
+      const restore = feedbackOpen ? feedbackTrigger.current
+        : noticeOpen ? noticeTrigger.current
+        : profileOpen ? profileTrigger.current
+        : historyMenuId ? historyMenuTrigger.current
+        : null;
+      setNoticeOpen(false);
+      setProfileOpen(false);
+      setFeedbackOpen(false);
+      setHistoryMenuId(null);
+      setRenamingChatId(null);
+      restore?.focus();
     };
     window.addEventListener("pointerdown", closeOnOutsideClick);
     window.addEventListener("keydown", closeOnEscape);
@@ -1160,9 +1172,17 @@ export default function App() {
                     >
                       <HistoryIcon />
                       <span>{chat.title}</span>
-                      {chat.turns.some((turn) => turn.streaming) && <i aria-label="回答中" />}
+                      {/* aria-labelは役割のない要素では読み上げられないので、
+                          ボタン名へ足す隠し文字で伝える */}
+                      {chat.turns.some((turn) => turn.streaming) && (
+                        <>
+                          <i aria-hidden="true" />
+                          <span className="visually-hidden">回答中</span>
+                        </>
+                      )}
                     </button>
                     <button
+                      ref={historyMenuId === chat.id ? historyMenuTrigger : undefined}
                       type="button"
                       className="history-more"
                       aria-label={`「${chat.title}」のメニュー`}
@@ -1174,13 +1194,15 @@ export default function App() {
                       </svg>
                     </button>
                     {historyMenuId === chat.id && (
-                      <div className="history-menu" role="menu">
-                        <button type="button" role="menuitem" onClick={() => handleTogglePin(chat.id)}>
+                      // role="menu" は矢印キーでの移動を約束する役割だが、それは実装していない。
+                      // 素のボタンはTabで辿れるので、実装に合う「操作のまとまり」として示す
+                      <div className="history-menu" role="group" aria-label={`「${chat.title}」の操作`}>
+                        <button type="button" onClick={() => handleTogglePin(chat.id)}>
                           {chat.pinned ? "ピン留めを解除" : "ピン留め"}
                         </button>
-                        <button type="button" role="menuitem" onClick={() => handleRenameStart(chat)}>タイトル変更</button>
-                        <button type="button" role="menuitem" onClick={() => handleShare(chat)} disabled={chat.turns.some((turn) => turn.streaming)}>共有する</button>
-                        <button type="button" role="menuitem" className="danger" onClick={() => handleDeleteChat(chat)} disabled={chat.turns.some((turn) => turn.streaming)}>削除</button>
+                        <button type="button" onClick={() => handleRenameStart(chat)}>タイトル変更</button>
+                        <button type="button" onClick={() => handleShare(chat)} disabled={chat.turns.some((turn) => turn.streaming)}>共有する</button>
+                        <button type="button" className="danger" onClick={() => handleDeleteChat(chat)} disabled={chat.turns.some((turn) => turn.streaming)}>削除</button>
                       </div>
                     )}
                   </div>
@@ -1213,6 +1235,7 @@ export default function App() {
           <div className="header-actions" ref={headerMenus}>
             <div className="header-menu-wrap">
               <button
+                ref={feedbackTrigger}
                 type="button"
                 className="feedback-trigger"
                 aria-expanded={feedbackOpen}
@@ -1236,13 +1259,17 @@ export default function App() {
                   onReason={setGeneralReason}
                   onComment={setGeneralComment}
                   onSubmit={() => void sendGeneralFeedback()}
-                  onClose={() => setFeedbackOpen(false)}
+                  onClose={() => {
+                    setFeedbackOpen(false);
+                    feedbackTrigger.current?.focus();
+                  }}
                   onRefresh={() => void refreshFeedbackItems()}
                 />
               )}
             </div>
             <div className="header-menu-wrap">
               <button
+                ref={noticeTrigger}
                 type="button"
                 className="header-icon"
                 aria-label={`お知らせ${unreadCount > 0 ? `、未読${unreadCount}件` : ""}`}
@@ -1274,6 +1301,7 @@ export default function App() {
             </div>
             <div className="header-menu-wrap">
               <button
+                ref={profileTrigger}
                 type="button"
                 className="profile-avatar"
                 aria-label={`利用者メニュー: ${username}`}
@@ -1422,8 +1450,9 @@ export default function App() {
                   </div>
                   <div className="assistant-page-controls">
                     <span className="assistant-count">{assistants.length + 1}件</span>
+                    {/* 見出しは付けない。SelectMenu自身が「アシスタントの並べ替え」を
+                        名前として持っており、置くと同じ語を二度読み上げる */}
                     <div className="assistant-sort">
-                      <span className="visually-hidden">並べ替え</span>
                       <SelectMenu
                         label="アシスタントの並べ替え"
                         value={assistantSort}
@@ -1674,9 +1703,12 @@ export default function App() {
           </form>
         </div>
       )}
+      {/* ライブリージョンは中身と一緒に現れると読み上げられない。常に置いておき、
+          文字だけを差し替える。見えるトースト側は同じ文を二重に読ませないため隠す */}
+      <div className="visually-hidden" role="status" aria-live="polite">{toast}</div>
       {toast && (
         <div className="toast" key={toast}>
-          <span role="status">{toast}</span>
+          <span aria-hidden="true">{toast}</span>
           <button type="button" onClick={hideToast} aria-label="通知を閉じる">×</button>
         </div>
       )}

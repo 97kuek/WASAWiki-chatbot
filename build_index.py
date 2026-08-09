@@ -85,11 +85,23 @@ IMAGE_PREFIX = re.compile(r"^\s*(ファイル|File|画像|Image)\s*:", re.I)
 CATEGORY_PREFIX = re.compile(r"^\s*(Category|カテゴリ)\s*:", re.I)
 REDIRECT = re.compile(r"^\s*#\s*(REDIRECT|転送)\s*\[\[([^\]|]+)", re.I)
 
-# 画像埋め込みの「キャプションではない」パラメータ
+# 画像埋め込みの「キャプションではない」パラメータ。
+# MediaWikiは日本語版の別名も受け付けるため、英語名だけでは足りない。実データの
+# 画像パラメータ全数を数えたところ、上位は日本語の別名だった
+# （サムネイル39 / なし16 / 中央10 / NNNxNNNピクセル7 / フレームなし2）。
+# これを除外していなかったため、本文の［図: …］57件中31件（54.4%）が
+# 「サムネイル」「中央」のような表示指定になり、代わりに出るはずの
+# ファイル名（コンタクト.png など）まで押し出されていた。
+# サイズは `500x500px` のような「縦x横+px」の書き方も実データにある。
 IMAGE_MODIFIERS = re.compile(
-    r"^(thumb|thumbnail|frame|frameless|border|right|left|center|none|baseline|"
-    r"top|middle|bottom|text-top|text-bottom|sub|super|\d+\s*px|x\d+px|upright.*|"
-    r"link=.*|alt=.*|lang=.*|page=.*|class=.*)$",
+    r"^(thumb|thumbnail|frame|framed|frameless|border|right|left|center|centre|none|"
+    r"baseline|top|middle|bottom|text-top|text-bottom|sub|super|"
+    r"\d*\s*x?\s*\d+\s*px|\d*\s*[x×]?\s*\d+\s*ピクセル|upright.*|"
+    r"link=.*|alt=.*|lang=.*|page=.*|class=.*|"
+    r"サムネイル|サムネ|縮小版|枠付き|フレーム|枠|枠なし|フレームなし|縁取り|"
+    r"右|左|中央|なし|上|下|中央寄せ|文字上|文字下|テキスト上部|テキスト下部|"
+    r"上付き|下付き|ベースライン|縦向き.*|"
+    r"リンク=.*|代替文=.*|言語=.*|ページ=.*|クラス=.*)$",
     re.I,
 )
 
