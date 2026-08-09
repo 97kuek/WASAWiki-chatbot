@@ -20,11 +20,16 @@ from __future__ import annotations
 import json
 import math
 import re
+import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Callable
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from rag.pipeline import Pipeline
+
 INDEX = Path("data/index.json")
+TOC = Path("data/toc.md")
 GOLDEN = Path("eval/golden.json")
 K_VALUES = (1, 3, 5, 10)
 
@@ -161,6 +166,36 @@ def report(name: str, result: dict) -> None:
         print(f"\n検索評価の対象外（根拠チャンクを持たない設問）: {', '.join(result['skipped'])}")
 
 
+def report_deterministic_pages(questions: list[dict], pipeline: Pipeline) -> None:
+    """LLM選択の成否に関係なく、正解ページを保持できる設問数を出す。
+
+    最終的なPage Recallではない。この候補にLLMが選んだ2件以上を合流するため、
+    「モデルが誤選択しても落ちない下限」として分けて記録する。
+    """
+    scored = [question for question in questions if question["evidence_pages"]]
+    print(f"\n{'=' * 62}\n決定的ページ候補  (採点対象 {len(scored)}問)\n{'=' * 62}")
+    for name, retrieve in (
+        ("型番の本文一致のみ", pipeline.identifier_pages),
+        ("型番 + 質問中の実在タイトル", pipeline.deterministic_pages),
+    ):
+        hits = 0
+        candidates = 0
+        misses: list[str] = []
+        for question in scored:
+            pages = retrieve(question_with_history(question))
+            candidates += len(pages)
+            if set(pages) & set(question["evidence_pages"]):
+                hits += 1
+            else:
+                misses.append(question["id"])
+        print(
+            f"  {name:<28} {hits:>2}/{len(scored)} = {hits / len(scored) * 100:>4.1f}%"
+            f" / 平均{candidates / len(scored):.2f}件"
+        )
+        print(f"    未保証: {', '.join(misses)}")
+    print("  候補上限: 2件（LLM選択用に最低2枠を残す）")
+
+
 def main() -> None:
     index = json.loads(INDEX.read_text(encoding="utf-8"))
     questions = json.loads(GOLDEN.read_text(encoding="utf-8"))["questions"]
@@ -171,6 +206,8 @@ def main() -> None:
 
     bm25 = BM25(chunks)
     report("ベースライン: BM25（文字bigram）", score(questions, bm25.search, chunk_page))
+
+    report_deterministic_pages(questions, Pipeline(INDEX, TOC, None))
 
     # 下限の目安。これを明確に上回らない検索器は、検索していないのと同じ
     order = list(chunks)

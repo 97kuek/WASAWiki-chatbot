@@ -27,8 +27,10 @@ MAX_PAGES = 4  # 空力設計は代違いで4ページあり、3では構造的�
 DIRECT_CONTEXT_LIMIT = 12_000
 MAX_CHUNKS = 8
 # B1や40thまで拾うと候補が増えすぎるため、英字で始まり数字を含む型番だけを扱う。
-# TR797の正解チャンクがBM25で22位だった実測は docs/02 §M8。
+# TR797を直接定義する正解チャンクがBM25で227位だった実測は docs/02 §M18。
 IDENTIFIER_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_-]*[0-9][A-Za-z0-9_-]*")
+GENERATION_ORDINAL_PATTERN = re.compile(r"([0-9]+)(?:st|nd|rd|th)", re.IGNORECASE)
+GENERATION_LABEL_PATTERN = re.compile(r"[0-9]+代")
 DEEP_QUESTION_PATTERN = re.compile(r"比較|違い|差異|変遷|歴代|全体|網羅|すべて|まとめ|傾向|なぜ|理由|背景|複数|どう変")
 RESPONSE_MODES = {"auto", "fast", "standard", "deep"}
 
@@ -190,9 +192,9 @@ class Pipeline:
         )
         titles = [t for t in result.get("titles", []) if isinstance(t, str)]
 
-        # 空回答時だけのfallbackでは、LLMが人物ページを選んだTR797の誤答を
-        # 防げない。型番の完全一致候補を先に入れ、LLM候補と合流する。
-        resolved, dropped = self.identifier_pages(search_question), []
+        # 型番一致と質問中の実在タイトルは最大2件まで決定的に残し、
+        # 質問全体を見るLLMにも必ず2枠を残す。
+        resolved, dropped = self.deterministic_pages(search_question), []
         for raw in titles:
             hit = self.resolve(raw)
             if hit and hit not in resolved and len(resolved) < MAX_PAGES:
@@ -200,6 +202,53 @@ class Pipeline:
             elif not hit:
                 dropped.append(raw)
         return resolved, bool(result.get("answerable", True)), dropped
+
+    def deterministic_pages(self, question: str) -> list[str]:
+        """Go側と同じ、モデルの揺らぎに任せない最大2候補を返す。"""
+        resolved: list[str] = []
+        for title in self.identifier_pages(question) + self.direct_title_pages(question):
+            if title not in resolved:
+                resolved.append(title)
+            if len(resolved) == 2:
+                break
+        return resolved
+
+    @staticmethod
+    def normalize_page_mention(value: str) -> str:
+        value = GENERATION_ORDINAL_PATTERN.sub(r"\1代", value.lower())
+        return "".join(char for char in value if char.isalnum())
+
+    def direct_title_pages(self, question: str) -> list[str]:
+        """質問に実在ページ名が書かれていれば、40th / 40代を同一視して拾う。"""
+        normalized_question = self.normalize_page_mention(question)
+        ascii_words = set(re.findall(r"[a-z0-9]+", question.lower()))
+        ranked: list[tuple[int, int, str]] = []
+        for order, title in enumerate(self.pages):
+            normalized_title = self.normalize_page_mention(title)
+            if not normalized_title:
+                continue
+            generations = GENERATION_LABEL_PATTERN.findall(normalized_title)
+            base = GENERATION_LABEL_PATTERN.sub("", normalized_title)
+            direct = normalized_title in normalized_question
+            # PMのような短い英数字タイトルをRPMの部分一致で拾わない。
+            if re.fullmatch(r"[a-z0-9]{1,3}", normalized_title):
+                direct = normalized_title in ascii_words
+            parts = bool(generations) and (not base or base in normalized_question)
+            parts = parts and all(generation in normalized_question for generation in generations)
+            if not direct and not parts:
+                continue
+            if parts and base:
+                score = 2000
+            elif direct and generations:
+                score = 1500
+            elif direct:
+                score = 1000
+            else:
+                score = 500
+            score += len(base) * 10 + len(normalized_title)
+            ranked.append((-score, order, title))
+        ranked.sort()
+        return [title for _, _, title in ranked[:2]]
 
     def identifier_pages(self, question: str) -> list[str]:
         """ハイフンとアンダースコアの表記差を無視し、型番を本文から探す。

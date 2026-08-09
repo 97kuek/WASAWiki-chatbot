@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -117,6 +118,52 @@ func testIdentifierIndex(t *testing.T) *index.Index {
 		},
 	}}
 	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "index.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "toc.md"), []byte("# 目次\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ix, err := index.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ix
+}
+
+// タイトル一致の世代変換と優先順位を、LLMの出力と切り離して試す。
+func testDirectTitleIndex(t *testing.T) *index.Index {
+	t.Helper()
+	dir := t.TempDir()
+	type pageSpec struct {
+		title string
+		team  string
+	}
+	specs := []pageSpec{
+		{title: "空力設計", team: "空力"},
+		{title: "40代", team: "代まとめ・人物"},
+		{title: "空力設計(40th)", team: "空力"},
+		{title: "空力設計(41st)", team: "空力"},
+		{title: "HPA交流会", team: "全体"},
+		{title: "PM", team: "全体"},
+		{title: "人物ページ", team: "代まとめ・人物"},
+	}
+	pages := make([]map[string]any, 0, len(specs))
+	for i, spec := range specs {
+		id := fmt.Sprintf("p%d-c0", i+1)
+		pages = append(pages, map[string]any{
+			"id": fmt.Sprintf("%d", i+1), "source": "wiki", "title": spec.title,
+			"url": "https://wiki.example/" + id, "last_edited": "2026-04-01",
+			"team": spec.team, "chars": 20,
+			"chunks": []map[string]any{{
+				"id": id, "breadcrumb": spec.title, "text": spec.title + "の本文", "chars": 20,
+			}},
+		})
+	}
+	raw, err := json.Marshal(map[string]any{"pages": pages})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,6 +351,36 @@ func TestSelectPagesAddsNormalizedIdentifierMatch(t *testing.T) {
 	}
 	if pages[0].Title != "空力設計" || pages[1].Title != "人物ページ" {
 		t.Fatalf("型番の完全一致候補が優先されていない: %q, %q", pages[0].Title, pages[1].Title)
+	}
+}
+
+func TestDirectTitlePagesPrioritizesGenerationSpecificPages(t *testing.T) {
+	pipe := New(testDirectTitleIndex(t), &stubLLM{})
+	pages := pipe.directTitlePages("41stの空力設計と40代の空力設計は何が違いますか？", nil)
+	if len(pages) != 2 || pages[0].Title != "空力設計(40th)" || pages[1].Title != "空力設計(41st)" {
+		t.Fatalf("世代別ページが汎用ページより優先されていない: %+v", pages)
+	}
+}
+
+func TestSelectPagesKeepsDirectTitleMatchAlongsideModelChoice(t *testing.T) {
+	client := &stubLLM{titles: []string{"人物ページ"}}
+	pipe := New(testDirectTitleIndex(t), client)
+	pages, err := pipe.selectPages(context.Background(), "HPA交流会の準備を教えてください", nil, llm.ProfileStandard, nil)
+	if err != nil {
+		t.Fatalf("ページ選択が失敗: %v", err)
+	}
+	if len(pages) != 2 || pages[0].Title != "HPA交流会" || pages[1].Title != "人物ページ" {
+		t.Fatalf("タイトル一致とLLM候補が合流していない: %+v", pages)
+	}
+}
+
+func TestDirectTitlePagesRespectsScopeAndASCIIWordBoundary(t *testing.T) {
+	pipe := New(testDirectTitleIndex(t), &stubLLM{})
+	if pages := pipe.directTitlePages("RPMの計測方法", nil); len(pages) != 0 {
+		t.Fatalf("短いPMがRPMの部分一致で拾われた: %+v", pages)
+	}
+	if pages := pipe.directTitlePages("HPA交流会について", &state.Assistant{Team: "空力"}); len(pages) != 0 {
+		t.Fatalf("アシスタントの参照範囲外が残った: %+v", pages)
 	}
 }
 

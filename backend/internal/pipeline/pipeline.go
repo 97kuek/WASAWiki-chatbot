@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	assistantpkg "github.com/97kuek/wasa-chat/backend/internal/assistant"
 	"github.com/97kuek/wasa-chat/backend/internal/index"
@@ -159,9 +160,13 @@ var selectSchema = json.RawMessage(`{"type":"object","properties":{"titles":{"ty
 var chunkSchema = json.RawMessage(`{"type":"object","properties":{"ids":{"type":"array","items":{"type":"string"},"maxItems":8}},"required":["ids"]}`)
 
 // 型番は目次のリード文や上位見出しに現れないことがある。実際に「TR797とは」で
-// 正解チャンクがBM25の22位となり、「資料に記載なし」と誤答した。一方で B1 や
+// 直接定義する正解チャンクがBM25の227位となり、「資料に記載なし」と誤答した。一方で B1 や
 // 40th まで拾うと候補が増えすぎるため、英字で始まり数字を含む4文字以上に限る。
 var identifierPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9_-]*[0-9][A-Za-z0-9_-]*`)
+var generationOrdinalPattern = regexp.MustCompile(`(?i)([0-9]+)(?:st|nd|rd|th)`)
+var generationLabelPattern = regexp.MustCompile(`[0-9]+代`)
+var shortASCIIPageTitlePattern = regexp.MustCompile(`^[a-z0-9]{1,3}$`)
+var asciiWordPattern = regexp.MustCompile(`[a-z0-9]+`)
 
 const answerPrompt = `# タスク
 
@@ -431,9 +436,9 @@ func (p *Pipeline) selectPages(ctx context.Context, question string, a *state.As
 		pages = append(pages, pg)
 	}
 
-	// LLMがもっともらしい別ページを返した場合でも、型番が本文に完全一致する
-	// ページを捨てない。空回答時だけのfallbackでは今回のTR797誤答を防げない。
-	for _, pg := range p.identifierPages(question, a) {
+	// LLMがもっともらしい別ページを返しても、本文の型番一致と質問中の実在タイトルは
+	// 捨てない。決定的候補は2件までとし、質問全体を見るLLMにも必ず2枠残す。
+	for _, pg := range p.deterministicPages(question, a) {
 		add(pg)
 	}
 	for _, title := range out.Titles {
@@ -449,6 +454,101 @@ func (p *Pipeline) selectPages(ctx context.Context, question string, a *state.As
 		}
 	}
 	return pages, nil
+}
+
+// deterministicPages は、モデルの揺らぎに任せず保持するページ候補を返す。
+// M18の33問では型番一致だけだと正解ページを保証できたのは2/31問だったが、
+// 質問中の実在タイトルを合流すると20/31問に増えた。
+func (p *Pipeline) deterministicPages(question string, a *state.Assistant) []*index.Page {
+	var out []*index.Page
+	seen := map[string]bool{}
+	for _, candidates := range [][]*index.Page{p.identifierPages(question, a), p.directTitlePages(question, a)} {
+		for _, pg := range candidates {
+			if pg == nil || seen[pg.Title] {
+				continue
+			}
+			seen[pg.Title] = true
+			out = append(out, pg)
+			if len(out) == 2 {
+				return out
+			}
+		}
+	}
+	return out
+}
+
+func normalizePageMention(value string) string {
+	value = strings.ToLower(value)
+	value = generationOrdinalPattern.ReplaceAllString(value, "${1}代")
+	var normalized strings.Builder
+	for _, r := range value {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			normalized.WriteRune(r)
+		}
+	}
+	return normalized.String()
+}
+
+// directTitlePages は「HPA交流会」のように質問が実在ページ名を明記した場合の保険。
+// 40th / 40代は同じ世代とみなし、「40thの空力設計」の語順でも「空力設計(40th)」を拾う。
+func (p *Pipeline) directTitlePages(question string, a *state.Assistant) []*index.Page {
+	normalizedQuestion := normalizePageMention(question)
+	asciiWords := map[string]bool{}
+	for _, word := range asciiWordPattern.FindAllString(strings.ToLower(question), -1) {
+		asciiWords[word] = true
+	}
+	type scored struct {
+		page  *index.Page
+		score int
+		order int
+	}
+	var ranked []scored
+	for order := range p.ix.Pages {
+		pg := &p.ix.Pages[order]
+		if len(pg.Chunks) == 0 || !inScope(pg, a) {
+			continue
+		}
+		title := normalizePageMention(pg.Title)
+		if title == "" {
+			continue
+		}
+		generations := generationLabelPattern.FindAllString(title, -1)
+		base := generationLabelPattern.ReplaceAllString(title, "")
+		direct := strings.Contains(normalizedQuestion, title)
+		// PMのような短い英数字タイトルは、RPMの部分一致で拾わない。
+		if shortASCIIPageTitlePattern.MatchString(title) {
+			direct = asciiWords[title]
+		}
+		parts := len(generations) > 0 && (base == "" || strings.Contains(normalizedQuestion, base))
+		for _, generation := range generations {
+			parts = parts && strings.Contains(normalizedQuestion, generation)
+		}
+		if !direct && !parts {
+			continue
+		}
+		score := 500
+		switch {
+		case parts && base != "":
+			score = 2000 // 世代と分野の両方が合うページを世代まとめより優先する。
+		case direct && len(generations) > 0:
+			score = 1500
+		case direct:
+			score = 1000
+		}
+		score += len([]rune(base))*10 + len([]rune(title))
+		ranked = append(ranked, scored{page: pg, score: score, order: order})
+	}
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].score == ranked[j].score {
+			return ranked[i].order < ranked[j].order
+		}
+		return ranked[i].score > ranked[j].score
+	})
+	var out []*index.Page
+	for i := 0; i < len(ranked) && i < 2; i++ {
+		out = append(out, ranked[i].page)
+	}
+	return out
 }
 
 // identifierPages は質問中の型番を、ハイフンとアンダースコアの表記差を
