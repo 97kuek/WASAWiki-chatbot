@@ -224,11 +224,31 @@ export async function deleteAssistant(id: string): Promise<void> {
   }
 }
 
+/**
+ * サーバーから来た履歴を、画面が前提にしている形へ整える。
+ *
+ * Goは中身の無いスライスを `[]` ではなく `null` としてJSONに書く。そのため
+ * `turns` や `sources` が `null` で届くことがあり、`turn.sources.length` が
+ * 「Cannot read properties of null」で落ちて画面が真っ白になっていた
+ * （2026-08-09に本番で確認）。サーバー側も直したが、**すでに保存済みの
+ * 履歴には `null` が残っている**ため、受け取る側でも必ず配列に均す。
+ */
+function normalizeChat(chat: Chat): Chat {
+  const turns = Array.isArray(chat.turns) ? chat.turns : [];
+  return {
+    ...chat,
+    turns: turns.map((turn) => ({
+      ...turn,
+      sources: Array.isArray(turn.sources) ? turn.sources : [],
+    })),
+  };
+}
+
 export async function listChats(): Promise<Chat[]> {
   const res = await fetch(`${base}/api/chats`, { credentials: "include" });
   if (!res.ok) throw new Error("チャット履歴を読み込めませんでした");
   const body = await res.json() as { chats?: Chat[] };
-  return Array.isArray(body.chats) ? body.chats : [];
+  return Array.isArray(body.chats) ? body.chats.map(normalizeChat) : [];
 }
 
 export async function saveChat(chat: Chat): Promise<void> {

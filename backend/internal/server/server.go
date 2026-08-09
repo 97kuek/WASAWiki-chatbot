@@ -253,6 +253,10 @@ func (s *Server) handleListChats(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "チャット履歴を読み込めませんでした"})
 		return
 	}
+	// 保存済みの古い履歴には nil が残っているため、読み出し側でも均す
+	for i, chat := range chats {
+		chats[i] = state.NormalizeChat(chat)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"chats": chats})
 }
 
@@ -333,7 +337,7 @@ func (s *Server) handleSaveChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, _ := s.currentUser(r)
-	if err := s.state.SaveChat(r.Context(), s.userKey(user), chat, maxChats); err != nil {
+	if err := s.state.SaveChat(r.Context(), s.userKey(user), state.NormalizeChat(chat), maxChats); err != nil {
 		log.Printf("チャット履歴の保存に失敗: %v", err)
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "チャット履歴を保存できませんでした"})
 		return

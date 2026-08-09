@@ -1028,7 +1028,10 @@ export default function App() {
           break;
         }
         case "pages":
-          patch((current) => ({ ...current, sources: event.pages }));
+          // 該当ページが0件のとき、サーバーは pages を省いて送ってくる。
+          // そのまま入れると undefined が履歴へ保存され、読み直したときに
+          // sources が無い（＝null）状態になって描画時に落ちる
+          patch((current) => ({ ...current, sources: event.pages ?? [] }));
           break;
         case "delta":
           patch((current) => ({ ...current, answer: current.answer + event.text, status: "", retryAt: undefined }));

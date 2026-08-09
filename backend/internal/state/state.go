@@ -57,6 +57,30 @@ type Chat struct {
 	Pinned    bool   `json:"pinned,omitempty" firestore:"pinned"`
 }
 
+// NormalizeChat は、中身の無いスライスを空スライスへ均す。
+//
+// Goは nil のスライスをJSONへ `[]` ではなく `null` として書く。画面側は
+// `chat.turns` と `turn.sources` を配列として扱うため、`null` が届くと
+// `.length` の読み出しで例外になり、画面が真っ白になっていた
+// （2026-08-09に本番で確認）。保存時と読み出し時の両方でここを通す。
+//
+// 型で防げないのは、`omitempty` を付けても外せないためである。付けると
+// 「0件」と「フィールドが無い」が区別できなくなり、問題を先送りするだけになる。
+func NormalizeChat(chat Chat) Chat {
+	if chat.Turns == nil {
+		chat.Turns = []Turn{}
+	}
+	turns := make([]Turn, len(chat.Turns))
+	for i, turn := range chat.Turns {
+		if turn.Sources == nil {
+			turn.Sources = []Source{}
+		}
+		turns[i] = turn
+	}
+	chat.Turns = turns
+	return chat
+}
+
 // Assistant は利用者が作り、全員で共有するアシスタント。
 //
 // チャット履歴と違い、**利用者名を平文で持つ**（Author）。履歴の保存先は
