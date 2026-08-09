@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import re
 import sys
@@ -104,8 +105,34 @@ def judge_faithfulness(llm, context: str, answer: str, toc: str = "") -> dict:
     return {"faithful": not claim, "reason": claim}
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="回答品質をゴールデンデータで測定する")
+    parser.add_argument(
+        "--ids",
+        help="測定する設問IDをカンマ区切りで指定する（例: q32,q33）。省略時は全問",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=OUT,
+        help=f"回答詳細の出力先（既定: {OUT}）",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
     questions = json.loads(GOLDEN.read_text(encoding="utf-8"))["questions"]
+    if args.ids:
+        wanted = [item.strip() for item in args.ids.split(",") if item.strip()]
+        by_id = {question["id"]: question for question in questions}
+        missing = [question_id for question_id in wanted if question_id not in by_id]
+        if missing:
+            raise SystemExit(f"存在しない設問IDです: {', '.join(missing)}")
+        # 指定順を維持する。q32→q33のような会話回帰を読みやすい順で出すため。
+        questions = [by_id[question_id] for question_id in wanted]
+    if not questions:
+        raise SystemExit("測定対象の設問がありません")
     load_dotenv()
     llm = make_llm()
     print(f'モデル: {llm.name()}')
@@ -164,7 +191,7 @@ def main() -> None:
               f"{'出典○' if cited else '出典×'} {'忠実○' if verdict['faithful'] else '忠実×'} "
               f"{' / '.join(answer.pages)}")
 
-    OUT.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+    args.output.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
 
     n = len(questions)
     ps = stats["page_scored"]
@@ -188,7 +215,7 @@ def main() -> None:
         print(f"  {qtype:<14} {v['page_hit']:>2}/{v['n']:<2}   {v['faithful']:>2}/{v['n']}")
 
     print(f"\nLLM呼び出し {llm.calls}回 / 合計 {llm.seconds:.0f}秒")
-    print(f"回答全文は {OUT} に保存（人手レビュー用）")
+    print(f"回答全文は {args.output} に保存（人手レビュー用）")
 
 
 if __name__ == "__main__":

@@ -60,6 +60,8 @@ ollama pull qwen3:30b-a3b
 python eval/retrieval_eval.py   # M1: BM25による検索ベースライン
 python eval/toc_eval.py         # M2a: 目次方式によるページ選択
 python eval/answer_eval.py      # M2b: エンドツーエンドの回答品質
+# 実際に誤答した設問だけを低コストで再測定
+python eval/answer_eval.py --ids q32,q33 --output eval/answers-tr797.json
 ```
 
 ## 3. 動かす
