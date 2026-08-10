@@ -1728,7 +1728,8 @@ button:disabled {
 }
 
 .response-mode-select {
-  width: 96px;
+  /* thinking が入る幅。狭いと文字が省略されて選択中の値が読めない */
+  width: 116px;
 }
 
 .response-mode-select .select-menu-trigger {
@@ -1744,7 +1745,7 @@ button:disabled {
   width: 16px;
 }
 
-.response-mode-select .select-menu-text {
+.select-menu-text {
   display: grid;
   gap: 1px;
   min-width: 0;
@@ -1756,10 +1757,13 @@ button:disabled {
   line-height: 1.5;
 }
 
-.select-menu-options {
+/* 入力欄は画面の一番下にある。下へ開くと画面外へ出て選べない。
+   セレクタから `.response-mode-select` が抜けると、後ろにある基底の
+   `.select-menu-options` に負けて下開きへ戻る（2026-08-10に実際に壊した） */
+.response-mode-select .select-menu-options {
   top: auto;
   bottom: calc(100% + 6px);
-  width: 160px;
+  width: 180px;
 }
 
 .response-mode-select .select-menu-options li {

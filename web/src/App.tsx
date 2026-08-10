@@ -112,15 +112,17 @@ const ASSISTANT_SORT_OPTIONS: SelectOption[] = [
 ];
 
 const RESPONSE_MODE_OPTIONS: SelectOption[] = [
-  { value: "auto", label: "自動", description: "質問に合わせて自動調整" },
-  { value: "deep", label: "じっくり", description: "比較や変遷を時間をかけて整理" },
+  { value: "auto", label: "auto", description: "質問に合わせて自動調整" },
+  { value: "deep", label: "thinking", description: "比較や変遷を時間をかけて整理" },
 ];
 
+// 画面に出るのは auto と thinking だけ。fast / standard は自動判定の内部段階で、
+// 通常画面には出さない（履歴の表示に使う保険として名前だけ持つ）。
 const RESPONSE_MODE_LABELS: Record<ResponseMode, string> = {
-  auto: "自動",
-  fast: "高速",
-  standard: "標準",
-  deep: "じっくり",
+  auto: "auto",
+  fast: "fast",
+  standard: "standard",
+  deep: "thinking",
 };
 
 function loadResponseMode(): "auto" | "deep" {
@@ -1736,7 +1738,7 @@ export default function App() {
 
         <div className="composer-area">
           {/* 回答モードは毎回変えるものではない。名前と説明で1行を占めていたが、
-              選択肢そのものが「自動 / じっくり」で意味が分かるので畳んだ。
+              選択肢そのもの（auto / thinking）で見分けが付くので畳んだ。
               説明は選択肢の中に残してあるので、開けば読める */}
           <div className="response-mode-bar">
             <div className="response-mode-select">
