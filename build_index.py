@@ -567,16 +567,35 @@ GEN_TITLE = [
     re.compile(r"(\d{2})\s*代"),
     re.compile(r"^(\d{2})\s"),  # 「40 Kosei Ozaki」のような人物ページ
 ]
-GEN_BODY = re.compile(r"\b(3[0-9]|4[0-9])\s*(?:st|nd|rd|th|代)\b", re.I)
+# 以前は前後に \b を置いていたが、**日本語では一度も当たらなかった。**
+# Pythonの \b は日本語の文字も語構成文字とみなすため、「第42代」の前にも
+# 「42代の」の後にも境界が立たない。つまり最も普通の書き方が全部漏れており、
+# Wiki 114ページ中65ページ（57%）が代不明のままになっていた。
+# 数字が続く場合だけを除きたいので、語境界ではなく数字の否定先読みで囲う。
+GEN_BODY = re.compile(r"(?<![0-9])(3[0-9]|4[0-9])\s*(?:(?:st|nd|rd|th)\b|代)(?![0-9])", re.I)
+
+# 本文由来の代を採用する条件。2回以上出ていて、かつ次点の2倍以上であること。
+#
+# 「最も多く出てきた代」をそのまま採ると、**累積型のページで必ず外す。**
+# 「駆動・フレーム班」は見出しに「40代引き継ぎ」「41, 42代引き継ぎ」を持つ
+# 36,261字のハブページで、代の出現は 38代20回 / 40代9回 / 42代9回 / 36代5回。
+# ここから1つ選ぶこと自体が誤りで、正しくは「36〜42代を扱うページ」である。
+GEN_MIN_HITS = 2
+GEN_DOMINANCE = 2
 
 
 def extract_gen(title: str, body: str) -> dict:
-    """代（世代）を抽出する。タイトル由来と本文由来を区別して持つ。
+    """代（世代）を抽出する。根拠の強さで3つに分ける。
 
-    タイトルに代が入っているのは全117ページ中28ページしかない。
-    本文にも当たらないと大半が「不明」になってしまう。ただし本文中の
-    「40代では〜だったが」のような言及は、そのページ自体の代とは限らない。
-    根拠の強さが違うので source で区別し、フィルタ側で使い分ける。
+    - `title`: タイトルに代が入っている。確定
+    - `body` : 本文で1つの代が明確に優勢。推定
+    - `mentions`: 複数の代を扱うページ。**単一の代は決めない**
+
+    タイトルに代が入っているのは114ページ中26ページしかないので、本文にも
+    当たらないと大半が不明になる。一方で本文中の「40代では〜だったが」は
+    そのページ自体の代とは限らない。引き継ぎWikiには代を跨いで書き足していく
+    ページが多く、そこへ単一の代を貼ると**古い代の記録として並び替えられて
+    しまう**。決められないときは決めない方を選ぶ。
     """
     normalized = unicodedata.normalize("NFKC", title)
     for pattern in GEN_TITLE:
@@ -586,13 +605,15 @@ def extract_gen(title: str, body: str) -> dict:
     mentioned = Counter(
         int(g) for g in GEN_BODY.findall(unicodedata.normalize("NFKC", body))
     )
-    if mentioned:
-        return {
-            "gen": mentioned.most_common(1)[0][0],
-            "gen_source": "body",
-            "gens_mentioned": sorted(mentioned),
-        }
-    return {"gen": None, "gen_source": None, "gens_mentioned": []}
+    if not mentioned:
+        return {"gen": None, "gen_source": None, "gens_mentioned": []}
+
+    ranked = mentioned.most_common()
+    top, hits = ranked[0]
+    runner_up = ranked[1][1] if len(ranked) > 1 else 0
+    if hits >= GEN_MIN_HITS and hits >= GEN_DOMINANCE * runner_up:
+        return {"gen": top, "gen_source": "body", "gens_mentioned": sorted(mentioned)}
+    return {"gen": None, "gen_source": "mentions", "gens_mentioned": sorted(mentioned)}
 
 
 # 代と西暦の対応: N代 = 鳥人間コンテスト (GEN_EPOCH + N) 年大会に出場する代。
@@ -603,10 +624,8 @@ GEN_EPOCH = 1984
 
 # チャンク本文から代を拾う専用の正規表現。GEN_BODY とは別に持つ。
 #
-# GEN_BODY は前後に \b を置いているため、日本語では「42代の引き継ぎ」「第42代」の
-# ような**最も普通の書き方に一つも当たらない**（Pythonの \b は日本語の文字も
-# 語構成文字とみなすため、「の42代の」に境界が立たない）。ページ単位の gen は
-# この挙動を前提に M2a の数字を出しているので触らず、年代推定はこちらを使う。
+# 拾う範囲が違う。GEN_BODY は「そのページ自体が何代のものか」を決めるため
+# 30〜49代に絞るが、こちらは「本文がいつの話か」なので20代（2004年）まで遡る。
 # 20〜49代に絞るのは誤検出を避けるため。「1st」「2代目」のような一般的な語や
 # 年齢の「20代」を拾うと年代が1980年代まで広がって推定が使い物にならない。
 # 20代未満（〜2004年）を語るチャンクは公式サイトの歴史ページにしかなく、

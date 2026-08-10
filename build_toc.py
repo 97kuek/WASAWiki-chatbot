@@ -81,6 +81,12 @@ def render_page(page: dict) -> list[str]:
     if page["gen"]:
         # 本文由来の代は推定でしかないので「?」で区別する（タイトル由来は確定）
         tags.append(f"{page['gen']}代" + ("?" if page["gen_source"] == "body" else ""))
+    elif len(page.get("gens_mentioned") or []) >= 2:
+        # 代を跨いで書き足していくページ。単一の代を貼るとどれかで必ず外すので、
+        # 扱っている範囲をそのまま出す。「歴代でどう変遷したか」を聞かれたときに
+        # 開くべきページが目次から分かる
+        gens = page["gens_mentioned"]
+        tags.append(f"{gens[0]}〜{gens[-1]}代")
     tags.append(page["last_edited"][:7])
     if page["is_stub"]:
         tags.append("中身なし")
@@ -122,7 +128,10 @@ def main() -> None:
     pages.sort(
         key=lambda p: (
             order.get(p["team"], len(TEAM_ORDER)),
-            -(p["gen"] or 0),  # 新しい代を上に
+            # 新しい代を上に。単一の代を決められないページは、扱っている
+            # 最も新しい代で並べる。0にすると、代を跨ぐ主要な引き継ぎページが
+            # 班の一番下へ沈んでしまう
+            -(p["gen"] or (p.get("gens_mentioned") or [0])[-1]),
             p["title"],
         )
     )

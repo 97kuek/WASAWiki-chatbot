@@ -16,6 +16,7 @@ BM25ベースライン（docs/02-測定結果.md M1）と**ページ単位で**�
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
@@ -77,8 +78,20 @@ def question_with_history(question: dict) -> str:
 
 
 def main() -> None:
+    # --ids は answer_eval.py と同じ形。無料枠のレート制限では全35問で
+    # 1問あたり60秒待たされることがあり、1回の測定に30分かかる。
+    # 影響しうる設問だけを繰り返し測る方が、1回の全問測定より判断に効く
+    parser = argparse.ArgumentParser(description="目次方式のページ選択精度を測ります")
+    parser.add_argument("--ids", help="測る設問をカンマ区切りで指定します（例: q10,q21）")
+    args = parser.parse_args()
+
     index = json.loads(INDEX.read_text(encoding="utf-8"))
     questions = json.loads(GOLDEN.read_text(encoding="utf-8"))["questions"]
+    if args.ids:
+        wanted = {i.strip() for i in args.ids.split(",") if i.strip()}
+        questions = [q for q in questions if q["id"] in wanted]
+        if missing := wanted - {q["id"] for q in questions}:
+            raise SystemExit(f"ゴールデンデータに無い設問です: {', '.join(sorted(missing))}")
     toc = TOC.read_text(encoding="utf-8")
 
     load_dotenv()
