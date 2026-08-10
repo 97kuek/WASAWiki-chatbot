@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -215,9 +216,19 @@ func (g *Gemini) payload(req Request, model string) map[string]any {
 		config["responseMimeType"] = "application/json"
 		config["responseSchema"] = geminiSchema(req.Schema)
 	}
-	// Cached を先頭に置く。Gemini でも同一プレフィックスは暗黙キャッシュの対象になる
+	// Cached を先頭に置く。Gemini でも同一プレフィックスは暗黙キャッシュの対象になる。
+	// 画像は**テキストより後ろ**へ置く。先頭が変わるとキャッシュが効かなくなる
+	parts := []any{map[string]any{"text": req.Cached + req.Prompt}}
+	for _, image := range req.Images {
+		parts = append(parts, map[string]any{
+			"inlineData": map[string]any{
+				"mimeType": image.MediaType,
+				"data":     base64.StdEncoding.EncodeToString(image.Data),
+			},
+		})
+	}
 	body := map[string]any{
-		"contents":         []any{map[string]any{"parts": []any{map[string]any{"text": req.Cached + req.Prompt}}}},
+		"contents":         []any{map[string]any{"parts": parts}},
 		"generationConfig": config,
 	}
 	// 利用者が作った指示より強い立場で効かせる規則は systemInstruction へ回す。
@@ -525,6 +536,9 @@ func (c *Compat) do(ctx context.Context, body map[string]any) (*http.Response, e
 }
 
 func (c *Compat) Complete(ctx context.Context, req Request) (string, error) {
+	if len(req.Images) > 0 {
+		return "", ErrImagesUnsupported
+	}
 	resp, err := c.do(ctx, c.payload(req, false))
 	if err != nil {
 		return "", err
@@ -547,6 +561,9 @@ func (c *Compat) Complete(ctx context.Context, req Request) (string, error) {
 }
 
 func (c *Compat) Stream(ctx context.Context, req Request, onDelta Delta) (string, error) {
+	if len(req.Images) > 0 {
+		return "", ErrImagesUnsupported
+	}
 	resp, err := c.do(ctx, c.payload(req, true))
 	if err != nil {
 		return "", err

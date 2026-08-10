@@ -781,7 +781,9 @@ const (
 	maxConversationQuestionRunes = 500
 	maxConversationAnswerRunes   = 2_000
 	maxQuestionRunes             = 500
-	maxAskBodyBytes              = 32 * 1024
+	// 画像1枚（縮小後400KBまで）をbase64で載せる余地を持たせる。
+	// 32KBのままだと添付が一切通らない
+	maxAskBodyBytes              = 1 << 20
 )
 
 func validConversationContext(context []pipeline.ConversationTurn) bool {
@@ -805,6 +807,8 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		AssistantID  string                      `json:"assistantId"`
 		ResponseMode string                      `json:"responseMode"`
 		Context      []pipeline.ConversationTurn `json:"context"`
+		// data URI の配列。画面側が長辺768pxのJPEGへ落としてから送る
+		Attachments []string `json:"attachments"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxAskBodyBytes)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "リクエストが不正です"})
@@ -812,7 +816,18 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	// 質問をURLに載せない。非公開Wikiに関する文面がアクセスログへ残るのを避けるため。
 	question := strings.TrimSpace(body.Question)
-	if question == "" || len([]rune(question)) > maxQuestionRunes {
+	images, err := parseAttachments(body.Attachments)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": strings.TrimPrefix(err.Error(), "添付が不正です: ")})
+		return
+	}
+	// 画像だけを添えて送れる。「これでツイート作って」のように、
+	// 文章より画像のほうが本体である使い方があるため
+	if question == "" && len(images) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "質問を入力してください（500文字以内）"})
+		return
+	}
+	if len([]rune(question)) > maxQuestionRunes {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "質問を入力してください（500文字以内）"})
 		return
 	}
@@ -888,7 +903,7 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 
-	if err := s.pipe.RunWithMode(r.Context(), question, body.Context, selected, responseMode, emit); err != nil {
+	if err := s.pipe.RunWithImages(r.Context(), question, body.Context, selected, responseMode, images, emit); err != nil {
 		log.Printf("質問の処理に失敗: %v", err)
 		message := "回答の生成に失敗しました"
 		code := ""
@@ -905,6 +920,12 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 			}
 			code = "rate_limit"
 			message = "アクセスが集中し、Geminiの短時間の利用上限に達しました。数分後にもう一度お試しください"
+		} else if errors.Is(err, llm.ErrImagesUnsupported) {
+			// 画像を読めないモデルで受けた場合。利用者の質問の責任ではないので回数を返す
+			if refundErr := s.refund(r.Context(), userKey, day); refundErr != nil {
+				log.Printf("利用回数の返却に失敗: %v", refundErr)
+			}
+			message = "いま動いているモデルは画像を読めません。画像を外してもう一度お試しください"
 		} else if errors.Is(err, llm.ErrUnavailable) {
 			// 利用者ではなくGemini側の都合で失敗した質問は、個人の利用回数へ含めない。
 			if refundErr := s.refund(r.Context(), userKey, day); refundErr != nil {

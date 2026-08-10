@@ -70,6 +70,11 @@ func (c *Claude) params(req Request) anthropic.MessageNewParams {
 }
 
 func (c *Claude) Complete(ctx context.Context, req Request) (string, error) {
+	// 画像は未対応。Anthropic SDKは画像ブロックを持つが、本番はGeminiであり
+	// 通す経路が無いまま黙って捨てるほうが危ない
+	if len(req.Images) > 0 {
+		return "", ErrImagesUnsupported
+	}
 	msg, err := c.client.Messages.New(ctx, c.params(req))
 	if err != nil {
 		return "", err
@@ -84,6 +89,11 @@ func (c *Claude) Complete(ctx context.Context, req Request) (string, error) {
 }
 
 func (c *Claude) Stream(ctx context.Context, req Request, onDelta Delta) (string, error) {
+	// 画像は未対応。Anthropic SDKは画像ブロックを持つが、本番はGeminiであり
+	// 通す経路が無いまま黙って捨てるほうが危ない
+	if len(req.Images) > 0 {
+		return "", ErrImagesUnsupported
+	}
 	stream := c.client.Messages.NewStreaming(ctx, c.params(req))
 	var full strings.Builder
 	for stream.Next() {

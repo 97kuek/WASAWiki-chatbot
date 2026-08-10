@@ -76,7 +76,27 @@ type Request struct {
 	// 任意の高額モデルを指定することはできない。
 	Profile Profile
 	OnWait  func(WaitInfo) // nilなら待機状況を通知しない
+	// Images は利用者が添えた画像。**回答段だけに渡す。**
+	//
+	// ページ選択は目次からタイトルを選ぶ仕事で、画像を見せてもほぼ働かない。
+	// 全段へ渡すと呼び出し3回ぶんの入力費用が乗るだけになる（docs/07）。
+	Images []Image
 }
+
+// Image は利用者が添えた画像。原寸は受け取らない。
+//
+// ブラウザ側で長辺768pxまで縮めてから送る前提で、サーバーは受け取った
+// バイト列の形式と大きさを必ず自分で検証する（申告を信じない）。
+type Image struct {
+	MediaType string // image/jpeg | image/png | image/webp
+	Data      []byte
+}
+
+// ErrImagesUnsupported は、画像を受け取れないモデルへ画像付きで来たときに返す。
+//
+// 黙って画像を捨てると、**利用者には「画像を見て答えたつもりの嘘」**が返る。
+// 手元のOllama（qwen3:30b-a3b）が該当するため、必ず失敗させる。
+var ErrImagesUnsupported = errors.New("このモデルは画像を受け取れない")
 
 // Profile は呼び出しごとの速度・推論量の段階。プロバイダが対応しない場合は
 // 既定モデルへ安全にフォールバックする。

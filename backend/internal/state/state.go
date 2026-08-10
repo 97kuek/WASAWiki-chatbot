@@ -41,6 +41,10 @@ type Turn struct {
 	ResponseMode string        `json:"responseMode,omitempty" firestore:"response_mode,omitempty"`
 	ResolvedMode string        `json:"resolvedMode,omitempty" firestore:"resolved_mode,omitempty"`
 	Timings      *StageTimings `json:"timings,omitempty" firestore:"timings,omitempty"`
+	// HasAttachment は画像を添えて聞いたかどうか。**画像そのものは保存しない。**
+	// Firestoreは1ドキュメント1MBで履歴は30件なので、入れると破綻する。
+	// 履歴を開き直したとき「画像つきで聞いた」とだけ分かればよい。
+	HasAttachment bool `json:"hasAttachment,omitempty" firestore:"has_attachment,omitempty"`
 	// 回答評価は履歴にも残し、再表示後に同じ回答へ何度も評価させない。
 	// 集計用の正本はトップレベルfeedbackコレクションに別途保存する。
 	FeedbackRating  string   `json:"feedbackRating,omitempty" firestore:"feedback_rating,omitempty"`

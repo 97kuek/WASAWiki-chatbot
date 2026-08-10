@@ -47,6 +47,11 @@ func stripThinking(s string) string {
 }
 
 func (o *Ollama) body(req Request, stream bool) ([]byte, error) {
+	// 手元の既定モデル（qwen3:30b-a3b）は画像を読めない。黙って捨てると
+	// **画像を見て答えたつもりの嘘**が返るので、必ず失敗させる
+	if len(req.Images) > 0 {
+		return nil, ErrImagesUnsupported
+	}
 	payload := map[string]any{
 		"model": o.Model,
 		// Cached を必ず先頭に置く。llama.cpp のプレフィックスキャッシュが効く条件。

@@ -24,6 +24,7 @@ import {
   type Turn,
 } from "./api";
 import { stripCitation } from "./answer";
+import { ACCEPTED_IMAGE_TYPES, toAttachment, type Attachment } from "./attachment";
 import { AssistantAvatar, DefaultAvatar, toIconDataURL, type IconCropPosition } from "./avatar";
 import { SelectMenu, type SelectOption } from "./SelectMenu";
 import {
@@ -279,6 +280,10 @@ export default function App() {
   const [loginError, setLoginError] = useState("");
   const [busy, setBusy] = useState(false);
   const [question, setQuestion] = useState("");
+  // 添付は保存しない。**送信後も消すまで残す**ので、「もう5案」のような
+  // 追質問で同じ画像を使い直せる。チップとして見えているので予測できる
+  const [attachment, setAttachment] = useState<Attachment | null>(null);
+  const attachmentInput = useRef<HTMLInputElement>(null);
   const [chats, setChats] = useState<Chat[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.matchMedia("(min-width: 901px)").matches);
@@ -948,7 +953,9 @@ export default function App() {
 
   async function handleAsk(text: string) {
     const q = text.trim();
-    if (!q || streaming) return;
+    // 画像だけでも送れる。「これでツイート作って」のように、文章より
+    // 画像のほうが本体である使い方があるため
+    if ((!q && !attachment) || streaming) return;
     setQuestion("");
     // 先読みなので、失敗しても握りつぶす。実際に必要になった時点で
     // 上の lazy 側が読み直しと再読み込みを引き受ける
@@ -973,6 +980,8 @@ export default function App() {
       assistantId: activeAssistant?.id,
       assistantName: activeAssistant?.name,
       responseMode,
+      // 画像そのものは履歴へ保存しない。印だけ残す
+      hasAttachment: attachment !== null,
     };
 
     // 送信した瞬間に質問の吹き出しを出し、過去の会話への追質問なら履歴の先頭へ戻す。
@@ -1043,7 +1052,7 @@ export default function App() {
           patch((current) => ({ ...current, streaming: false, status: "", retryAt: undefined }));
           break;
       }
-      }, undefined, assistantId, context, responseMode);
+      }, undefined, assistantId, context, responseMode, attachment ? [attachment.dataUrl] : []);
     } catch (error) {
       // fetch自体の失敗やストリームの切断は ask() の中でイベントにならない。
       // ここで拾わないと streaming が立ったままになり、入力欄が永久に
@@ -1571,7 +1580,12 @@ export default function App() {
           {activeChat?.turns.map((turn, index) => (
             <article key={index} className="turn">
               <div className="user-row">
-                <div className="question">{turn.question}</div>
+                <div className="question">
+                  {/* 画像そのものは保存していないので、添えたという事実だけを出す。
+                      これが無いと、履歴を見返したときに質問だけが宙に浮く */}
+                  {turn.hasAttachment && <span className="question-attachment">画像を添付</span>}
+                  {turn.question || (turn.hasAttachment ? "（画像のみ）" : "")}
+                </div>
               </div>
 
               <div className="assistant-row">
@@ -1669,6 +1683,19 @@ export default function App() {
             </div>
             <span className="response-mode-help">{RESPONSE_MODE_HELP[responseMode]}</span>
           </div>
+          {attachment && (
+            <div className="attachment-chip">
+              <img src={attachment.dataUrl} alt="" />
+              <span className="attachment-name">{attachment.name}</span>
+              <button
+                type="button"
+                onClick={() => setAttachment(null)}
+                aria-label={`添付した画像（${attachment.name}）を外す`}
+              >
+                ×
+              </button>
+            </div>
+          )}
           <form
             className="composer"
             onSubmit={(event) => {
@@ -1692,12 +1719,41 @@ export default function App() {
               disabled={streaming}
             />
             <div className="composer-actions">
+              <input
+                ref={attachmentInput}
+                type="file"
+                className="visually-hidden"
+                accept={ACCEPTED_IMAGE_TYPES.join(",")}
+                onChange={async (event) => {
+                  const file = event.target.files?.[0];
+                  // 同じ画像をもう一度選べるよう、値は必ず空へ戻す
+                  event.target.value = "";
+                  if (!file) return;
+                  try {
+                    setAttachment(await toAttachment(file));
+                  } catch (error) {
+                    showToast(error instanceof Error ? error.message : "画像を添付できませんでした");
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="attach"
+                aria-label="画像を添付"
+                title="画像を添付"
+                disabled={streaming}
+                onClick={() => attachmentInput.current?.click()}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M14 6.5 8 12.5a3 3 0 0 0 4.2 4.2l6.3-6.3a5 5 0 0 0-7-7L5 9.7a7 7 0 0 0 9.9 9.9l5.1-5.1" />
+                </svg>
+              </button>
               <button
                 type="submit"
                 className="send"
                 aria-label="送信"
                 title="送信"
-                disabled={!question.trim() || streaming}
+                disabled={(!question.trim() && !attachment) || streaming}
               >
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="m4 12 16-8-5.5 16-3-6.5L4 12Zm7.5 1.5L20 4" />

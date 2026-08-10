@@ -36,6 +36,10 @@ export type Turn = {
   responseMode?: ResponseMode;
   resolvedMode?: ResolvedResponseMode;
   timings?: StageTimings;
+  /** 画像を添えて聞いたか。**画像そのものは保存しない**（Firestoreの
+   *  1ドキュメント1MB上限に対し履歴は30件で、入れると破綻する）。
+   *  履歴を開き直したとき「画像つきで聞いた」とだけ分かるようにする。 */
+  hasAttachment?: boolean;
   feedbackRating?: "good" | "bad";
   feedbackReasons?: FeedbackReason[];
   feedbackComment?: string;
@@ -283,13 +287,14 @@ export async function ask(
   assistantId?: string,
   context: ConversationContextTurn[] = [],
   responseMode: ResponseMode = "auto",
+  attachments: string[] = [],
 ): Promise<void> {
   // 非公開Wikiに関する質問をURLへ載せるとアクセスログに残るため、本文で送る。
   const res = await fetch(`${base}/api/ask`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, assistantId: assistantId ?? "", context, responseMode }),
+    body: JSON.stringify({ question, assistantId: assistantId ?? "", context, responseMode, attachments }),
     signal,
   });
   if (!res.ok || !res.body) {

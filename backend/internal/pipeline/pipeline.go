@@ -249,8 +249,20 @@ func (p *Pipeline) Run(ctx context.Context, question string, history []Conversat
 	return p.RunWithMode(ctx, question, history, assistant, ModeAuto, emit)
 }
 
+// RunWithImages は利用者が添えた画像を伴って回答する。
+//
+// **画像は回答段だけに渡す。** ページ選択は目次からタイトルを選ぶ仕事で、
+// 画像を見せても働かないうえ、全段へ渡すと入力費用が3回ぶん乗る（docs/07）。
+func (p *Pipeline) RunWithImages(ctx context.Context, question string, history []ConversationTurn, assistant *state.Assistant, requested ResponseMode, images []llm.Image, emit func(Event)) error {
+	return p.run(ctx, question, history, assistant, requested, images, emit)
+}
+
 // RunWithMode は質問の種類と利用者の指定から、段階ごとの能力を決めて回答する。
 func (p *Pipeline) RunWithMode(ctx context.Context, question string, history []ConversationTurn, assistant *state.Assistant, requested ResponseMode, emit func(Event)) error {
+	return p.run(ctx, question, history, assistant, requested, nil, emit)
+}
+
+func (p *Pipeline) run(ctx context.Context, question string, history []ConversationTurn, assistant *state.Assistant, requested ResponseMode, images []llm.Image, emit func(Event)) error {
 	started := time.Now()
 	emitTiming := func(stage string, stageStarted time.Time) {
 		millis := time.Since(stageStarted).Milliseconds()
@@ -365,6 +377,7 @@ func (p *Pipeline) RunWithMode(ctx context.Context, question string, history []C
 		MaxTokens: 1500,
 		Profile:   answerProfile,
 		OnWait:    onWait,
+		Images:    images,
 	}, func(text string) {
 		emit(Event{Type: "delta", Text: text})
 	})
