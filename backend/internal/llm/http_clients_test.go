@@ -159,6 +159,28 @@ func TestDailyQuotaIsDistinguishedFromShortRateLimit(t *testing.T) {
 	}
 }
 
+// 2026-08-10に実際に返ってきた本文をそのまま固定する。
+//
+// 注目すべきは **日次上限なのに retryDelay が 39s で返ってくる** ところである。
+// message 側には「per day」も「RPD」も出てこないので、details の quotaId を
+// 見ないと短時間のレート制限と区別できない。素直に retryDelay へ従うと、
+// 回復しないものを待ち直し続けることになる（測定側で実際に空費した）。
+func TestDailyQuotaMatchesRealResponseBody(t *testing.T) {
+	body := []byte(`{"error":{"code":429,"message":"You exceeded your current quota, ` +
+		`please check your plan and billing details. \n* Quota exceeded for metric: ` +
+		`generativelanguage.googleapis.com/generate_content_free_tier_requests, ` +
+		`limit: 500, model: gemini-3.5-flash-lite\nPlease retry in 39.131021433s.",` +
+		`"status":"RESOURCE_EXHAUSTED","details":[` +
+		`{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{` +
+		`"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests",` +
+		`"quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier",` +
+		`"quotaValue":"500"}]},` +
+		`{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"39s"}]}}`)
+	if !isDailyQuota(body) {
+		t.Fatal("実際の日次上限の応答を検出できていない")
+	}
+}
+
 func TestGeminiDoesNotRetryDailyQuota(t *testing.T) {
 	var calls atomic.Int32
 	g := NewGemini("test-key", "test-model", 0, 2)

@@ -45,12 +45,29 @@ def redact(text: str) -> str:
     return API_KEY_IN_URL.sub(r"\1［伏字］", text)
 
 
+# 「待てば直る429」と「待っても直らない429」を見分ける印。
+#
+# Geminiは**日次上限でも `retryDelay: 39s` を返してくる。** 素直に従うと、
+# 回復しないものを何度も待ち直すことになる。2026-08-10の測定では1問あたり
+# 4回×約59秒を空費し、8問のA/Bが30分かかったうえ完走しなかった。
+# 本番のGo側（internal/llm/http_clients.go の isDailyQuota）と同じ印で判定する。
+NO_RETRY_MARKERS = (
+    "prepayment credits are depleted",  # 残高枯渇（M9で実際に踏んだ）
+    "perday",                            # quotaId: GenerateRequestsPerDayPerProjectPerModel-FreeTier
+    "per_day",
+    "requests per day",
+    "rpd",
+)
+
+
 def post(url: str, payload: dict, headers: dict | None = None, timeout: int = 300,
          retries: int = 5) -> dict:
     """POSTしてJSONを返す。429（レート制限）は待って再試行する。
 
     無料枠は毎分数リクエストしか通らないため、31問の測定を素直に回すと
     途中で必ず 429 に当たる。ここで吸収しないと測定が完走しない。
+
+    ただし日次上限と残高枯渇は待っても回復しないので、その場で諦める。
     """
     body = json.dumps(payload).encode()
     for attempt in range(retries):
@@ -61,9 +78,11 @@ def post(url: str, payload: dict, headers: dict | None = None, timeout: int = 30
                 return json.load(response)
         except urllib.error.HTTPError as err:
             detail = err.read().decode("utf-8", "replace")
-            # 残高枯渇は待っても解消しない。M9の比較測定で、この429を通常の
-            # レート制限として75秒待ち直してから同じ理由で失敗した。
-            depleted = "prepayment credits are depleted" in detail.lower()
+            lower = detail.lower()
+            depleted = any(marker in lower for marker in NO_RETRY_MARKERS)
+            if depleted:
+                print("    上限に達しました。待っても回復しないので中止します"
+                      "（無料枠の日次上限は太平洋時間0時＝日本時間16時に戻ります）", flush=True)
             if err.code in (429, 503) and not depleted and attempt < retries - 1:
                 # サーバーが待ち時間を指定してくればそれに従う
                 match = re.search(r'"retryDelay"\s*:\s*"(\d+)s"', detail)
