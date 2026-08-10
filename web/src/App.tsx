@@ -23,6 +23,7 @@ import {
   type Team,
   type Turn,
 } from "./api";
+import { stripCitation } from "./answer";
 import { AssistantAvatar, DefaultAvatar, toIconDataURL, type IconCropPosition } from "./avatar";
 import { SelectMenu, type SelectOption } from "./SelectMenu";
 import {
@@ -147,14 +148,6 @@ const SUPPORT_URL = "/support.html";
  * 回答末尾の「出典: ページ名（最終更新: YYYY-MM）」を落とす。
  * 同じ情報を構造化された出典カードでも表示するため、本文との重複だけを除く。
  */
-function stripCitation(text: string): string {
-  const lines = text.split("\n");
-  const start = lines.findIndex((line) => /^\s*(\*\*)?出典[:：]/.test(line));
-  if (start === -1) return text.trim();
-  const notes = lines.slice(start).filter((line) => /^\s*[※注]/.test(line));
-  return [...lines.slice(0, start), ...notes].join("\n").replace(/\n{3,}/g, "\n\n").trim();
-}
-
 function turnModeLabel(turn: Turn): string | null {
   if (!turn.responseMode) return null;
   if (turn.responseMode === "auto") return "自動";
