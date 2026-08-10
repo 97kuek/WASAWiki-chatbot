@@ -1105,6 +1105,9 @@ button:disabled {
 
 .conversation {
   min-height: 0;
+  /* 保険。表と数式は内側に自前の横スクロールを持っているので、ここを塞いでも
+     読めなくならない。**指定漏れ1か所で画面全体が横へずれるほうが困る** */
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 38px clamp(20px, 6vw, 80px) 28px;
@@ -1201,6 +1204,7 @@ button:disabled {
 
 .question {
   max-width: min(720px, 85%);
+  overflow-wrap: anywhere;
   padding: 11px 16px;
   border: 1px solid #e1d5cf;
   border-radius: 15px 15px 4px 15px;
@@ -1670,6 +1674,11 @@ button:disabled {
 }
 
 .source-title {
+  /* **これが無いと横スクロールになる。** flexの子は既定で min-width:auto の
+     ため、省略記号を指定しても内容の幅より小さくならず、外側を押し広げる。
+     出典のタイトルは長い（「鳥人間プロジェクトの活動再開と…」）ので
+     スマホでは必ず溢れていた（2026-08-10に報告） */
+  min-width: 0;
   overflow: hidden;
   font-size: 14px;
   font-weight: 600;
@@ -1831,6 +1840,7 @@ button:disabled {
 
 .attachment-chip {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 10px;
   padding: 6px 8px 6px 8px;

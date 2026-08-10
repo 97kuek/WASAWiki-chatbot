@@ -37,6 +37,28 @@ function scaledSize(width: number, height: number): { width: number; height: num
   };
 }
 
+/** チップに出す名前の長さ。これを超えたら真ん中を省く。 */
+const MAX_NAME_RUNES = 24;
+
+/**
+ * 長いファイル名を、**拡張子を残したまま**短くする。
+ *
+ * 末尾を切ると「これは何のファイルか」が分からなくなる。真ん中を省けば、
+ * 先頭の見分けと拡張子の両方が残る。CSSの省略記号でも見た目は整うが、
+ * 文字列そのものを短くしておくと読み上げや折り返しでも破綻しない。
+ */
+export function shortenFileName(name: string, max: number = MAX_NAME_RUNES): string {
+  const runes = Array.from(name);
+  if (runes.length <= max) return name;
+
+  const dot = name.lastIndexOf(".");
+  // 拡張子が無い、または長すぎる（＝拡張子ではない）ときは末尾を省くだけ
+  const extension = dot > 0 && runes.length - dot <= 6 ? name.slice(dot) : "";
+  const head = Array.from(name.slice(0, name.length - extension.length));
+  const keep = Math.max(1, max - Array.from(extension).length - 1);
+  return head.slice(0, keep).join("") + "…" + extension;
+}
+
 export async function toAttachment(file: File): Promise<Attachment> {
   if (!ACCEPTED_IMAGE_TYPES.includes(file.type as (typeof ACCEPTED_IMAGE_TYPES)[number])) {
     throw new Error("画像はJPEG・PNG・WebPだけ添付できます");
@@ -64,5 +86,5 @@ export async function toAttachment(file: File): Promise<Attachment> {
   if (dataUrl.length > MAX_DATA_URL_LENGTH) {
     throw new Error("この画像は大きすぎます。別の画像を選んでください");
   }
-  return { dataUrl, name: file.name };
+  return { dataUrl, name: shortenFileName(file.name) };
 }
