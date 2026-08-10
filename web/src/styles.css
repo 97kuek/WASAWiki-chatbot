@@ -655,11 +655,27 @@ button:disabled {
 /* ---- 会話領域 ---- */
 
 .chat-panel {
+  position: relative;
   min-width: 0;
   height: 100dvh;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   background: var(--surface);
+}
+
+/* 画面のどこへ落としても添付になる。狙う的を小さくしない */
+.drop-overlay {
+  position: absolute;
+  z-index: 50;
+  inset: 12px;
+  display: grid;
+  place-items: center;
+  border: 2px dashed #2e4f87;
+  border-radius: 16px;
+  background: rgb(46 79 135 / 6%);
+  color: #2e4f87;
+  font-weight: 600;
+  pointer-events: none;
 }
 
 .chat-header {
@@ -1692,13 +1708,9 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 7px;
+  margin-bottom: 6px;
   color: var(--muted);
   font-size: 12px;
-}
-
-.response-mode-label {
-  font-weight: 600;
 }
 
 .response-mode-select {
@@ -1718,7 +1730,19 @@ button:disabled {
   width: 16px;
 }
 
-.response-mode-select .select-menu-options {
+.response-mode-select .select-menu-text {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.select-menu-description {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.select-menu-options {
   top: auto;
   bottom: calc(100% + 6px);
   width: 160px;
@@ -1728,13 +1752,6 @@ button:disabled {
   min-height: 34px;
   padding-block: 5px;
   font-size: 12px;
-}
-
-.response-mode-help {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
 }
 
 .composer {
@@ -1806,17 +1823,26 @@ button:disabled {
   stroke-width: 1.8;
 }
 
+/* `.composer-area > *` が幅を揃えるので、内側で左寄せにして入力欄と端を合わせる */
+.attachment-row {
+  display: flex;
+  margin-bottom: 8px;
+}
+
 .attachment-chip {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 8px;
-  padding: 6px 6px 6px 8px;
-  width: fit-content;
+  padding: 6px 8px 6px 8px;
   max-width: 100%;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface-soft);
+}
+
+.attachment-chip img {
+  width: 44px;
+  height: 44px;
 }
 
 .attachment-chip img {
@@ -1947,7 +1973,6 @@ button:disabled {
     padding-inline: 12px;
   }
 
-  .response-mode-help { display: none; }
 }
 
 @media (max-width: 560px) {

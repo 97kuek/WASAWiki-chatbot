@@ -3,6 +3,8 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 export type SelectOption = {
   value: string;
   label: string;
+  /** 選択肢の意味。開いたときだけ出す。閉じている間は場所を取らない。 */
+  description?: string;
 };
 
 type SelectMenuProps = {
@@ -117,7 +119,12 @@ export function SelectMenu({ label, value, options, onChange }: SelectMenuProps)
               <span className="select-menu-check" aria-hidden="true">
                 {option.value === value ? "✓" : ""}
               </span>
-              <span>{option.label}</span>
+              <span className="select-menu-text">
+                <span>{option.label}</span>
+                {option.description && (
+                  <span className="select-menu-description">{option.description}</span>
+                )}
+              </span>
             </li>
           ))}
         </ul>

@@ -112,8 +112,8 @@ const ASSISTANT_SORT_OPTIONS: SelectOption[] = [
 ];
 
 const RESPONSE_MODE_OPTIONS: SelectOption[] = [
-  { value: "auto", label: "自動" },
-  { value: "deep", label: "じっくり" },
+  { value: "auto", label: "自動", description: "質問に合わせて自動調整" },
+  { value: "deep", label: "じっくり", description: "比較や変遷を時間をかけて整理" },
 ];
 
 const RESPONSE_MODE_LABELS: Record<ResponseMode, string> = {
@@ -121,11 +121,6 @@ const RESPONSE_MODE_LABELS: Record<ResponseMode, string> = {
   fast: "高速",
   standard: "標準",
   deep: "じっくり",
-};
-
-const RESPONSE_MODE_HELP: Record<"auto" | "deep", string> = {
-  auto: "質問に合わせて自動調整",
-  deep: "比較や変遷を時間をかけて整理",
 };
 
 function loadResponseMode(): "auto" | "deep" {
@@ -284,6 +279,10 @@ export default function App() {
   // 追質問で同じ画像を使い直せる。チップとして見えているので予測できる
   const [attachment, setAttachment] = useState<Attachment | null>(null);
   const attachmentInput = useRef<HTMLInputElement>(null);
+  // ドラッグは子要素をまたぐたびに enter/leave が飛ぶ。数えないと、
+  // 画面の上を動かしただけで枠が点滅する
+  const dragDepth = useRef(0);
+  const [dragging, setDragging] = useState(false);
   const [chats, setChats] = useState<Chat[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.matchMedia("(min-width: 901px)").matches);
@@ -951,6 +950,41 @@ export default function App() {
     setAssistantForm({ editing: null });
   }
 
+  /**
+   * 画像を添付する。ファイル選択・貼り付け・ドラッグの3経路で共通に使う。
+   *
+   * ミーム画像を扱う流れでは「コピーして貼る」が一番短い。ファイル選択だけに
+   * すると、いったん保存してから選び直すことになる。
+   */
+  async function attachImage(file: File | null | undefined) {
+    if (!file || streaming) return;
+    try {
+      setAttachment(await toAttachment(file));
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "画像を添付できませんでした");
+    }
+  }
+
+  /**
+   * ドラッグ中は中身を読めないため、種別だけで画像かどうかを見る。
+   * 文字の選択をドラッグしただけで枠が出ないようにするための判定である。
+   */
+  function imageTypeInDataTransfer(data: DataTransfer | null): boolean {
+    if (!data) return false;
+    return Array.from(data.items).some(
+      (item) => item.kind === "file" && item.type.startsWith("image/"),
+    );
+  }
+
+  /** 貼り付けられた中身から画像を1枚だけ取り出す。文字だけなら何もしない。 */
+  function imageFromDataTransfer(data: DataTransfer | null): File | null {
+    if (!data) return null;
+    for (const item of Array.from(data.files)) {
+      if (item.type.startsWith("image/")) return item;
+    }
+    return null;
+  }
+
   async function handleAsk(text: string) {
     const q = text.trim();
     // 画像だけでも送れる。「これでツイート作って」のように、文章より
@@ -1266,7 +1300,35 @@ export default function App() {
         <button type="button" className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} aria-label="履歴を閉じる" />
       )}
 
-      <section className="chat-panel">
+      <section
+        className={`chat-panel${dragging ? " dragging" : ""}`}
+        // 画面のどこへ落としても添付になる。入力欄の小さな的を狙わせない
+        onDragEnter={(event) => {
+          if (!imageTypeInDataTransfer(event.dataTransfer)) return;
+          dragDepth.current += 1;
+          setDragging(true);
+        }}
+        onDragOver={(event) => {
+          // 既定の動作を止めないとブラウザが画像を別タブで開いてしまう
+          if (dragDepth.current > 0) event.preventDefault();
+        }}
+        onDragLeave={() => {
+          dragDepth.current = Math.max(0, dragDepth.current - 1);
+          if (dragDepth.current === 0) setDragging(false);
+        }}
+        onDrop={(event) => {
+          if (dragDepth.current === 0) return;
+          event.preventDefault();
+          dragDepth.current = 0;
+          setDragging(false);
+          void attachImage(imageFromDataTransfer(event.dataTransfer));
+        }}
+      >
+        {dragging && (
+          <div className="drop-overlay" aria-hidden="true">
+            <span>ここに画像を落とすと添付します</span>
+          </div>
+        )}
         <header className="chat-header">
           <div className="header-title">
             <button type="button" className="sidebar-toggle" onClick={() => setSidebarOpen((open) => !open)} aria-label="チャット履歴を開く" aria-expanded={sidebarOpen}>
@@ -1673,8 +1735,10 @@ export default function App() {
         </main>
 
         <div className="composer-area">
+          {/* 回答モードは毎回変えるものではない。名前と説明で1行を占めていたが、
+              選択肢そのものが「自動 / じっくり」で意味が分かるので畳んだ。
+              説明は選択肢の中に残してあるので、開けば読める */}
           <div className="response-mode-bar">
-            <span className="response-mode-label">回答モード</span>
             <div className="response-mode-select">
               <SelectMenu
                 label="回答モード"
@@ -1687,9 +1751,10 @@ export default function App() {
                 }}
               />
             </div>
-            <span className="response-mode-help">{RESPONSE_MODE_HELP[responseMode]}</span>
+
           </div>
           {attachment && (
+            <div className="attachment-row">
             <div className="attachment-chip">
               <img src={attachment.dataUrl} alt="" />
               <span className="attachment-name">{attachment.name}</span>
@@ -1700,6 +1765,7 @@ export default function App() {
               >
                 ×
               </button>
+            </div>
             </div>
           )}
           <form
@@ -1718,8 +1784,14 @@ export default function App() {
                   handleAsk(question);
                 }
               }}
+              onPaste={(event) => {
+                const file = imageFromDataTransfer(event.clipboardData);
+                if (!file) return; // 文字の貼り付けはそのまま通す
+                event.preventDefault();
+                void attachImage(file);
+              }}
               aria-label="質問"
-              placeholder="引き継ぎ資料について質問する"
+              placeholder="引き継ぎ資料について質問する（画像は貼り付けもできます）"
               maxLength={500}
               rows={1}
               disabled={streaming}
@@ -1730,16 +1802,11 @@ export default function App() {
                 type="file"
                 className="visually-hidden"
                 accept={ACCEPTED_IMAGE_TYPES.join(",")}
-                onChange={async (event) => {
+                onChange={(event) => {
                   const file = event.target.files?.[0];
                   // 同じ画像をもう一度選べるよう、値は必ず空へ戻す
                   event.target.value = "";
-                  if (!file) return;
-                  try {
-                    setAttachment(await toAttachment(file));
-                  } catch (error) {
-                    showToast(error instanceof Error ? error.message : "画像を添付できませんでした");
-                  }
+                  void attachImage(file);
                 }}
               />
               <button
