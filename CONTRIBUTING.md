@@ -36,11 +36,21 @@ cd backend
 GOCACHE=/private/tmp/wasa-go-cache go test ./...
 
 cd ../web
+npm test
 npm run build
 
 cd ..
 python -m py_compile rag/pipeline.py eval/response_mode_eval.py
 ```
+
+`npm test`はNode標準のテストランナーで`web/scripts/*.test.mjs`を実行します。
+新しい依存は入れていません（Viteが持っているesbuildだけを使います）。
+
+いま守っているのは`markdown.tsx`です。ここは**描画が止まらなくなると
+タブごと落ちる**場所で、例外と違ってエラー境界では受け止められません。
+回答はSSEで少しずつ届くので、**途中のどの長さで切っても描画が終わること**を
+1文字ずつ確かめています（2026-08-10に、表の1行目だけが届いた状態で
+無限ループする不具合を見つけたため）。
 
 検索や索引に関わる変更をした場合は、これも実行してください。
 
