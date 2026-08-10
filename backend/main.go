@@ -104,6 +104,22 @@ func seedAssistants(ctx context.Context, store appstate.Store, dir string, admin
 		log.Printf("初期アシスタント%d件は登録しません（ADMIN_USERSが未設定で作成者を決められません）", len(seeds))
 		return nil
 	}
+	// **1件でもあれば何もしない。** 既存を上書きしない仕組みだけでは足りなかった。
+	//
+	// min-instances=0 なので、使われない時間が続くとコンテナは止まり、次の
+	// アクセスで再起動する。つまりこの関数は1日に何度も走る。画面から消した
+	// アシスタントが数分後に復活する状態になっていた（2026-08-10に判明）。
+	//
+	// これ以降、**正本はFirestoreであり assistants/*.json ではない。**
+	// あちらは「空のときに入れる初期値」で、運用中の内容とは食い違ってよい。
+	existing, err := store.ListAssistants(ctx)
+	if err != nil {
+		return err
+	}
+	if len(existing) > 0 {
+		log.Printf("初期アシスタントは登録しません（既に%d件あります。正本はFirestoreです）", len(existing))
+		return nil
+	}
 	added, err := assistant.Apply(ctx, store, seeds, admins[0])
 	if err != nil {
 		return err
