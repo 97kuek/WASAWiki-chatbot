@@ -957,6 +957,12 @@ export default function App() {
     // 画像のほうが本体である使い方があるため
     if ((!q && !attachment) || streaming) return;
     setQuestion("");
+    // 送ったら添付も外す。**残すと次の質問にも黙って付いていく。**
+    // 「もう5案」で使い回せるようにと残していたが、実際に使うと
+    // 別の話題へ移ったときに前の画像が紛れ込むほうが困った
+    // （2026-08-10に利用者から報告）。使い回したいときは選び直す
+    const sent = attachment;
+    setAttachment(null);
     // 先読みなので、失敗しても握りつぶす。実際に必要になった時点で
     // 上の lazy 側が読み直しと再読み込みを引き受ける
     void loadMarkdownModule().catch(() => {});
@@ -981,7 +987,7 @@ export default function App() {
       assistantName: activeAssistant?.name,
       responseMode,
       // 画像そのものは履歴へ保存しない。印だけ残す
-      hasAttachment: attachment !== null,
+      hasAttachment: sent !== null,
     };
 
     // 送信した瞬間に質問の吹き出しを出し、過去の会話への追質問なら履歴の先頭へ戻す。
@@ -1052,7 +1058,7 @@ export default function App() {
           patch((current) => ({ ...current, streaming: false, status: "", retryAt: undefined }));
           break;
       }
-      }, undefined, assistantId, context, responseMode, attachment ? [attachment.dataUrl] : []);
+      }, undefined, assistantId, context, responseMode, sent ? [sent.dataUrl] : []);
     } catch (error) {
       // fetch自体の失敗やストリームの切断は ask() の中でイベントにならない。
       // ここで拾わないと streaming が立ったままになり、入力欄が永久に
