@@ -278,7 +278,6 @@ button:disabled {
   font-size: 11px;
   line-height: 1.5;
   text-align: center;
-  white-space: nowrap;
 }
 
 /* 使い方・注意事項・ポリシーへの導線。狭い画面では折り返す */
@@ -530,6 +529,7 @@ button:disabled {
 }
 
 .history-select > span {
+  min-width: 0;
   overflow: hidden;
   font-size: 14px;
   text-overflow: ellipsis;
@@ -639,6 +639,7 @@ button:disabled {
 }
 
 .account-card span {
+  min-width: 0;
   overflow: hidden;
   color: var(--muted);
   font-size: 12px;
@@ -1642,8 +1643,12 @@ button:disabled {
 
 .sources a {
   display: flex;
+  /* **1行に押し込まない。** 省略記号で切ると「鳥人間プロジェクトの活動再開と…」
+     のようになり、どのページか分からなくなる。入らないときは折り返す
+     （2026-08-10に報告） */
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 10px;
+  gap: 4px 10px;
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1674,25 +1679,25 @@ button:disabled {
 }
 
 .source-title {
-  /* **これが無いと横スクロールになる。** flexの子は既定で min-width:auto の
-     ため、省略記号を指定しても内容の幅より小さくならず、外側を押し広げる。
-     出典のタイトルは長い（「鳥人間プロジェクトの活動再開と…」）ので
-     スマホでは必ず溢れていた（2026-08-10に報告） */
+  /* min-width:0 が無いと横スクロールになる。flexの子は既定で min-width:auto
+     のため、内容の幅より小さくならず外側を押し広げる（2026-08-10に報告） */
   min-width: 0;
-  overflow: hidden;
+  flex: 1 1 auto;
   font-size: 14px;
   font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* 長い題名は折り返す。日本語には単語の区切りが無いので anywhere にする */
+  overflow-wrap: anywhere;
 }
 
 .source-meta {
+  flex: none;
   color: var(--muted);
   font-size: 12px;
   white-space: nowrap;
 }
 
 .source-arrow {
+  flex: none;
   margin-left: auto;
   color: var(--muted);
   font-size: 14px;
