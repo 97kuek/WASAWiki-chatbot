@@ -4,7 +4,7 @@
 検索・回答の段構成とコアプロンプトをGo本番と揃え、測定の再現経路とする。
 本番固有のsystem規則・参照範囲・SSEはGo側だけにあり、実装全体は同一ではない。
 
-M2a（docs/02-測定結果.md）で判明した課題への対処が入っている:
+M2a（docs/08-測定記録.md）で判明した課題への対処が入っている:
   - 存在しないページ名を8件返した      → 目次との照合で落とす（§stage1）
   - 選択3ページが最大48,100字になった  → チャンク単位の2段絞り込み（§stage2）
 
@@ -27,7 +27,7 @@ MAX_PAGES = 4  # 空力設計は代違いで4ページあり、3では構造的�
 DIRECT_CONTEXT_LIMIT = 12_000
 MAX_CHUNKS = 8
 # B1や40thまで拾うと候補が増えすぎるため、英字で始まり数字を含む型番だけを扱う。
-# TR797を直接定義する正解チャンクがBM25で227位だった実測は docs/02 §M18。
+# TR797を直接定義する正解チャンクがBM25で227位だった実測は docs/08 §M18。
 IDENTIFIER_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_-]*[0-9][A-Za-z0-9_-]*")
 GENERATION_ORDINAL_PATTERN = re.compile(r"([0-9]+)(?:st|nd|rd|th)", re.IGNORECASE)
 GENERATION_LABEL_PATTERN = re.compile(r"[0-9]+代")

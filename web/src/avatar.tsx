@@ -84,27 +84,18 @@ export function DefaultAvatar({ size = 40 }: { size?: number }) {
 const MAX_ICON_BYTES = 96 * 1024;
 const ICON_PIXELS = 128;
 
-export type IconCropPosition = { x: number; y: number };
-
-const clampPercentage = (value: number) => Math.max(0, Math.min(100, value));
-
 /**
- * 選ばれた画像を正方形へ切り出し、128pxのPNG/JPEGに縮めて data URI にする。
+ * 選ばれた画像の中央を正方形へ切り出し、128pxのPNG/JPEGに縮めて data URI にする。
  *
  * 元画像をそのまま送ると、スマホの写真1枚で数MBになりFirestoreの
  * 1ドキュメント上限（約1MiB）を超える。表示は最大72pxなので、
  * ここで縮めても見た目は変わらない。
  */
-export async function toIconDataURL(
-  file: File,
-  position: IconCropPosition = { x: 50, y: 50 },
-): Promise<string> {
+export async function toIconDataURL(file: File): Promise<string> {
   const bitmap = await createImageBitmap(file);
   const side = Math.min(bitmap.width, bitmap.height);
-  // 横長なら左右、縦長なら上下の余白だけを動かす。正方形の外へ出ないよう
-  // 割合を切り抜き可能な長さへ変換してからdrawImageへ渡す。
-  const sourceX = (bitmap.width - side) * clampPercentage(position.x) / 100;
-  const sourceY = (bitmap.height - side) * clampPercentage(position.y) / 100;
+  const sourceX = (bitmap.width - side) / 2;
+  const sourceY = (bitmap.height - side) / 2;
   const canvas = document.createElement("canvas");
   canvas.width = ICON_PIXELS;
   canvas.height = ICON_PIXELS;

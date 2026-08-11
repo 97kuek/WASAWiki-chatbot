@@ -475,7 +475,7 @@ func titlesOf(pages []*index.Page) []string {
 }
 
 // モデルに書かせてよいのは**資料の番号だけ**である。タイトルとURLを書かせると
-// 「引き継ぎWiki」のような実在しない出典名を作れてしまう（docs/06）。
+// 「引き継ぎWiki」のような実在しない出典名を作れてしまう（docs/02）。
 func TestAnswerPromptLeavesSourceListToServer(t *testing.T) {
 	client := &stubLLM{titles: []string{"電装班"}}
 	pipe := New(testIndex(t), client)

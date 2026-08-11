@@ -31,7 +31,7 @@ const safeHref = (url: string) => (/^https?:\/\//i.test(url) ? url : null);
  *
  * **モデルが書けるのは番号だけである。** 表示するタイトルとURLは、
  * サーバーが索引から組み立てたものをここへ渡す。こうしないと
- * 「引き継ぎWiki」のような実在しない出典名を本文へ書けてしまう（docs/06）。
+ * 「引き継ぎWiki」のような実在しない出典名を本文へ書けてしまう（docs/02）。
  */
 export type Citation = { title: string; url: string };
 
@@ -233,7 +233,7 @@ const joinItemParts = (parts: { block: boolean; html: string }[]) =>
  * 質問は手順を聞くものが多く、構造がそのまま答えの一部になる。
  *
  * **どの経路でも必ず1行以上進む。** 進まない経路を作ると、表のときと同じく
- * 描画が止まらなくなり、エラー境界では受け止められない（docs/02 M35）。
+ * 描画が止まらなくなり、エラー境界では受け止められない（docs/08 M35）。
  */
 function listBlock(lines: string[], start: number): { html: string; next: number } | null {
   const head = lines[start].match(LIST_ITEM);

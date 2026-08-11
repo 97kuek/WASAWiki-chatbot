@@ -28,3 +28,8 @@ test("入力欄の案内は質問することだけを簡潔に示す", () => {
   assert.match(page, /placeholder="引き継ぎ資料について質問する"/);
   assert.doesNotMatch(page, /画像は貼り付けもできます/);
 });
+
+test("未入力時も入力後も質問文を入力欄の中央へ置く", () => {
+  assert.match(styles, /\.composer\s*\{[^}]*align-items: center;/);
+  assert.match(styles, /\.composer textarea\s*\{[^}]*padding: 0 2px;[^}]*line-height: 1\.5;/);
+});

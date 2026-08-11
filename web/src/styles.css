@@ -1139,6 +1139,24 @@ button:disabled {
   object-fit: contain;
 }
 
+.assistant-avatar-settings {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+
+.assistant-avatar-settings:hover,
+.assistant-avatar-settings:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* 誰が答えたかを本文の上に出す。口調が変わった理由が分かるようにする */
 .answer-author {
   display: flex;
@@ -1699,7 +1717,7 @@ button:disabled {
 .composer {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
+  align-items: center;
   gap: 3px;
   min-height: 58px;
   padding: 7px 8px 7px 14px;
@@ -1716,16 +1734,16 @@ button:disabled {
 
 .composer textarea {
   width: 100%;
-  min-height: 28px;
-  max-height: calc(1.7em * 5);
+  min-height: 24px;
+  max-height: calc(1.5em * 5);
   resize: none;
-  padding: 2px;
+  padding: 0 2px;
   overflow-y: hidden;
   border: 0;
   outline: 0;
   background: transparent;
   font-size: 16px;
-  line-height: 1.7;
+  line-height: 1.5;
   scrollbar-color: var(--line-strong) transparent;
   scrollbar-width: thin;
 }
@@ -1983,6 +2001,8 @@ button:disabled {
   .question { max-width: 92%; }
   .assistant-row { grid-template-columns: 28px minmax(0, 1fr); gap: 10px; }
   .assistant-avatar { width: 28px; height: 28px; }
+  .assistant-avatar-settings { width: 28px; height: 28px; }
+  .assistant-avatar-settings .avatar { width: 28px !important; height: 28px !important; font-size: 12px !important; }
   .assistant-row > .avatar { width: 28px !important; height: 28px !important; font-size: 12px !important; }
   .answer-feedback-comment { grid-template-columns: 1fr auto; }
   .answer-feedback-comment textarea { grid-column: 1 / -1; }
@@ -2241,7 +2261,7 @@ button:disabled {
 }
 
 /* 作成者名は必ず出す。匿名で共有できないことが、内容の管理を人手に
-   頼らずに済ませている仕組みそのもの（docs/06-ルールベース.md） */
+   頼らずに済ませている仕組みそのもの（docs/02-データ検索とルール.md） */
 .assistant-meta { font-size: 11px; line-height: 1.5; color: var(--muted); }
 
 .assistant-favorite {
@@ -2304,10 +2324,9 @@ button:disabled {
 /* ---- 作成フォームのアイコン欄 ---- */
 
 .assistant-icon-editor {
-  display: flex;
+  min-height: 98px;
+  display: grid;
   align-items: center;
-  gap: 20px;
-  min-height: 112px;
   padding: 12px 14px;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -2315,15 +2334,15 @@ button:disabled {
 }
 
 .assistant-icon-pick {
-  width: 104px;
-  flex: none;
   display: grid;
-  justify-items: center;
-  gap: 5px;
+  grid-template-columns: 72px auto;
+  align-items: center;
+  justify-items: start;
+  gap: 6px 12px;
 }
 
-.assistant-icon-preview {
-  object-fit: cover;
+.assistant-icon-pick > .avatar {
+  grid-row: 1 / 3;
 }
 
 .assistant-form .assistant-icon-button {
@@ -2337,47 +2356,6 @@ button:disabled {
 }
 
 .assistant-form .assistant-icon-button input { display: none; }
-
-.assistant-icon-position {
-  min-width: 0;
-  flex: 1;
-  display: grid;
-  gap: 7px;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.assistant-icon-position legend {
-  margin-bottom: 3px;
-  padding: 0;
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.assistant-form .assistant-icon-position label {
-  grid-template-columns: 32px minmax(0, 1fr);
-  align-items: center;
-  gap: 9px;
-  font-size: 11px;
-}
-
-.assistant-form .assistant-icon-position input[type="range"] {
-  height: 20px;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  accent-color: var(--accent);
-  cursor: pointer;
-}
-
-.assistant-icon-position > button {
-  justify-self: start;
-  padding: 0;
-  font-size: 11px;
-}
 
 .assistant-form {
   display: grid;
@@ -2415,10 +2393,28 @@ button:disabled {
   line-height: 1.6;
 }
 
+.assistant-form input[readonly],
+.assistant-form textarea[readonly] {
+  background: var(--surface-soft);
+  cursor: text;
+}
+
 .assistant-scope {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
+}
+
+.assistant-readonly-value {
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--text);
 }
 
 /* ネイティブの選択肢はOS側の配色になり入力欄と食い違うため、
@@ -2565,12 +2561,7 @@ button:disabled {
     flex: 1;
   }
 
-  .assistant-icon-editor {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .assistant-icon-pick { width: auto; }
+  .assistant-icon-pick { grid-template-columns: 72px auto; }
 }
 
 @media (max-width: 420px) {

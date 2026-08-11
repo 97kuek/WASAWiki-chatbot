@@ -24,7 +24,7 @@ import {
 import { stripCitation } from "./answer";
 import { answerPlainText, chatTitle, groupChats, retryLabel, shareText, slugify } from "./chat";
 import { ACCEPTED_IMAGE_TYPES, toAttachment, type Attachment } from "./attachment";
-import { AssistantAvatar, DefaultAvatar, toIconDataURL, type IconCropPosition } from "./avatar";
+import { AssistantAvatar, DefaultAvatar, toIconDataURL } from "./avatar";
 import { LoadingScreen } from "./components/LoadingScreen";
 import { ReferenceSummary } from "./components/ReferenceSummary";
 import { SelectMenu, type SelectOption } from "./components/SelectMenu";
@@ -83,8 +83,6 @@ const ASSISTANT_KEY = "wasa-chat-assistant";
 const ASSISTANT_FAVORITES_KEY = "wasa-chat-assistant-favorites";
 const ASSISTANT_SORT_KEY = "wasa-chat-assistant-sort";
 const RESPONSE_MODE_KEY = "wasa-chat-response-mode";
-const CENTER_ICON_POSITION: IconCropPosition = { x: 50, y: 50 };
-
 function resizeComposerTextarea(target: HTMLTextAreaElement | null): void {
   if (!target) return;
   target.style.height = "auto";
@@ -98,6 +96,7 @@ function resizeComposerTextarea(target: HTMLTextAreaElement | null): void {
 }
 
 type AssistantSort = "favorite" | "name" | "author";
+type AssistantFormMode = "create" | "edit" | "view";
 
 const ORIGIN_OPTIONS: SelectOption[] = [
   { value: "", label: "すべて" },
@@ -222,12 +221,10 @@ export default function App() {
   const [view, setView] = useState<"chat" | "assistants" | "admin">(
     () => location.pathname === "/admin" ? "admin" : "chat",
   );
-  // 一覧の中で作成／編集フォームを開いているか。editing にIDが入れば編集
-  const [assistantForm, setAssistantForm] = useState<{ editing: string | null } | null>(null);
+  // 一覧の中で作成／編集／閲覧画面を開いているか。閲覧は他人の設定にも使う。
+  const [assistantForm, setAssistantForm] = useState<{ mode: AssistantFormMode; assistantId?: string } | null>(null);
   const [assistantDraft, setAssistantDraft] = useState<AssistantDraft>(emptyDraft);
   const [assistantError, setAssistantError] = useState("");
-  const [pendingIcon, setPendingIcon] = useState<{ file: File; url: string } | null>(null);
-  const [iconPosition, setIconPosition] = useState<IconCropPosition>(CENTER_ICON_POSITION);
   const bottom = useRef<HTMLDivElement>(null);
   const conversation = useRef<HTMLElement>(null);
   const questionInput = useRef<HTMLTextAreaElement>(null);
@@ -247,6 +244,10 @@ export default function App() {
   const syncedChats = useRef<Map<string, string>>(new Map());
 
   const activeAssistant = assistants.find((item) => item.id === assistantId);
+  const formAssistant = assistantForm?.assistantId
+    ? assistants.find((item) => item.id === assistantForm.assistantId)
+    : undefined;
+  const assistantFormReadOnly = assistantForm?.mode === "view";
   const activeChat = chats.find((chat) => chat.id === activeChatId);
   const streaming = chats.some((chat) => chat.turns.some((turn) => turn.streaming));
   const unreadCount = announcements.filter((announcement) => !readAnnouncementIds.includes(announcement.id)).length;
@@ -372,12 +373,6 @@ export default function App() {
     wide.addEventListener("change", followViewport);
     return () => wide.removeEventListener("change", followViewport);
   }, []);
-
-  useEffect(() => {
-    if (!pendingIcon) return;
-    // 選び直しとフォーム終了の両方で、一時プレビューのメモリを解放する。
-    return () => URL.revokeObjectURL(pendingIcon.url);
-  }, [pendingIcon]);
 
   // 利用者が自分でスクロールしたかを見る。下端から離れていれば追従をやめる
   useEffect(() => {
@@ -800,25 +795,21 @@ export default function App() {
     writeStored("local", ASSISTANT_SORT_KEY, next);
   }
 
-  function clearPendingIcon() {
-    setPendingIcon(null);
-    setIconPosition({ ...CENTER_ICON_POSITION });
-  }
-
   function closeAssistantForm() {
-    clearPendingIcon();
     setAssistantForm(null);
   }
 
   function startCreate() {
-    clearPendingIcon();
     setAssistantDraft(emptyDraft);
     setAssistantError("");
-    setAssistantForm({ editing: null });
+    setAssistantForm({ mode: "create" });
   }
 
-  function startEdit(item: Assistant) {
-    clearPendingIcon();
+  function openAssistantSettings(item: Assistant) {
+    if (streaming) {
+      showToast("回答が終わってからアシスタントの設定を開いてください");
+      return;
+    }
     setAssistantDraft({
       id: item.id,
       name: item.name,
@@ -829,34 +820,33 @@ export default function App() {
       icon: item.icon,
     });
     setAssistantError("");
-    setAssistantForm({ editing: item.id });
+    // 作成者と管理者は同じ画面で編集できる。それ以外の人にも指示を公開し、
+    // 内容を確認・コピーして自分のアシスタント作成に使えるようにする。
+    setAssistantForm({ mode: item.canEdit ? "edit" : "view", assistantId: item.id });
+    setView("assistants");
+    closeSidebarOnMobile();
   }
 
   async function handleSubmitAssistant(event: React.FormEvent) {
     event.preventDefault();
     setAssistantError("");
-    const editing = assistantForm?.editing ?? null;
+    const editing = assistantForm?.mode === "edit" ? assistantForm.assistantId ?? null : null;
+    if (assistantForm?.mode === "view") return;
     try {
-      // 位置調整は保存時の正方形画像へ焼き込む。表示側やFirestoreに
-      // 別の位置情報を持たせないため、どこに出しても同じ切り抜きになる。
-      const draft = pendingIcon
-        ? { ...assistantDraft, icon: await toIconDataURL(pendingIcon.file, iconPosition) }
-        : assistantDraft;
       if (editing) {
-        const saved = await updateAssistant(editing, draft);
+        const saved = await updateAssistant(editing, assistantDraft);
         setAssistants((current) => current.map((item) => (item.id === editing ? saved : item)));
         closeAssistantForm();
         showToast(`「${saved.name}」を保存しました`);
         return;
       }
       const created = await createAssistant({
-        ...draft,
+        ...assistantDraft,
         // 日本語名だとslugがほぼ空になるので、そのときは時刻から作る
-        id: draft.id || slugify(draft.name) || `assistant-${Date.now().toString(36)}`,
+        id: assistantDraft.id || slugify(assistantDraft.name) || `assistant-${Date.now().toString(36)}`,
       });
       setAssistants((current) => [...current, created]);
       setAssistantDraft(emptyDraft);
-      clearPendingIcon();
       chooseAssistant(created.id, created.name);
       showToast(`「${created.name}」を作成し、新しいチャットを開きました`);
     } catch (error) {
@@ -889,8 +879,6 @@ export default function App() {
     try {
       const icon = await toIconDataURL(file);
       setAssistantDraft((d) => ({ ...d, icon }));
-      setIconPosition({ ...CENTER_ICON_POSITION });
-      setPendingIcon({ file, url: URL.createObjectURL(file) });
     } catch (error) {
       setAssistantError(error instanceof Error ? error.message : "画像を読み込めませんでした");
     }
@@ -898,7 +886,6 @@ export default function App() {
 
   /** 他人のアシスタントは編集できない。複製してから直す（編集権の調整を発生させないため）。 */
   function duplicateAssistant(source: Assistant) {
-    clearPendingIcon();
     setAssistantDraft({
       id: "",
       name: `${source.name}のコピー`,
@@ -909,7 +896,27 @@ export default function App() {
       icon: source.icon,
     });
     setAssistantError("");
-    setAssistantForm({ editing: null });
+    setAssistantForm({ mode: "create" });
+  }
+
+  function turnAssistantAvatar(turn: Turn) {
+    if (!turn.assistantName) {
+      return <img src={APP_URLS.mark} alt="" className="assistant-avatar" />;
+    }
+    const item = assistants.find((assistant) => assistant.id === turn.assistantId);
+    const avatar = <AssistantAvatar name={turn.assistantName} icon={item?.icon} size={34} />;
+    if (!item) return avatar;
+    return (
+      <button
+        type="button"
+        className="assistant-avatar-settings"
+        aria-label={`「${item.name}」の設定を見る`}
+        title="アシスタントの設定を見る"
+        onClick={() => openAssistantSettings(item)}
+      >
+        {avatar}
+      </button>
+    );
   }
 
   /**
@@ -1411,109 +1418,108 @@ export default function App() {
             {assistantForm ? (
               <form className="assistant-form" onSubmit={(event) => void handleSubmitAssistant(event)}>
                 <header>
-                  <h2>{assistantForm.editing ? "アシスタントを編集" : "アシスタントを作る"}</h2>
+                  <h2>{assistantForm.mode === "view"
+                    ? "アシスタントの設定"
+                    : assistantForm.mode === "edit" ? "アシスタントを編集" : "アシスタントを作る"}</h2>
                   <p className="muted">
-                    書けるのは<strong>口調・書き方・参照範囲</strong>だけです。
-                    <br />
-                    出典の一覧と参照範囲はサーバー側で決まるため、指示では変えられません。
+                    {assistantFormReadOnly ? (
+                      <>作成: {formAssistant?.author ?? "不明"}。指示は選択してコピーできます。</>
+                    ) : (
+                      <>
+                        書けるのは<strong>口調・書き方・参照範囲</strong>だけです。
+                        <br />
+                        出典の一覧と参照範囲はサーバー側で決まるため、指示では変えられません。
+                      </>
+                    )}
                   </p>
                 </header>
                 <div className="assistant-icon-editor">
                   <div className="assistant-icon-pick">
                     {/* 画像が無くても頭文字で成立させる。用意しないと見栄えが悪い状態にすると、
                         結局だれもアシスタントを作らなくなる */}
-                    {pendingIcon
-                      ? (
-                        <img
-                          className="avatar assistant-icon-preview"
-                          src={pendingIcon.url}
-                          alt="アイコンの切り抜きプレビュー"
-                          width={72}
-                          height={72}
-                          style={{ objectPosition: `${iconPosition.x}% ${iconPosition.y}%` }}
-                        />
-                      )
-                      : <AssistantAvatar name={assistantDraft.name || "?"} icon={assistantDraft.icon} size={72} />}
-                    <label className="assistant-icon-button">
+                    <AssistantAvatar name={assistantDraft.name || "?"} icon={assistantDraft.icon} size={72} />
+                    {!assistantFormReadOnly && <label className="assistant-icon-button">
                       <span>{assistantDraft.icon ? "変更" : "画像を選ぶ"}</span>
                       <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void handlePickIcon(event)} />
-                    </label>
-                    {assistantDraft.icon && (
+                    </label>}
+                    {!assistantFormReadOnly && assistantDraft.icon && (
                       <button type="button" className="linkish" onClick={() => {
-                        clearPendingIcon();
                         setAssistantDraft((d) => ({ ...d, icon: undefined }));
                       }}>
                         画像を外す
                       </button>
                     )}
                   </div>
-                  {pendingIcon && (
-                    <fieldset className="assistant-icon-position">
-                      <legend>画像の位置</legend>
-                      <label>
-                        <span>左右</span>
-                        <input type="range" min="0" max="100" value={iconPosition.x}
-                          onChange={(event) => setIconPosition((current) => ({ ...current, x: Number(event.target.value) }))} />
-                      </label>
-                      <label>
-                        <span>上下</span>
-                        <input type="range" min="0" max="100" value={iconPosition.y}
-                          onChange={(event) => setIconPosition((current) => ({ ...current, y: Number(event.target.value) }))} />
-                      </label>
-                      <button type="button" className="linkish" onClick={() => setIconPosition({ ...CENTER_ICON_POSITION })}>
-                        中央に戻す
-                      </button>
-                    </fieldset>
-                  )}
                 </div>
                 <label>
                   <span>名前</span>
-                  <input value={assistantDraft.name} maxLength={APP_LIMITS.assistantNameRunes} required
+                  <input value={assistantDraft.name} maxLength={APP_LIMITS.assistantNameRunes} required readOnly={assistantFormReadOnly}
                     onChange={(event) => setAssistantDraft((d) => ({ ...d, name: event.target.value }))} />
                 </label>
                 <label>
                   <span>説明（一覧に出ます）</span>
-                  <input value={assistantDraft.description} maxLength={APP_LIMITS.assistantDescriptionRunes}
+                  <input value={assistantDraft.description} maxLength={APP_LIMITS.assistantDescriptionRunes} readOnly={assistantFormReadOnly}
                     onChange={(event) => setAssistantDraft((d) => ({ ...d, description: event.target.value }))} />
                 </label>
                 <label>
                   <span>指示（口調・書き方）</span>
-                  <textarea value={assistantDraft.instruction} rows={8} maxLength={APP_LIMITS.assistantInstructionRunes} required
+                  <textarea value={assistantDraft.instruction} rows={8} maxLength={APP_LIMITS.assistantInstructionRunes} required readOnly={assistantFormReadOnly}
                     placeholder="例: 語尾を「〜しゅよ」にする。一人称は「ぼく」。明るくのんびりした調子で話す。"
                     onChange={(event) => setAssistantDraft((d) => ({ ...d, instruction: event.target.value }))} />
                 </label>
-                <div className="assistant-scope">
-                  <div className="assistant-field">
-                    <span>参照する出所</span>
-                    <SelectMenu
-                      label="参照する出所"
-                      value={assistantDraft.origin ?? ""}
-                      options={ORIGIN_OPTIONS}
-                      onChange={(value) => setAssistantDraft((d) => ({
-                        ...d,
-                        origin: (value || undefined) as AssistantDraft["origin"],
-                      }))}
-                    />
+                {assistantFormReadOnly ? (
+                  <div className="assistant-scope">
+                    <div className="assistant-field">
+                      <span>参照する出所</span>
+                      <p className="assistant-readonly-value">
+                        {ORIGIN_OPTIONS.find((option) => option.value === (assistantDraft.origin ?? ""))?.label ?? "すべて"}
+                      </p>
+                    </div>
+                    <div className="assistant-field">
+                      <span>参照する区分</span>
+                      <p className="assistant-readonly-value">
+                        {teams.find((team) => team.value === assistantDraft.team)?.label ?? "すべて"}
+                      </p>
+                    </div>
                   </div>
-                  <div className="assistant-field">
-                    <span>参照する区分</span>
-                    <SelectMenu
-                      label="参照する区分"
-                      value={assistantDraft.team ?? ""}
-                      options={[
-                        { value: "", label: "すべて" },
-                        ...teams.map((team) => ({ value: team.value, label: team.label })),
-                      ]}
-                      onChange={(value) => setAssistantDraft((d) => ({ ...d, team: value || undefined }))}
-                    />
+                ) : (
+                  <div className="assistant-scope">
+                    <div className="assistant-field">
+                      <span>参照する出所</span>
+                      <SelectMenu
+                        label="参照する出所"
+                        value={assistantDraft.origin ?? ""}
+                        options={ORIGIN_OPTIONS}
+                        onChange={(value) => setAssistantDraft((d) => ({
+                          ...d,
+                          origin: (value || undefined) as AssistantDraft["origin"],
+                        }))}
+                      />
+                    </div>
+                    <div className="assistant-field">
+                      <span>参照する区分</span>
+                      <SelectMenu
+                        label="参照する区分"
+                        value={assistantDraft.team ?? ""}
+                        options={[
+                          { value: "", label: "すべて" },
+                          ...teams.map((team) => ({ value: team.value, label: team.label })),
+                        ]}
+                        onChange={(value) => setAssistantDraft((d) => ({ ...d, team: value || undefined }))}
+                      />
+                    </div>
                   </div>
-                </div>
+                )}
                 {assistantError && <p className="assistant-error" role="alert">{assistantError}</p>}
                 <div className="assistant-actions">
                   <button type="button" onClick={closeAssistantForm}>戻る</button>
-                  <button type="submit" className="primary" disabled={!assistantDraft.name.trim() || !assistantDraft.instruction.trim()}>
-                    {assistantForm.editing ? "保存する" : "作成する"}
-                  </button>
+                  {assistantFormReadOnly && formAssistant ? (
+                    <button type="button" className="primary" onClick={() => duplicateAssistant(formAssistant)}>複製して作る</button>
+                  ) : (
+                    <button type="submit" className="primary" disabled={!assistantDraft.name.trim() || !assistantDraft.instruction.trim()}>
+                      {assistantForm.mode === "edit" ? "保存する" : "作成する"}
+                    </button>
+                  )}
                 </div>
               </form>
             ) : (
@@ -1576,10 +1582,9 @@ export default function App() {
                         <span aria-hidden="true">{favoriteAssistantIds.includes(item.id) ? "★" : "☆"}</span>
                       </button>
                       <div className="assistant-card-actions">
-                        {/* 他人のものは編集ではなく複製。編集権をめぐる調整を起こさないため */}
-                        {item.canEdit
-                          ? <button type="button" onClick={() => startEdit(item)}>編集</button>
-                          : <button type="button" onClick={() => duplicateAssistant(item)}>複製</button>}
+                        <button type="button" onClick={() => openAssistantSettings(item)}>設定</button>
+                        {/* 他人のものは設定を読めるが、保存先は必ず自分の複製にする。 */}
+                        {!item.canEdit && <button type="button" onClick={() => duplicateAssistant(item)}>複製</button>}
                         {item.canEdit && (
                           <button type="button" className="danger" onClick={() => void handleDeleteAssistant(item)}>削除</button>
                         )}
@@ -1631,9 +1636,7 @@ export default function App() {
               <div className="assistant-row">
                 {/* 誰が答えたかを毎回出す。しゅよっくんに切り替えたのに
                     WASAロゴのままだと、口調が変わった理由が画面から分からない */}
-                {turn.assistantName
-                  ? <AssistantAvatar name={turn.assistantName} icon={assistants.find((a) => a.id === turn.assistantId)?.icon} size={34} />
-                  : <img src={APP_URLS.mark} alt="" className="assistant-avatar" />}
+                {turnAssistantAvatar(turn)}
                 <div className="assistant-content">
                   <div className="answer-author">
                     <span>{turn.assistantName ?? "WASA Chat"}</span>

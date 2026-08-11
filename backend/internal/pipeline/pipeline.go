@@ -2,7 +2,7 @@
 //
 // rag/pipeline.py（測定用）と検索・回答の段構成とコアプロンプトを揃える。
 // 本番固有のsystem規則・参照範囲・SSEはGoだけにあるため実装全体は同一ではない。
-// 共通部分を片方だけ変えると測定値が本番を説明しなくなる（docs/05参照）。
+// 共通部分を片方だけ変えると測定値が本番を説明しなくなる（docs/03参照）。
 package pipeline
 
 import (
@@ -262,7 +262,7 @@ func (p *Pipeline) Run(ctx context.Context, question string, history []Conversat
 // RunWithImages は利用者が添えた画像を伴って回答する。
 //
 // **画像は回答段だけに渡す。** ページ選択は目次からタイトルを選ぶ仕事で、
-// 画像を見せても働かないうえ、全段へ渡すと入力費用が3回ぶん乗る（docs/07）。
+// 画像を見せても働かないうえ、全段へ渡すと入力費用が3回ぶん乗る（docs/04）。
 func (p *Pipeline) RunWithImages(ctx context.Context, question string, history []ConversationTurn, assistant *state.Assistant, requested ResponseMode, images []llm.Image, emit func(Event)) error {
 	return p.run(ctx, question, history, assistant, requested, images, emit)
 }
