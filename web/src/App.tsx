@@ -1224,7 +1224,13 @@ export default function App() {
   }
 
 	if (view === "admin" && isAdmin) {
-		return <Suspense fallback={<div className="admin-loading" role="status">管理画面を読み込んでいます…</div>}><AdminPage username={username} onBack={closeAdmin} onLogout={() => void handleLogout()} /></Suspense>;
+		return <Suspense fallback={(
+      <div className="center app-loading admin-initial-loading" role="status" aria-label="管理者情報を確認しています">
+        <img src="/assets/wasa-chat-logo-photo-trimmed.png" alt="WASA Chat" className="loading-wordmark" />
+        <Spinner />
+        <span className="muted">管理者情報を確認しています…</span>
+      </div>
+    )}><AdminPage username={username} onBack={closeAdmin} onLogout={() => void handleLogout()} /></Suspense>;
 	}
 
   return (
@@ -1755,9 +1761,9 @@ export default function App() {
                     />
                   )}
 
-                  {turn.sources.length > 0 && (
+                  {turn.streaming && turn.sources.length > 0 && (
                     <section className="sources">
-                      <h2>{turn.streaming ? "参照中の資料" : "出典"}</h2>
+                      <h2>参照中の資料</h2>
                       <ul>
                         {turn.sources.map((source) => (
                           <li key={source.url}>
@@ -1825,12 +1831,6 @@ export default function App() {
             <textarea
               value={question}
               onChange={(event) => setQuestion(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                  event.preventDefault();
-                  handleAsk(question);
-                }
-              }}
               onPaste={(event) => {
                 const file = imageFromDataTransfer(event.clipboardData);
                 if (!file) return; // 文字の貼り付けはそのまま通す
@@ -1891,7 +1891,6 @@ export default function App() {
               )}
             </div>
           </form>
-          <p className="composer-hint">Enterで送信・Shift + Enterで改行</p>
           <p className="disclaimer">生成AIの回答には誤りが含まれることがあります。</p>
         </div>
         </>

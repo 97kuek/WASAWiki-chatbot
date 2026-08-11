@@ -69,7 +69,7 @@ func TestAdminOverviewShowsNamesWithoutQuestionContentOrUserKeys(t *testing.T) {
 		t.Fatalf("管理画面APIが失敗: %d %s", res.Code, res.Body.String())
 	}
 	body := res.Body.String()
-	for _, expected := range []string{`"username":"42 Wasa Taro"`, `"today":1`, `"requests":1`, `"actor":"管理者"`, `"codeVersion":"abcdef0"`, `"indexVersion":"index1234567"`, `"updateProgress"`, `"alerts"`} {
+	for _, expected := range []string{`"username":"42 Wasa Taro"`, `"today":1`, `"requests":1`, `"actor":"管理者"`, `"codeVersion":"abcdef0"`, `"indexVersion":"index1234567"`, `"updateProgress"`} {
 		if !strings.Contains(body, expected) {
 			t.Errorf("管理情報に %s がない: %s", expected, body)
 		}
@@ -102,7 +102,7 @@ func TestAdminOverviewTracksPublishAndVerificationProgress(t *testing.T) {
 	if res.Code != http.StatusOK {
 		t.Fatalf("管理画面APIが失敗: %d %s", res.Code, res.Body.String())
 	}
-	for _, expected := range []string{`"stage":"verify_needed"`, `"changes":1`, `"source-verify"`} {
+	for _, expected := range []string{`"stage":"verify_needed"`, `"changes":1`} {
 		if !strings.Contains(res.Body.String(), expected) {
 			t.Errorf("更新進捗に %s がない: %s", expected, res.Body.String())
 		}

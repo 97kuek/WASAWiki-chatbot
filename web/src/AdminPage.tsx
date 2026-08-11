@@ -4,10 +4,10 @@ import {
   checkSources,
   setCoAdmin,
   type AdminOverview,
-  type AdminAlert,
   type AdminUserUsage,
   type SourceCheckResult,
 } from "./api";
+import { SelectMenu, type SelectOption } from "./SelectMenu";
 
 type Props = {
   username: string;
@@ -21,6 +21,19 @@ type AdminTab = "overview" | "sources" | "users" | "quota" | "logs";
 const TOAST_DURATION_MS = 3000;
 const WIKI_URL = import.meta.env.VITE_WIKI_URL ?? "https://wasabirdman.sakura.ne.jp/wbwiki/";
 const SUPPORT_URL = "/support.html";
+const USER_SORT_OPTIONS: SelectOption[] = [
+  { value: "thirtyDays:desc", label: "30日利用が多い順" },
+  { value: "sevenDays:desc", label: "7日利用が多い順" },
+  { value: "today:desc", label: "今日の利用が多い順" },
+  { value: "lastUsed:desc", label: "最近利用した順" },
+  { value: "username:asc", label: "名前順" },
+];
+const PERIOD_OPTIONS: SelectOption[] = [
+  { value: "1", label: "24時間" },
+  { value: "7", label: "7日" },
+  { value: "30", label: "30日" },
+  { value: "all", label: "すべて" },
+];
 const tabs: { id: AdminTab; label: string; description: string }[] = [
   { id: "overview", label: "概要", description: "今日の利用状況とシステムの状態を確認します。" },
   { id: "sources", label: "資料更新", description: "Wiki・公式サイトの変更と、取り込み直しの手順を確認します。" },
@@ -107,6 +120,16 @@ function progressLabel(stage: AdminOverview["updateProgress"]["stage"]): string 
     case "changes_detected": return "再構築・差分確認待ち";
     case "verify_needed": return "反映後の再確認待ち";
     default: return "最新です";
+  }
+}
+
+function nextUpdateAction(stage: AdminOverview["updateProgress"]["stage"]): string {
+  switch (stage) {
+    case "unavailable": return "更新確認用のWikiアカウント設定が必要です。";
+    case "not_checked": return "「更新を確認」を押してください。";
+    case "changes_detected": return "索引を再構築し、差分確認後に本番へ反映してください。";
+    case "verify_needed": return "もう一度更新を確認し、変更なしになることを確かめてください。";
+    default: return "現在必要な作業はありません。";
   }
 }
 
@@ -291,14 +314,24 @@ export function AdminPage({ username, onBack, onLogout }: Props) {
   const lastCheck = data?.sourceCheck.last;
   const currentTab = tabs.find((tab) => tab.id === activeTab) ?? tabs[0];
   const versionMismatch = Boolean(data && !sameVersion(__WASA_BUILD_VERSION__, data.system.codeVersion));
-  const alerts = useMemo<AdminAlert[]>(() => {
-    if (!data) return [];
-    if (!versionMismatch) return data.alerts;
-    return [{
-      id: "version-mismatch", severity: "danger", title: "画面とAPIのバージョンが一致していません",
-      detail: `画面 ${__WASA_BUILD_VERSION__} / API ${data.system.codeVersion}。Cloud Runの再デプロイを確認してください。`, tab: "overview",
-    }, ...data.alerts];
-  }, [data, versionMismatch]);
+  const outcomeOptions = useMemo<SelectOption[]>(() => [
+    { value: "all", label: "すべて" },
+    ...usageOutcomes.map((outcome) => ({ value: outcome, label: outcomeLabels[outcome] ?? outcome })),
+  ], [usageOutcomes]);
+  const actionOptions = useMemo<SelectOption[]>(() => [
+    { value: "all", label: "すべて" },
+    ...auditActions.map((action) => ({ value: action, label: auditLabels[action] ?? action })),
+  ], [auditActions]);
+
+  if (!data && loading) {
+    return (
+      <div className="center app-loading admin-initial-loading" role="status" aria-label="管理者情報を確認しています">
+        <img src="/assets/wasa-chat-logo-photo-trimmed.png" alt="WASA Chat" className="loading-wordmark" />
+        <span className="spinner" aria-hidden="true" />
+        <span className="muted">管理者情報を確認しています…</span>
+      </div>
+    );
+  }
 
   return (
     <div className="admin-shell">
@@ -308,7 +341,7 @@ export function AdminPage({ username, onBack, onLogout }: Props) {
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6" /></svg>
           </button>
           <img src="/assets/wasa-chat-logo-photo-trimmed.png" alt="WASA Chat" className="admin-logo" />
-          <span className="admin-mode-label">管理</span>
+          <span className="admin-mode-label">管理画面</span>
         </div>
         <div className="header-actions" ref={headerMenus}>
           <button type="button" className="header-icon admin-refresh" onClick={() => void refresh()} disabled={loading} aria-label="管理情報を再読み込み" title="再読み込み">
@@ -341,8 +374,6 @@ export function AdminPage({ username, onBack, onLogout }: Props) {
         </div>
       </header>
 
-      {!data && loading && <p className="admin-loading" role="status">管理情報を読み込んでいます…</p>}
-
       {data && (
         <main className="admin-main">
           <div className="admin-tabs" role="tablist" aria-label="管理メニュー">
@@ -360,25 +391,6 @@ export function AdminPage({ username, onBack, onLogout }: Props) {
 
           {activeTab === "overview" && (
             <>
-              <section aria-labelledby="admin-alerts-title">
-                <div className="admin-section-head">
-                  <div><h3 id="admin-alerts-title">要対応</h3><p>確認や作業が必要な項目を優先順に表示します。</p></div>
-                  <span className={`admin-pill ${alerts.length > 0 ? "has-alert" : ""}`}>{alerts.length}件</span>
-                </div>
-                {alerts.length === 0 ? (
-                  <div className="admin-all-clear"><span aria-hidden="true">✓</span><div><strong>現在、対応が必要な項目はありません</strong><small>資料、API、実行状態に既知の問題はありません。</small></div></div>
-                ) : (
-                  <div className="admin-alert-list">
-                    {alerts.map((alert) => (
-                      <button key={alert.id} type="button" className={`admin-alert severity-${alert.severity}`} onClick={() => setActiveTab(alert.tab)}>
-                        <span className="admin-alert-mark" aria-hidden="true">{alert.severity === "danger" ? "!" : alert.severity === "warning" ? "!" : "i"}</span>
-                        <span><strong>{alert.title}</strong><small>{alert.detail}</small></span>
-                        <span aria-hidden="true">›</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </section>
               <section aria-labelledby="admin-summary-title">
                 <div className="admin-section-head">
                   <div><h3 id="admin-summary-title">今日の状態</h3><p>最終取得: {formatDateTime(data.generatedAt)}</p></div>
@@ -390,56 +402,40 @@ export function AdminPage({ username, onBack, onLogout }: Props) {
                 </div>
               </section>
               <section aria-labelledby="admin-version-title">
-                <div className="admin-section-head"><div><h3 id="admin-version-title">本番バージョン</h3><p>画面・API・索引が意図した版へ切り替わったか確認します。</p></div><span className={`admin-pill ${versionMismatch ? "has-alert" : ""}`}>{versionMismatch ? "不一致" : "一致"}</span></div>
+                <div className="admin-section-head"><div><h3 id="admin-version-title">本番バージョン</h3><p>画面・API・索引が意図したバージョンへ切り替わったか確認します。</p></div><span className="admin-pill">{versionMismatch ? "不一致" : "一致"}</span></div>
                 <div className="admin-version-grid">
                   <article><span>画面</span><strong>{__WASA_BUILD_VERSION__}</strong><small>Cloudflare Pages</small></article>
                   <article><span>API</span><strong>{data.system.codeVersion || "不明"}</strong><small>{data.system.revision || "リビジョン不明"}</small></article>
                   <article><span>索引</span><strong>{data.system.indexVersion || "不明"}</strong><small>{data.system.indexPublishedAt ? `${formatDateTime(data.system.indexPublishedAt)}公開` : "公開日時不明"}</small></article>
                 </div>
               </section>
-              <details className="admin-system">
-                <summary>障害調査用の実行情報</summary>
+              <section className="admin-system" aria-labelledby="admin-system-title">
+                <div className="admin-section-head"><div><h3 id="admin-system-title">障害調査用の実行情報</h3><p>問い合わせ時に確認する情報です。</p></div></div>
                 <dl><div><dt>LLM</dt><dd>{data.system.llm || "未設定"}</dd></div><div><dt>保存先</dt><dd>{data.system.store || "不明"}</dd></div><div><dt>索引読込元</dt><dd>{data.system.indexSource || "不明"}</dd></div><div><dt>API起動</dt><dd>{formatDateTime(data.system.startedAt)}</dd></div></dl>
-              </details>
+              </section>
             </>
           )}
 
           {activeTab === "sources" && (
             <>
-              <section aria-labelledby="admin-progress-title">
-                <div className="admin-section-head">
-                  <div><h3 id="admin-progress-title">更新作業の進捗</h3><p>公開元の確認から、本番索引の反映確認までを追跡します。</p></div>
-                  <span className={`admin-pill progress-${data.updateProgress.stage}`}>{progressLabel(data.updateProgress.stage)}</span>
-                </div>
-                <div className="admin-progress" data-stage={data.updateProgress.stage}>
-                  <article className={data.updateProgress.checkedAt ? "complete" : "active"}><span>1</span><div><strong>公開元を確認</strong><small>{data.updateProgress.checkedAt ? formatDateTime(data.updateProgress.checkedAt) : "未確認"}</small></div></article>
-                  <i aria-hidden="true" />
-                  <article className={data.updateProgress.stage === "changes_detected" ? "active" : data.updateProgress.stage === "verify_needed" || data.updateProgress.stage === "current" ? "complete" : ""}><span>2</span><div><strong>再構築・差分確認</strong><small>{data.updateProgress.stage === "changes_detected" ? "手元で作業してください" : data.updateProgress.stage === "current" ? "変更なし" : data.updateProgress.stage === "verify_needed" ? "本番反映から確認" : "変更検出後に実施"}</small></div></article>
-                  <i aria-hidden="true" />
-                  <article className={data.updateProgress.stage === "verify_needed" || data.updateProgress.stage === "current" ? "complete" : ""}><span>3</span><div><strong>本番へ反映</strong><small>{data.updateProgress.publishedAt ? formatDateTime(data.updateProgress.publishedAt) : "公開記録なし"}</small></div></article>
-                  <i aria-hidden="true" />
-                  <article className={data.updateProgress.stage === "current" ? "complete" : data.updateProgress.stage === "verify_needed" ? "active" : ""}><span>4</span><div><strong>反映後を再確認</strong><small>{data.updateProgress.stage === "current" ? "変更なしを確認済み" : data.updateProgress.stage === "verify_needed" ? "更新確認を実行してください" : "本番反映後に実施"}</small></div></article>
-                </div>
-                <p className="admin-progress-note">再構築と差分確認は保守者の手元で行うため、管理画面では本番公開日時をもとに完了を判定します。</p>
-              </section>
               <section aria-labelledby="admin-source-title">
                 <div className="admin-section-head">
-                  <div><h3 id="admin-source-title">更新確認</h3><p>現在の索引と公開元の改訂番号・更新日だけを比較します。</p></div>
+                  <div><h3 id="admin-source-title">資料の状態</h3><p>Wiki・公式サイトと現在の索引を比較します。</p></div>
                   <button type="button" className="admin-primary" onClick={() => void runSourceCheck()} disabled={checkingSources || !data.sourceCheck.available}>
                     {checkingSources ? "確認中…" : "更新を確認"}
                   </button>
                 </div>
                 <div className="admin-source-card">
-                  {!data.sourceCheck.available ? (
-                    <p className="admin-empty">更新確認用Wikiアカウントの設定後に利用できます。</p>
-                  ) : !lastCheck ? (
-                    <p className="admin-empty">まだ確認していません。</p>
-                  ) : (
-                    <>
-                      <div className={`admin-source-result ${lastCheck.changed ? "has-change" : "no-change"}`}>
-                        <strong>{lastCheck.changed ? `${changeCount(lastCheck)}件の変更があります` : "変更はありません"}</strong>
-                        <span>{formatDateTime(lastCheck.checkedAt)}・{lastCheck.checkedBy}</span>
-                      </div>
+                  <div className="admin-source-result">
+                    <div><strong>{progressLabel(data.updateProgress.stage)}</strong><small>{nextUpdateAction(data.updateProgress.stage)}</small></div>
+                    <span>{lastCheck ? `${formatDateTime(lastCheck.checkedAt)}・${lastCheck.checkedBy}` : "未確認"}</span>
+                  </div>
+                  <div className="admin-update-flow" aria-label="資料更新の流れ">
+                    {['公開元を確認', '再構築・差分確認', '本番へ反映', '反映後を再確認'].map((label, index) => <span key={label}><i>{index + 1}</i>{label}</span>)}
+                  </div>
+                  {lastCheck?.changed && (
+                    <details className="admin-source-details">
+                      <summary>{changeCount(lastCheck)}件の変更内訳</summary>
                       <div className="admin-source-deltas">
                         {lastCheck.deltas.map((delta) => {
                           const items = [
@@ -448,36 +444,32 @@ export function AdminPage({ username, onBack, onLogout }: Props) {
                             ...delta.removed.map((name) => `削除: ${name}`),
                           ];
                           return (
-                            <details key={delta.source} open={items.length > 0}>
-                              <summary>{sourceLabel(delta.source)}　追加 {delta.added.length}・更新 {delta.updated.length}・削除 {delta.removed.length}</summary>
+                            <div key={delta.source}>
+                              <strong>{sourceLabel(delta.source)}　追加 {delta.added.length}・更新 {delta.updated.length}・削除 {delta.removed.length}</strong>
                               {items.length > 0 ? <ul>{items.map((item) => <li key={item}>{item}</li>)}</ul> : <p>変更なし</p>}
-                            </details>
+                            </div>
                           );
                         })}
                       </div>
-                    </>
+                    </details>
                   )}
                 </div>
               </section>
 
               <section aria-labelledby="admin-publish-title">
                 <div className="admin-section-head">
-                  <div><h3 id="admin-publish-title">再構築と本番反映</h3><p>変更を回答へ取り込む作業です。</p></div>
-                  <span className="admin-pill">現在は手元で実行</span>
+                  <div><h3 id="admin-publish-title">反映手順</h3><p>変更が見つかった場合だけ行います。</p></div>
                 </div>
                 <div className="admin-publish-guide">
-                  <p><strong>この管理画面からは、まだ実行できません。</strong> 現在のAPIコンテナにはPythonがなく、実行権限も索引の読み取りに絞っています。誤編集を確認せず公開する事故を避けるため、自動反映もしません。</p>
-                  <ol>
-                    <li><span>1</span><div><strong>索引を再構築する</strong><code>python rebuild.py</code><small>Wiki・公式サイトを取得し直し、索引生成と検索検査を行います。</small></div></li>
-                    <li><span>2</span><div><strong>差分を人が確認する</strong><small>意図しない削除や誤編集が混ざっていないことを確認します。</small></div></li>
-                    <li><span>3</span><div><strong>本番へ反映する</strong><code>sh tools/publish-index.sh</code><small>Cloud Storageを差し替え、新しいCloud Runリビジョンへ切り替えます。</small></div></li>
-                  </ol>
-                  <div className="admin-publish-actions">
-                    <button type="button" className="admin-secondary" onClick={() => void copyPublishSteps()}>2つのコマンドをコピー</button>
-                  </div>
+                  <p>再構築と本番反映は、安全確認のため管理画面ではなく保守者の手元で行います。</p>
                   <details>
-                    <summary>将来、管理画面から実行するには</summary>
-                    <p>チャットAPIへ強い権限を足すのではなく、専用Cloud Run Jobで再構築して一旦ステージングへ保存し、結果を管理画面で確認したあとに別操作で公開する構成が必要です。ジョブの実行サービスアカウントだけにWiki読取・GCS書込権限を与えます。</p>
+                    <summary>手元での操作を見る</summary>
+                    <ol>
+                      <li><span>1</span><div><strong>再構築</strong><code>python rebuild.py</code></div></li>
+                      <li><span>2</span><div><strong>差分を確認</strong><small>意図しない削除や誤編集がないことを確認します。</small></div></li>
+                      <li><span>3</span><div><strong>本番反映</strong><code>sh tools/publish-index.sh</code></div></li>
+                    </ol>
+                    <button type="button" className="admin-secondary" onClick={() => void copyPublishSteps()}>コマンドをコピー</button>
                   </details>
                 </div>
               </section>
@@ -506,9 +498,7 @@ export function AdminPage({ username, onBack, onLogout }: Props) {
                   <div><h3 id="admin-users-title">利用者一覧</h3><p>WASA Chatへログインした全利用者です。一覧にいない人は、一度ログインすると追加されます。</p></div>
                   <div className="admin-user-tools">
                     <label><span className="sr-only">利用者名を検索</span><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="名前で検索" /></label>
-                    <label><span className="sr-only">利用者の並び順</span><select value={`${sortKey}:${sortDirection}`} onChange={(event) => changeSortSelect(event.target.value)}>
-                      <option value="thirtyDays:desc">30日利用が多い順</option><option value="sevenDays:desc">7日利用が多い順</option><option value="today:desc">今日の利用が多い順</option><option value="lastUsed:desc">最近利用した順</option><option value="username:asc">名前順</option>
-                    </select></label>
+                    <div className="admin-select-control"><SelectMenu label="利用者の並び順" value={`${sortKey}:${sortDirection}`} options={USER_SORT_OPTIONS} onChange={changeSortSelect} /></div>
                     <span className="admin-pill">{users.length} / {data.users.length}人</span>
                   </div>
                 </div>
@@ -541,7 +531,12 @@ export function AdminPage({ username, onBack, onLogout }: Props) {
 
           {activeTab === "quota" && (
             <section aria-labelledby="admin-quota-title">
-              <div className="admin-section-head"><div><h3 id="admin-quota-title">Gemini無料枠</h3><p>再試行を含む送信試行回数です。ほかのAPIキーからの利用は含みません。</p></div><span className="admin-pill">太平洋時間 {data.quota.day}</span></div>
+              <div className="admin-section-head"><div><h3 id="admin-quota-title">Gemini無料枠</h3><p>WASA ChatからGeminiへ送った、本日分のリクエストを確認します。</p></div><span className="admin-pill">太平洋時間 {data.quota.day}</span></div>
+              <div className="admin-quota-summary">
+                <article><span>本日のAPI送信</span><strong>{number.format(data.quota.totalRequests)}</strong><small>再試行を含む実測値</small></article>
+                <article><span>質問数の目安</span><strong>約{number.format(Math.floor(data.quota.totalRequests / 3))}</strong><small>質問1回につき通常約3回送信</small></article>
+                <article><span>リセット</span><strong>{formatDateTime(data.quota.resetAt)}</strong><small>Gemini無料枠の基準</small></article>
+              </div>
               <div className="admin-quota-list">
                 {data.quota.models.length === 0 && <p className="admin-empty">現在はGeminiを使用していません</p>}
                 {data.quota.models.map((model) => {
@@ -555,6 +550,7 @@ export function AdminPage({ username, onBack, onLogout }: Props) {
                   );
                 })}
               </div>
+              <p className="admin-footnote">この集計機能を本番へ反映した後の送信だけを記録します。反映前の質問は遡って加算されません。</p>
             </section>
           )}
 
@@ -564,9 +560,9 @@ export function AdminPage({ username, onBack, onLogout }: Props) {
                 <div className="admin-section-head admin-log-head"><div><h3 id="admin-events-title">利用ログ</h3><p>質問本文を含まない直近100件です。90日で削除します。</p></div><span className="admin-pill">{usageEvents.length} / {data.usageEvents.length}件</span></div>
                 <div className="admin-log-tools" aria-label="利用ログの絞り込み">
                   <label><span>検索</span><input type="search" value={usageLogSearch} onChange={(event) => setUsageLogSearch(event.target.value)} placeholder="利用者・アシスタント" /></label>
-                  <label><span>期間</span><select value={usageLogPeriod} onChange={(event) => setUsageLogPeriod(event.target.value)}><option value="1">24時間</option><option value="7">7日</option><option value="30">30日</option><option value="all">すべて</option></select></label>
-                  <label><span>結果</span><select value={usageLogOutcome} onChange={(event) => setUsageLogOutcome(event.target.value)}><option value="all">すべて</option>{usageOutcomes.map((outcome) => <option key={outcome} value={outcome}>{outcomeLabels[outcome] ?? outcome}</option>)}</select></label>
-                  <button type="button" onClick={() => { setUsageLogSearch(""); setUsageLogPeriod("7"); setUsageLogOutcome("all"); }}>絞り込みを解除</button>
+                  <div className="admin-filter-field"><span>期間</span><div className="admin-select-control"><SelectMenu label="利用ログの期間" value={usageLogPeriod} options={PERIOD_OPTIONS} onChange={setUsageLogPeriod} /></div></div>
+                  <div className="admin-filter-field"><span>結果</span><div className="admin-select-control"><SelectMenu label="利用ログの結果" value={usageLogOutcome} options={outcomeOptions} onChange={setUsageLogOutcome} /></div></div>
+                  <button type="button" className="admin-filter-reset" aria-label="利用ログの絞り込みを解除" title="絞り込みを解除" onClick={() => { setUsageLogSearch(""); setUsageLogPeriod("7"); setUsageLogOutcome("all"); }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4v5h5M4.8 9A8 8 0 1 1 6 17.5" /></svg></button>
                 </div>
                 <div className="admin-table-wrap">
                   <table className="admin-table admin-log-table">
@@ -581,9 +577,9 @@ export function AdminPage({ username, onBack, onLogout }: Props) {
                 <div className="admin-section-head admin-log-head"><div><h3 id="admin-audits-title">管理者操作ログ</h3><p>管理者として行った操作を1年間保持します。</p></div><span className="admin-pill">{adminAudits.length} / {data.adminAudits.length}件</span></div>
                 <div className="admin-log-tools" aria-label="管理者操作ログの絞り込み">
                   <label><span>検索</span><input type="search" value={auditLogSearch} onChange={(event) => setAuditLogSearch(event.target.value)} placeholder="管理者・対象" /></label>
-                  <label><span>期間</span><select value={auditLogPeriod} onChange={(event) => setAuditLogPeriod(event.target.value)}><option value="1">24時間</option><option value="7">7日</option><option value="30">30日</option><option value="all">すべて</option></select></label>
-                  <label><span>操作</span><select value={auditLogAction} onChange={(event) => setAuditLogAction(event.target.value)}><option value="all">すべて</option>{auditActions.map((action) => <option key={action} value={action}>{auditLabels[action] ?? action}</option>)}</select></label>
-                  <button type="button" onClick={() => { setAuditLogSearch(""); setAuditLogPeriod("30"); setAuditLogAction("all"); }}>絞り込みを解除</button>
+                  <div className="admin-filter-field"><span>期間</span><div className="admin-select-control"><SelectMenu label="管理者操作ログの期間" value={auditLogPeriod} options={PERIOD_OPTIONS} onChange={setAuditLogPeriod} /></div></div>
+                  <div className="admin-filter-field"><span>操作</span><div className="admin-select-control"><SelectMenu label="管理者操作ログの操作" value={auditLogAction} options={actionOptions} onChange={setAuditLogAction} /></div></div>
+                  <button type="button" className="admin-filter-reset" aria-label="管理者操作ログの絞り込みを解除" title="絞り込みを解除" onClick={() => { setAuditLogSearch(""); setAuditLogPeriod("30"); setAuditLogAction("all"); }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4v5h5M4.8 9A8 8 0 1 1 6 17.5" /></svg></button>
                 </div>
                 <div className="admin-table-wrap">
                   <table className="admin-table admin-log-table">

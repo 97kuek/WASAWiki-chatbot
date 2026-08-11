@@ -126,14 +126,6 @@ export type AdminAudit = {
   occurredAt: string;
 };
 
-export type AdminAlert = {
-  id: string;
-  severity: "info" | "warning" | "danger";
-  title: string;
-  detail: string;
-  tab: "overview" | "sources" | "users" | "quota" | "logs";
-};
-
 export type AdminOverview = {
   generatedAt: string;
   system: {
@@ -160,7 +152,6 @@ export type AdminOverview = {
     publishedAt?: string;
     changes: number;
   };
-  alerts: AdminAlert[];
   quota: {
     day: string;
     resetAt: string;
