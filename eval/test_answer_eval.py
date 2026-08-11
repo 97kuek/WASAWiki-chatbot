@@ -61,6 +61,23 @@ class CitationDetectionTest(unittest.TestCase):
         got = strip_citations(f"結論です。\n\n{CITATION_NOW}\n{CITATION_OLD}")
         self.assertEqual(got, "結論です。")
 
+    def test_strip_removes_inline_source_numbers(self) -> None:
+        """本文中の資料番号も主張ではない（測定器の欠陥・5回目）。
+
+        Judgeへ `[1]` が付いたまま渡ると、「初めて出られなかった代は
+        1993年（9代）です [1]」のような**正しい文をそのまま
+        unsupported_claim へ引用**してくる。2026-08-11に確認した。
+        """
+        self.assertEqual(strip_citations("結論です [1]。"), "結論です。")
+        self.assertEqual(strip_citations("複数の根拠があります [1][3]。"), "複数の根拠があります。")
+        self.assertEqual(
+            strip_citations(f"結論です [2]。\n\n{CITATION_NOW}"), "結論です。"
+        )
+
+    def test_strip_keeps_ordinary_brackets(self) -> None:
+        """3桁以上の数字は資料番号ではない。年や型番を巻き込まない。"""
+        self.assertEqual(strip_citations("記録[1984]を参照"), "記録[1984]を参照")
+
 
 class GeneralKnowledgeTest(unittest.TestCase):
     """一般知識の節。2026-08-09にアシスタントでも許可したため、

@@ -64,9 +64,23 @@ def strip_general_knowledge(text: str) -> str:
     return text[: m.start()].strip() if m else text
 
 
+# 本文に差し込まれた資料番号。`[1]` や `[1][3]` の形で文末に付く。
+CITATION_MARK = re.compile(r"\s*(?:\[\d{1,2}\])+")
+
+
 def strip_citations(text: str) -> str:
-    """出典行を落とす。出典はメタデータであって、回答の主張ではない。"""
-    return CITATION_LINE.sub("", text).strip()
+    """出典行と資料番号を落とす。どちらもメタデータであって、回答の主張ではない。
+
+    ⚠️ **測定器の欠陥（5回目）。** 2026-08-11に本文中の資料番号（`[1]`）を
+    足したとき、ここを直し忘れた。Judgeへ番号が付いたまま渡っており、
+    「初めて出られなかった代は1993年（9代）です [1]」のような**正しい文を
+    そのまま unsupported_claim へ引用**してくる。Faithfulnessが
+    32/33（M23）から31/35へ落ちて見えたのは、これが主因だった。
+
+    出典行を外す理由（M3）とまったく同じ理屈である。番号は「どの資料に
+    基づくか」を示すメタデータで、資料と突き合わせる対象の主張ではない。
+    """
+    return CITATION_MARK.sub("", CITATION_LINE.sub("", text)).strip()
 
 
 def body_only(text: str) -> str:
