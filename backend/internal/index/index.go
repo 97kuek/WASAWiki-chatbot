@@ -50,7 +50,10 @@ type Chunk struct {
 type Page struct {
 	// IDは文字列。Wikiのページは pageid だが、公式サイトのページは "s1" 形式で
 	// 数値ではない。出所が2つある以上、数値型には固定できない
-	ID         string   `json:"id"`
+	ID string `json:"id"`
+	// Revid はWikiの更新確認に使う。本文検索には不要だが、管理画面から
+	// 公開元だけを軽く照合するため、索引へ既に入っている値を保持する。
+	Revid      int      `json:"revid,omitempty"`
 	Title      string   `json:"title"`
 	Aliases    []string `json:"aliases"`
 	URL        string   `json:"url"`

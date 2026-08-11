@@ -17,6 +17,27 @@ type WaitInfo struct {
 	Until  time.Time
 }
 
+// APIAttempt は実際に上流へ送ったHTTPリクエスト。再試行も1件ずつ通知する。
+// 無料枠のRPDは質問数ではなくこの回数で減るため、管理画面の残量推定に使う。
+type APIAttempt struct {
+	At     time.Time
+	Model  string
+	Method string
+}
+
+type APIAttemptObserver func(context.Context, APIAttempt)
+
+// RuntimeStatus は管理画面へ公開してよい上流の状態だけを表す。
+// APIキーや応答本文は含めない。
+type RuntimeStatus struct {
+	State   string    `json:"state"` // available | rate_limited | daily_quota
+	RetryAt time.Time `json:"retryAt,omitempty"`
+}
+
+type RuntimeStatusProvider interface {
+	RuntimeStatus() RuntimeStatus
+}
+
 type retryError struct {
 	kind  error
 	until time.Time

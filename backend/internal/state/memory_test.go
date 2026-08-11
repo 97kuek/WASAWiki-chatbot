@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 )
 
 func TestMemoryUsageIsSharedByUserAndDay(t *testing.T) {
@@ -26,6 +27,60 @@ func TestMemoryUsageIsSharedByUserAndDay(t *testing.T) {
 	}
 	if remaining, _ := store.Remaining(ctx, "利用者", "2026-08-09", 3); remaining != 3 {
 		t.Fatalf("日付をまたいで回数が混ざった: remaining=%d", remaining)
+	}
+	if removed, err := store.PurgeDailyUsage(ctx, "利用者", "2026-08-09"); err != nil || removed != 1 {
+		t.Fatalf("期限切れの日次回数だけを消していない: removed=%d err=%v", removed, err)
+	}
+	if remaining, _ := store.Remaining(ctx, "利用者", "2026-08-08", 3); remaining != 3 {
+		t.Fatalf("削除した日の回数が残っている: remaining=%d", remaining)
+	}
+}
+
+func TestMemoryAdminDataKeepsNamesSeparateFromUsageAndExpires(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemory()
+	first := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	last := first.Add(24 * time.Hour)
+	if err := store.SaveUserProfile(ctx, "hmac-key", "42 Wasa Taro", first); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveUserProfile(ctx, "hmac-key", "42 Wasa Taro", last); err != nil {
+		t.Fatal(err)
+	}
+	profiles, _ := store.ListUserProfiles(ctx)
+	if len(profiles) != 1 || !profiles[0].FirstSeen.Equal(first) || !profiles[0].LastSeen.Equal(last) {
+		t.Fatalf("初回・最終利用を保てていない: %+v", profiles)
+	}
+	if removed, _ := store.PurgeUserProfiles(ctx, last); removed != 0 {
+		t.Fatal("保存期限の境界にあるプロフィールを消した")
+	}
+	if removed, _ := store.PurgeUserProfiles(ctx, last.Add(time.Second)); removed != 1 {
+		t.Fatalf("期限切れプロフィールを消していない: %d", removed)
+	}
+}
+
+func TestMemoryCountsActualAPIRequestsAndPurgesAuditLogs(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemory()
+	now := time.Now().UTC()
+	for range 3 {
+		if err := store.RecordAPIRequest(ctx, "2026-08-11", "gemini-test", now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	usage, _ := store.ListAPIUsage(ctx, "2026-08-11")
+	if len(usage) != 1 || usage[0].Requests != 3 {
+		t.Fatalf("実リクエストを数えられていない: %+v", usage)
+	}
+	_ = store.SaveUsageEvent(ctx, UsageEvent{ID: "old", OccurredAt: now.Add(-time.Hour)})
+	_ = store.SaveUsageEvent(ctx, UsageEvent{ID: "border", OccurredAt: now})
+	if removed, _ := store.PurgeUsageEvents(ctx, now); removed != 1 {
+		t.Fatalf("古い利用ログだけを消していない: %d", removed)
+	}
+	_ = store.SaveAdminAudit(ctx, AdminAudit{ID: "old", OccurredAt: now.Add(-time.Hour)})
+	_ = store.SaveAdminAudit(ctx, AdminAudit{ID: "border", OccurredAt: now})
+	if removed, _ := store.PurgeAdminAudits(ctx, now); removed != 1 {
+		t.Fatalf("古い管理者ログだけを消していない: %d", removed)
 	}
 }
 

@@ -4,6 +4,7 @@ package state
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 type Source struct {
@@ -135,12 +136,106 @@ type Feedback struct {
 	SubmittedAt   string        `json:"submittedAt" firestore:"submitted_at"`
 }
 
+// UserProfile は管理画面で利用回数を実名と結び付けるための最小限の名簿。
+// 質問・回答は持たず、保存先のIDは従来どおり利用者名のHMAC値にする。
+type UserProfile struct {
+	Key       string    `json:"-" firestore:"-"`
+	Username  string    `json:"username" firestore:"username"`
+	FirstSeen time.Time `json:"firstSeen" firestore:"first_seen"`
+	LastSeen  time.Time `json:"lastSeen" firestore:"last_seen"`
+}
+
+// DailyUsage は既存の日次上限判定用ドキュメントを管理画面でも読むための形。
+type DailyUsage struct {
+	Day       string    `json:"day" firestore:"-"`
+	Used      int       `json:"used" firestore:"used"`
+	UpdatedAt time.Time `json:"updatedAt" firestore:"updated_at"`
+}
+
+// UsageEvent は質問本文を含まない利用監査ログ。回答の中身ではなく、
+// 成否・待ち時間・利用した機能を調べるために90日だけ保持する。
+type UsageEvent struct {
+	ID            string    `json:"id" firestore:"id"`
+	UserKey       string    `json:"-" firestore:"user_key"`
+	OccurredAt    time.Time `json:"occurredAt" firestore:"occurred_at"`
+	Outcome       string    `json:"outcome" firestore:"outcome"`
+	ResponseMode  string    `json:"responseMode,omitempty" firestore:"response_mode,omitempty"`
+	ResolvedMode  string    `json:"resolvedMode,omitempty" firestore:"resolved_mode,omitempty"`
+	AssistantID   string    `json:"assistantId,omitempty" firestore:"assistant_id,omitempty"`
+	HasAttachment bool      `json:"hasAttachment,omitempty" firestore:"has_attachment,omitempty"`
+	DurationMS    int64     `json:"durationMs" firestore:"duration_ms"`
+}
+
+// AdminAudit は実名一覧など、通常利用者には見えない情報へ管理者が
+// アクセスした事実を残す。質問本文や秘密値は記録しない。
+type AdminAudit struct {
+	ID         string    `json:"id" firestore:"id"`
+	Actor      string    `json:"actor" firestore:"actor"`
+	Action     string    `json:"action" firestore:"action"`
+	Target     string    `json:"target,omitempty" firestore:"target,omitempty"`
+	OccurredAt time.Time `json:"occurredAt" firestore:"occurred_at"`
+}
+
+// AdminRole は主管理者が画面から付与した共同管理者権限。
+// 主管理者は環境変数ADMIN_USERSを復旧口として扱うため、ここには保存しない。
+type AdminRole struct {
+	Key       string    `json:"-" firestore:"-"`
+	Username  string    `json:"username" firestore:"username"`
+	Role      string    `json:"role" firestore:"role"`
+	GrantedBy string    `json:"grantedBy" firestore:"granted_by"`
+	GrantedAt time.Time `json:"grantedAt" firestore:"granted_at"`
+}
+
+// SourceDelta は、現在の索引と公開元のメタデータを比べた結果。
+// Added等には本文を入れず、管理者が確認先を判断できるページ名だけを残す。
+type SourceDelta struct {
+	Source  string   `json:"source" firestore:"source"`
+	Added   []string `json:"added" firestore:"added"`
+	Updated []string `json:"updated" firestore:"updated"`
+	Removed []string `json:"removed" firestore:"removed"`
+}
+
+type SourceCheck struct {
+	CheckedAt time.Time     `json:"checkedAt" firestore:"checked_at"`
+	CheckedBy string        `json:"checkedBy" firestore:"checked_by"`
+	Changed   bool          `json:"changed" firestore:"changed"`
+	Deltas    []SourceDelta `json:"deltas" firestore:"deltas"`
+}
+
+// APIUsage はGeminiの日次RPDを推定するための、実HTTP送信回数。
+// 質問1回は通常3送信で、再試行も枠を消費するため質問数とは分けて数える。
+type APIUsage struct {
+	Day       string    `json:"day" firestore:"day"`
+	Model     string    `json:"model" firestore:"model"`
+	Requests  int       `json:"requests" firestore:"requests"`
+	UpdatedAt time.Time `json:"updatedAt" firestore:"updated_at"`
+}
+
 // Storeの利用者キーには、利用者名そのものではなくサーバー側でHMAC化した値を渡す。
 // ただしアシスタントは全員で共有するため、利用者ごとの区別を持たない。
 type Store interface {
 	Remaining(context.Context, string, string, int) (int, error)
 	Take(context.Context, string, string, int) (bool, error)
 	Refund(context.Context, string, string) error
+	SaveUserProfile(context.Context, string, string, time.Time) error
+	ListUserProfiles(context.Context) ([]UserProfile, error)
+	ListDailyUsage(context.Context, string, string) ([]DailyUsage, error)
+	PurgeDailyUsage(context.Context, string, string) (int, error)
+	PurgeUserProfiles(context.Context, time.Time) (int, error)
+	SaveUsageEvent(context.Context, UsageEvent) error
+	ListUsageEvents(context.Context, int) ([]UsageEvent, error)
+	PurgeUsageEvents(context.Context, time.Time) (int, error)
+	SaveAdminAudit(context.Context, AdminAudit) error
+	ListAdminAudits(context.Context, int) ([]AdminAudit, error)
+	PurgeAdminAudits(context.Context, time.Time) (int, error)
+	GetAdminRole(context.Context, string) (AdminRole, bool, error)
+	ListAdminRoles(context.Context) ([]AdminRole, error)
+	SaveAdminRole(context.Context, string, AdminRole) error
+	DeleteAdminRole(context.Context, string) error
+	LatestSourceCheck(context.Context) (SourceCheck, bool, error)
+	SaveSourceCheck(context.Context, SourceCheck) error
+	RecordAPIRequest(context.Context, string, string, time.Time) error
+	ListAPIUsage(context.Context, string) ([]APIUsage, error)
 	ListChats(context.Context, string, int) ([]Chat, error)
 	SaveChat(context.Context, string, Chat, int) error
 	DeleteChat(context.Context, string, string) error

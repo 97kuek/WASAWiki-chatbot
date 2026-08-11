@@ -37,6 +37,10 @@ import {
 // KaTeXは初期JSの大半を占めるが、回答が表示されるまでは不要である。
 // 質問送信時に先読みし、ログイン画面の初期表示と回答開始時の待ち時間を両立する。
 const loadMarkdownModule = () => import("./markdown");
+const AdminPage = lazy(async () => {
+  const module = await import("./AdminPage");
+  return { default: module.AdminPage };
+});
 
 const CHUNK_RELOAD_KEY = "wasa-chat-chunk-reload";
 
@@ -204,6 +208,7 @@ function Spinner() {
 export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [username, setUsername] = useState("");
+	const [isAdmin, setIsAdmin] = useState(false);
   const [remaining, setRemaining] = useState(0);
   const [form, setForm] = useState({ username: "", password: "" });
   const [showPassword, setShowPassword] = useState(false);
@@ -247,7 +252,9 @@ export default function App() {
   const [assistantId, setAssistantId] = useState(() => readStored("local", ASSISTANT_KEY) ?? "");
   // チャット画面とアシスタント一覧を切り替える。モーダルではなく画面ごと
   // 差し替えるのは、一覧が「選ぶ場所」であって会話の付随物ではないため
-  const [view, setView] = useState<"chat" | "assistants">("chat");
+  const [view, setView] = useState<"chat" | "assistants" | "admin">(
+    () => location.pathname === "/admin" ? "admin" : "chat",
+  );
   // 一覧の中で作成／編集フォームを開いているか。editing にIDが入れば編集
   const [assistantForm, setAssistantForm] = useState<{ editing: string | null } | null>(null);
   const [assistantDraft, setAssistantDraft] = useState<AssistantDraft>(emptyDraft);
@@ -335,12 +342,26 @@ export default function App() {
       setAuthed(current.authenticated);
       setUsername(current.username);
       setRemaining(current.remaining);
+		setIsAdmin(current.admin);
+		if (location.pathname === "/admin" && !current.admin) {
+			history.replaceState(null, "", "/");
+			setView("chat");
+		}
       if (current.authenticated) {
         void restoreHistory();
         void refreshAssistants();
       }
     });
   }, []);
+
+	useEffect(() => {
+		const followPath = () => {
+			if (location.pathname === "/admin" && isAdmin) setView("admin");
+			else if (view === "admin") setView("chat");
+		};
+		window.addEventListener("popstate", followPath);
+		return () => window.removeEventListener("popstate", followPath);
+	}, [isAdmin, view]);
 
   useEffect(() => {
     fetch("/announcements.json")
@@ -489,6 +510,11 @@ export default function App() {
     setAuthed(true);
     setUsername(current.username);
     setRemaining(current.remaining);
+		setIsAdmin(current.admin);
+		if (location.pathname === "/admin" && !current.admin) {
+			history.replaceState(null, "", "/");
+			setView("chat");
+		}
     void restoreHistory();
     void refreshAssistants();
   }
@@ -502,10 +528,24 @@ export default function App() {
     await logout();
     setAuthed(false);
     setUsername("");
+		setIsAdmin(false);
+		history.replaceState(null, "", "/");
+		setView("chat");
     syncedChats.current.clear();
     setChats([]);
     setActiveChatId(null);
   }
+
+	function openAdmin() {
+		setProfileOpen(false);
+		history.pushState(null, "", "/admin");
+		setView("admin");
+	}
+
+	function closeAdmin() {
+		history.pushState(null, "", "/");
+		setView("chat");
+	}
 
   function handleNoticeToggle() {
     const opening = !noticeOpen;
@@ -1183,6 +1223,10 @@ export default function App() {
     );
   }
 
+	if (view === "admin" && isAdmin) {
+		return <Suspense fallback={<div className="admin-loading" role="status">管理画面を読み込んでいます…</div>}><AdminPage username={username} onBack={closeAdmin} /></Suspense>;
+	}
+
   return (
     <div className={`app-shell ${sidebarOpen ? "" : "sidebar-collapsed"}`}>
       <aside className="history-panel" aria-label="チャット履歴" aria-hidden={!sidebarOpen}>
@@ -1414,6 +1458,7 @@ export default function App() {
                   </div>
                   <a href={WIKI_URL} target="_blank" rel="noreferrer noopener">WASA Wikiを開く</a>
                   <a href={SUPPORT_URL} target="_blank" rel="noreferrer noopener">ヘルプとポリシー</a>
+									{isAdmin && <button type="button" onClick={openAdmin}>管理画面</button>}
                   <button type="button" onClick={handleLogout}>ログアウト</button>
                 </section>
               )}

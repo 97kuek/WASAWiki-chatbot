@@ -22,6 +22,7 @@ import (
 	"github.com/97kuek/wasa-chat/backend/internal/llm"
 	"github.com/97kuek/wasa-chat/backend/internal/pipeline"
 	"github.com/97kuek/wasa-chat/backend/internal/server"
+	"github.com/97kuek/wasa-chat/backend/internal/sourcecheck"
 	appstate "github.com/97kuek/wasa-chat/backend/internal/state"
 	"github.com/97kuek/wasa-chat/backend/internal/wiki"
 )
@@ -132,6 +133,14 @@ func geminiDataUseApproved() bool {
 		os.Getenv("GEMINI_FREE_TIER_APPROVED") == "true"
 }
 
+func pacificDay(at time.Time) string {
+	location, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		location = time.FixedZone("PST", -8*60*60)
+	}
+	return at.In(location).Format("2006-01-02")
+}
+
 func main() {
 	// リポジトリ直下の .env を読む。測定用のPython側と同じ設定を使えるようにするため。
 	// 既に環境変数が設定されていればそちらが優先される
@@ -152,6 +161,7 @@ func main() {
 		source, pages, chunks, len([]rune(ix.TOC)))
 
 	var client llm.Client
+	var geminiClient *llm.Gemini
 	provider := env("LLM_PROVIDER", "ollama")
 	switch provider {
 	case "claude":
@@ -176,12 +186,13 @@ func main() {
 			Standard: env("GEMINI_STANDARD_MODEL", baseModel),
 			Deep:     env("GEMINI_DEEP_MODEL", baseModel),
 		}
-		client = llm.NewGeminiProfiles(
+		geminiClient = llm.NewGeminiProfiles(
 			key,
 			models,
 			envSeconds("GEMINI_MIN_INTERVAL", 4),
 			envNonNegativeInt("GEMINI_MAX_RETRIES", 2),
 		)
+		client = geminiClient
 		log.Printf("Gemini回答モード: 高速=%s / 標準=%s / じっくり=%s", models.Fast, models.Standard, models.Deep)
 	case "compat", "grok", "groq", "openrouter", "mistral":
 		client = llm.NewCompat(os.Getenv("LLM_BASE_URL"), os.Getenv("LLM_API_KEY"), os.Getenv("LLM_MODEL"))
@@ -218,6 +229,7 @@ func main() {
 	}
 
 	sharedState := appstate.Store(appstate.NewMemory())
+	storeName := "メモリ（ローカル）"
 	if projectID := os.Getenv("FIRESTORE_PROJECT_ID"); projectID != "" {
 		firestoreState, err := appstate.NewFirestore(context.Background(), projectID)
 		if err != nil {
@@ -225,15 +237,27 @@ func main() {
 		}
 		defer firestoreState.Close()
 		sharedState = firestoreState
+		storeName = "Firestore"
 		log.Printf("共有状態: Firestore（project=%s）", projectID)
 	} else if os.Getenv("K_SERVICE") != "" {
 		log.Fatal("Cloud RunではFIRESTORE_PROJECT_IDが必須です")
 	} else {
 		log.Println("共有状態: メモリ（ローカル開発用。再起動で履歴と利用回数が消えます）")
 	}
+	if geminiClient != nil {
+		geminiClient.SetAttemptObserver(func(_ context.Context, attempt llm.APIAttempt) {
+			// 利用者の接続が切れても、すでにGeminiへ送った1回は無料枠から減る。
+			// 元リクエストのcontextから切り離し、短い上限だけ付けて確実に数える。
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := sharedState.RecordAPIRequest(ctx, pacificDay(attempt.At), attempt.Model, attempt.At); err != nil {
+				log.Printf("Gemini利用回数の記録に失敗: %v", err)
+			}
+		})
+	}
 
-	// 他人のアシスタントも消せる利用者。役割を作るのではなく、
-	// 明らかなゴミを片付けるための最小限の権限（docs/06-ルールベース.md）
+	// 管理画面と、他人のアシスタントを消す権限を持つ個人Wiki利用者。
+	// 共有管理者アカウントは監査と個別失効ができないため使わない。
 	admins := splitList(os.Getenv("ADMIN_USERS"))
 	if len(admins) == 0 {
 		log.Println("警告: ADMIN_USERS が未設定です。アシスタントは作成者本人しか削除できず、初期アシスタントも登録されません")
@@ -242,13 +266,33 @@ func main() {
 		log.Fatalf("初期アシスタントの登録に失敗: %v", err)
 	}
 
-	srv := server.New(server.Config{
+	serverConfig := server.Config{
 		SessionSecret: secret,
 		DailyLimit:    envInt("DAILY_LIMIT", 30),
+		APIDailyLimit: envInt("GEMINI_RPD_LIMIT", 500),
 		AllowOrigin:   allowOrigin,
 		SPADir:        os.Getenv("SPA_DIR"),
+		StoreName:     storeName,
+		IndexSource:   source,
+		Revision:      env("K_REVISION", "local"),
+		LLMName:       client.Name(),
 		AdminUsers:    admins,
-	}, ix, pipeline.New(ix, client), wiki.New(wikiAPI), sharedState)
+	}
+	updateChecker := sourcecheck.New(
+		ix, wikiAPI,
+		env("WIKI_UPDATE_USER", os.Getenv("WIKI_USER")),
+		env("WIKI_UPDATE_PASS", os.Getenv("WIKI_PASS")),
+	)
+	serverConfig.SourceCheckAvailable = updateChecker.Available()
+	if updateChecker.Available() {
+		serverConfig.SourceCheck = updateChecker.Check
+	} else {
+		log.Println("管理画面の更新確認は無効です（WIKI_UPDATE_USER / WIKI_UPDATE_PASSが未設定）")
+	}
+	if geminiClient != nil {
+		serverConfig.LLMStatus = geminiClient.RuntimeStatus
+	}
+	srv := server.New(serverConfig, ix, pipeline.New(ix, client), wiki.New(wikiAPI), sharedState)
 
 	addr := ":" + env("PORT", "8080") // Cloud Run は PORT を渡してくる
 	log.Printf("起動: http://localhost%s", addr)

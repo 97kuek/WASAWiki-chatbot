@@ -75,6 +75,94 @@ const base = import.meta.env.VITE_API_ORIGIN ?? "";
 
 export type Session = { authenticated: boolean; username: string; remaining: number; admin: boolean };
 
+export type AdminUserUsage = {
+  username: string;
+  today: number;
+  sevenDays: number;
+  thirtyDays: number;
+  lastUsed?: string;
+  limitReached: boolean;
+  role?: "owner" | "co_admin";
+};
+
+export type AdminRole = {
+  username: string;
+  role: "owner" | "co_admin";
+  grantedBy?: string;
+  grantedAt?: string;
+};
+
+export type SourceDelta = {
+  source: "wiki" | "site";
+  added: string[];
+  updated: string[];
+  removed: string[];
+};
+
+export type SourceCheckResult = {
+  checkedAt: string;
+  checkedBy: string;
+  changed: boolean;
+  deltas: SourceDelta[];
+};
+
+export type AdminUsageEvent = {
+  id: string;
+  username: string;
+  occurredAt: string;
+  outcome: string;
+  responseMode?: string;
+  resolvedMode?: string;
+  assistantId?: string;
+  hasAttachment?: boolean;
+  durationMs: number;
+};
+
+export type AdminAudit = {
+  id: string;
+  actor: string;
+  action: string;
+  target?: string;
+  occurredAt: string;
+};
+
+export type AdminOverview = {
+  generatedAt: string;
+  system: {
+    ok: boolean;
+    llm: string;
+    store: string;
+    indexSource: string;
+    revision: string;
+    startedAt: string;
+  };
+  currentAdmin: { username: string; role: "owner" | "co_admin" };
+  admins: AdminRole[];
+  sourceCheck: {
+    available: boolean;
+    hasResult: boolean;
+    last?: SourceCheckResult;
+  };
+  quota: {
+    day: string;
+    resetAt: string;
+    state: "available" | "rate_limited" | "daily_quota";
+    retryAt?: string;
+    totalRequests: number;
+    estimated: boolean;
+    models: { model: string; requests: number; limit: number; remaining: number }[];
+  };
+  summary: {
+    todayQuestions: number;
+    activeUsersToday: number;
+    knownUsers: number;
+    dailyLimit: number;
+  };
+  users: AdminUserUsage[];
+  usageEvents: AdminUsageEvent[];
+  adminAudits: AdminAudit[];
+};
+
 /**
  * Wikiのアカウントでログインする。
  *
@@ -102,6 +190,34 @@ export async function session(): Promise<Session> {
   const res = await fetch(`${base}/api/session`, { credentials: "include" });
   if (!res.ok) return { authenticated: false, username: "", remaining: 0, admin: false };
   return res.json();
+}
+
+export async function adminOverview(): Promise<AdminOverview> {
+  const res = await fetch(`${base}/api/admin/overview`, { credentials: "include" });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? "管理情報を読み込めませんでした");
+  return body as AdminOverview;
+}
+
+export async function setCoAdmin(username: string, enabled: boolean): Promise<void> {
+  const res = await fetch(`${base}/api/admin/roles`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, enabled }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? "管理者権限を変更できませんでした");
+}
+
+export async function checkSources(): Promise<SourceCheckResult> {
+  const res = await fetch(`${base}/api/admin/source-check`, {
+    method: "POST",
+    credentials: "include",
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? "更新を確認できませんでした");
+  return body as SourceCheckResult;
 }
 
 export type FeedbackReason =

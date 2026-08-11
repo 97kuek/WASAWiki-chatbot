@@ -3,24 +3,39 @@ package state
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
+	"time"
 )
 
 // Memoryはローカル開発と単体テスト用。Cloud RunではFirestoreを必須にする。
 type Memory struct {
-	mu         sync.Mutex
-	usage      map[string]int
-	chats      map[string]map[string]Chat
-	feedback   map[string]Feedback
-	assistants map[string]Assistant
+	mu          sync.Mutex
+	usage       map[string]int
+	usageAt     map[string]time.Time
+	profiles    map[string]UserProfile
+	usageEvents map[string]UsageEvent
+	adminAudits map[string]AdminAudit
+	adminRoles  map[string]AdminRole
+	sourceCheck *SourceCheck
+	apiUsage    map[string]APIUsage
+	chats       map[string]map[string]Chat
+	feedback    map[string]Feedback
+	assistants  map[string]Assistant
 }
 
 func NewMemory() *Memory {
 	return &Memory{
-		usage:      map[string]int{},
-		chats:      map[string]map[string]Chat{},
-		feedback:   map[string]Feedback{},
-		assistants: map[string]Assistant{},
+		usage:       map[string]int{},
+		usageAt:     map[string]time.Time{},
+		profiles:    map[string]UserProfile{},
+		usageEvents: map[string]UsageEvent{},
+		adminAudits: map[string]AdminAudit{},
+		adminRoles:  map[string]AdminRole{},
+		apiUsage:    map[string]APIUsage{},
+		chats:       map[string]map[string]Chat{},
+		feedback:    map[string]Feedback{},
+		assistants:  map[string]Assistant{},
 	}
 }
 
@@ -40,6 +55,7 @@ func (m *Memory) Take(_ context.Context, user, day string, limit int) (bool, err
 		return false, nil
 	}
 	m.usage[key]++
+	m.usageAt[key] = time.Now().UTC()
 	return true, nil
 }
 
@@ -49,8 +65,224 @@ func (m *Memory) Refund(_ context.Context, user, day string) error {
 	key := usageKey(user, day)
 	if m.usage[key] > 0 {
 		m.usage[key]--
+		m.usageAt[key] = time.Now().UTC()
 	}
 	return nil
+}
+
+func (m *Memory) SaveUserProfile(_ context.Context, key, username string, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	profile, exists := m.profiles[key]
+	if !exists {
+		profile = UserProfile{Key: key, FirstSeen: at}
+	}
+	profile.Username = username
+	profile.LastSeen = at
+	m.profiles[key] = profile
+	return nil
+}
+
+func (m *Memory) ListUserProfiles(_ context.Context) ([]UserProfile, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	list := make([]UserProfile, 0, len(m.profiles))
+	for _, profile := range m.profiles {
+		list = append(list, profile)
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].Username < list[j].Username })
+	return list, nil
+}
+
+func (m *Memory) ListDailyUsage(_ context.Context, user, since string) ([]DailyUsage, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	prefix := user + "\x00"
+	var list []DailyUsage
+	for key, used := range m.usage {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		day := strings.TrimPrefix(key, prefix)
+		if day >= since {
+			list = append(list, DailyUsage{Day: day, Used: used, UpdatedAt: m.usageAt[key]})
+		}
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].Day > list[j].Day })
+	return list, nil
+}
+
+func (m *Memory) PurgeDailyUsage(_ context.Context, user, before string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	prefix := user + "\x00"
+	removed := 0
+	for key := range m.usage {
+		if !strings.HasPrefix(key, prefix) || strings.TrimPrefix(key, prefix) >= before {
+			continue
+		}
+		delete(m.usage, key)
+		delete(m.usageAt, key)
+		removed++
+	}
+	return removed, nil
+}
+
+func (m *Memory) PurgeUserProfiles(_ context.Context, before time.Time) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	removed := 0
+	for key, profile := range m.profiles {
+		if profile.LastSeen.Before(before) {
+			delete(m.profiles, key)
+			removed++
+		}
+	}
+	return removed, nil
+}
+
+func (m *Memory) SaveUsageEvent(_ context.Context, event UsageEvent) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.usageEvents[event.ID] = event
+	return nil
+}
+
+func (m *Memory) ListUsageEvents(_ context.Context, limit int) ([]UsageEvent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	list := make([]UsageEvent, 0, len(m.usageEvents))
+	for _, event := range m.usageEvents {
+		list = append(list, event)
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].OccurredAt.After(list[j].OccurredAt) })
+	if limit > 0 && len(list) > limit {
+		list = list[:limit]
+	}
+	return list, nil
+}
+
+func (m *Memory) PurgeUsageEvents(_ context.Context, before time.Time) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	removed := 0
+	for id, event := range m.usageEvents {
+		if event.OccurredAt.Before(before) {
+			delete(m.usageEvents, id)
+			removed++
+		}
+	}
+	return removed, nil
+}
+
+func (m *Memory) SaveAdminAudit(_ context.Context, audit AdminAudit) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.adminAudits[audit.ID] = audit
+	return nil
+}
+
+func (m *Memory) ListAdminAudits(_ context.Context, limit int) ([]AdminAudit, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	list := make([]AdminAudit, 0, len(m.adminAudits))
+	for _, audit := range m.adminAudits {
+		list = append(list, audit)
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].OccurredAt.After(list[j].OccurredAt) })
+	if limit > 0 && len(list) > limit {
+		list = list[:limit]
+	}
+	return list, nil
+}
+
+func (m *Memory) PurgeAdminAudits(_ context.Context, before time.Time) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	removed := 0
+	for id, audit := range m.adminAudits {
+		if audit.OccurredAt.Before(before) {
+			delete(m.adminAudits, id)
+			removed++
+		}
+	}
+	return removed, nil
+}
+
+func (m *Memory) GetAdminRole(_ context.Context, key string) (AdminRole, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	role, ok := m.adminRoles[key]
+	return role, ok, nil
+}
+
+func (m *Memory) ListAdminRoles(_ context.Context) ([]AdminRole, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	list := make([]AdminRole, 0, len(m.adminRoles))
+	for key, role := range m.adminRoles {
+		role.Key = key
+		list = append(list, role)
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].Username < list[j].Username })
+	return list, nil
+}
+
+func (m *Memory) SaveAdminRole(_ context.Context, key string, role AdminRole) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	role.Key = key
+	m.adminRoles[key] = role
+	return nil
+}
+
+func (m *Memory) DeleteAdminRole(_ context.Context, key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.adminRoles, key)
+	return nil
+}
+
+func (m *Memory) LatestSourceCheck(_ context.Context) (SourceCheck, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.sourceCheck == nil {
+		return SourceCheck{}, false, nil
+	}
+	return *m.sourceCheck, true, nil
+}
+
+func (m *Memory) SaveSourceCheck(_ context.Context, check SourceCheck) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sourceCheck = &check
+	return nil
+}
+
+func (m *Memory) RecordAPIRequest(_ context.Context, day, model string, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := day + "\x00" + model
+	item := m.apiUsage[key]
+	item.Day = day
+	item.Model = model
+	item.Requests++
+	item.UpdatedAt = at
+	m.apiUsage[key] = item
+	return nil
+}
+
+func (m *Memory) ListAPIUsage(_ context.Context, day string) ([]APIUsage, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var list []APIUsage
+	for _, item := range m.apiUsage {
+		if item.Day == day {
+			list = append(list, item)
+		}
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].Model < list[j].Model })
+	return list, nil
 }
 
 func (m *Memory) ListChats(_ context.Context, user string, limit int) ([]Chat, error) {

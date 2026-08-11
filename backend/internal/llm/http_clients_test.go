@@ -26,7 +26,14 @@ func geminiHTTPResponse(status int, body string) *http.Response {
 
 func TestGeminiRetriesTemporaryFailure(t *testing.T) {
 	var calls atomic.Int32
+	var observed atomic.Int32
 	g := NewGemini("test-key", "test-model", 0, 1)
+	g.SetAttemptObserver(func(_ context.Context, attempt APIAttempt) {
+		if attempt.Model != "test-model" || attempt.Method != "generateContent" {
+			t.Errorf("送信通知の内容が不正: %+v", attempt)
+		}
+		observed.Add(1)
+	})
 	g.http = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		if calls.Add(1) == 1 {
 			resp := geminiHTTPResponse(http.StatusServiceUnavailable, `{}`)
@@ -40,6 +47,9 @@ func TestGeminiRetriesTemporaryFailure(t *testing.T) {
 	got, err := g.Complete(context.Background(), Request{MaxTokens: 10})
 	if err != nil || got != "再試行成功" || calls.Load() != 2 {
 		t.Fatalf("503後に1回だけ再試行できていない: got=%q calls=%d err=%v", got, calls.Load(), err)
+	}
+	if observed.Load() != 2 {
+		t.Fatalf("再試行を含む実送信回数を通知していない: %d", observed.Load())
 	}
 }
 
@@ -195,5 +205,9 @@ func TestGeminiDoesNotRetryDailyQuota(t *testing.T) {
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("回復しない日次上限を再試行した: calls=%d", calls.Load())
+	}
+	status := g.RuntimeStatus()
+	if status.State != "daily_quota" || status.RetryAt.IsZero() {
+		t.Fatalf("管理画面向けの日次上限状態が不正: %+v", status)
 	}
 }

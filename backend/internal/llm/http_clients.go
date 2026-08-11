@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	_ "time/tzdata"
 )
@@ -33,6 +34,8 @@ type Gemini struct {
 	blockedErr   error
 	minInterval  time.Duration
 	maxRetries   int
+	statusMu     sync.RWMutex
+	observer     APIAttemptObserver
 }
 
 const geminiBase = "https://generativelanguage.googleapis.com/v1beta"
@@ -99,6 +102,52 @@ func (g *Gemini) acquire(ctx context.Context, onWait func(WaitInfo)) error {
 func (g *Gemini) release() { <-g.requestSlot }
 
 func (g *Gemini) Name() string { return "gemini/" + g.model }
+
+// SetAttemptObserver は起動時に1度だけ設定する。秘密値を渡さず、
+// モデル名・方式・送信時刻だけで無料枠の消費を数える。
+func (g *Gemini) SetAttemptObserver(observer APIAttemptObserver) {
+	g.statusMu.Lock()
+	g.observer = observer
+	g.statusMu.Unlock()
+}
+
+func (g *Gemini) blocked() (time.Time, error) {
+	g.statusMu.RLock()
+	defer g.statusMu.RUnlock()
+	return g.blockedUntil, g.blockedErr
+}
+
+func (g *Gemini) setBlocked(until time.Time, err error) {
+	g.statusMu.Lock()
+	g.blockedUntil = until
+	g.blockedErr = err
+	g.statusMu.Unlock()
+}
+
+func (g *Gemini) clearBlocked() {
+	g.setBlocked(time.Time{}, nil)
+}
+
+func (g *Gemini) observeAttempt(ctx context.Context, attempt APIAttempt) {
+	g.statusMu.RLock()
+	observer := g.observer
+	g.statusMu.RUnlock()
+	if observer != nil {
+		observer(ctx, attempt)
+	}
+}
+
+func (g *Gemini) RuntimeStatus() RuntimeStatus {
+	until, kind := g.blocked()
+	if until.IsZero() || !time.Now().Before(until) {
+		return RuntimeStatus{State: "available"}
+	}
+	state := "rate_limited"
+	if kind == ErrDailyQuota {
+		state = "daily_quota"
+	}
+	return RuntimeStatus{State: state, RetryAt: until}
+}
 
 func (g *Gemini) modelFor(profile Profile) string {
 	if model := g.models[profile]; model != "" {
@@ -318,15 +367,14 @@ func (g *Gemini) waitRequest(ctx context.Context, retryWait time.Duration, onWai
 }
 
 func (g *Gemini) do(ctx context.Context, model, method string, body map[string]any, onWait func(WaitInfo)) (*http.Response, error) {
-	if time.Now().Before(g.blockedUntil) {
-		blockedErr := g.blockedErr
+	blockedUntil, blockedErr := g.blocked()
+	if time.Now().Before(blockedUntil) {
 		if blockedErr == nil {
 			blockedErr = ErrRateLimited
 		}
-		return nil, fmt.Errorf("%w: Geminiの再試行待機中", withRetryAt(blockedErr, g.blockedUntil))
+		return nil, fmt.Errorf("%w: Geminiの再試行待機中", withRetryAt(blockedErr, blockedUntil))
 	}
-	g.blockedUntil = time.Time{}
-	g.blockedErr = nil
+	g.clearBlocked()
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
@@ -350,6 +398,7 @@ func (g *Gemini) do(ctx context.Context, model, method string, body map[string]a
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("x-goog-api-key", g.key)
+		g.observeAttempt(ctx, APIAttempt{At: time.Now().UTC(), Model: model, Method: method})
 		resp, err := g.http.Do(req)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -362,8 +411,7 @@ func (g *Gemini) do(ctx context.Context, model, method string, body map[string]a
 			return nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
 		}
 		if resp.StatusCode == http.StatusOK {
-			g.blockedUntil = time.Time{}
-			g.blockedErr = nil
+			g.clearBlocked()
 			return resp, nil
 		}
 
@@ -372,9 +420,9 @@ func (g *Gemini) do(ctx context.Context, model, method string, body map[string]a
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
 			if resp.StatusCode == http.StatusTooManyRequests && isDailyQuota(detail) {
 				// 日次上限は短時間待っても回復しないため、再試行せず太平洋時間0時まで止める。
-				g.blockedUntil = time.Now().Add(untilPacificMidnight(time.Now()))
-				g.blockedErr = ErrDailyQuota
-				return nil, fmt.Errorf("%w: gemini が %s を返した", withRetryAt(ErrDailyQuota, g.blockedUntil), resp.Status)
+				blockedUntil = time.Now().Add(untilPacificMidnight(time.Now()))
+				g.setBlocked(blockedUntil, ErrDailyQuota)
+				return nil, fmt.Errorf("%w: gemini が %s を返した", withRetryAt(ErrDailyQuota, blockedUntil), resp.Status)
 			}
 			if attempt < g.maxRetries {
 				wait = clampDuration(
@@ -387,9 +435,9 @@ func (g *Gemini) do(ctx context.Context, model, method string, body map[string]a
 			if resp.StatusCode == http.StatusTooManyRequests {
 				// 短時間の上限は1〜15分だけ回路を開き、全利用者からの無駄な再送を止める。
 				cooldown := clampDuration(retryDelay(resp, detail, time.Minute), time.Minute, 15*time.Minute)
-				g.blockedUntil = time.Now().Add(cooldown)
-				g.blockedErr = ErrRateLimited
-				return nil, fmt.Errorf("%w: gemini が %s を返した", withRetryAt(ErrRateLimited, g.blockedUntil), resp.Status)
+				blockedUntil = time.Now().Add(cooldown)
+				g.setBlocked(blockedUntil, ErrRateLimited)
+				return nil, fmt.Errorf("%w: gemini が %s を返した", withRetryAt(ErrRateLimited, blockedUntil), resp.Status)
 			}
 			return nil, fmt.Errorf("%w: gemini が %s を返した", ErrUnavailable, resp.Status)
 		}

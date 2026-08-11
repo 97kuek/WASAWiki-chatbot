@@ -47,18 +47,17 @@ func TestValidate(t *testing.T) {
 
 func TestCanEdit(t *testing.T) {
 	item := state.Assistant{Author: "41 Hanako"}
-	admins := []string{"42 Wasa Taro"}
 
-	if !CanEdit(item, "41 Hanako", admins) {
+	if !CanEdit(item, "41 Hanako", false) {
 		t.Error("作成者本人が削除できない")
 	}
-	if !CanEdit(item, "42 Wasa Taro", admins) {
+	if !CanEdit(item, "42 Wasa Taro", true) {
 		t.Error("管理者が削除できない")
 	}
-	if CanEdit(item, "43 Taro", admins) {
+	if CanEdit(item, "43 Taro", false) {
 		t.Error("第三者が削除できてしまう")
 	}
-	if CanEdit(item, "", nil) {
+	if CanEdit(item, "", false) {
 		t.Error("利用者名が空で削除できてしまう")
 	}
 }
@@ -92,7 +91,7 @@ func TestPromptSectionEmptyWhenUnset(t *testing.T) {
 // 限ること**と、**どちらの根拠かを見出しで分けさせること**である。
 func TestSystemGuardSeparatesGenericKnowledgeInBothModes(t *testing.T) {
 	for name, guard := range map[string]string{
-		"汎用":      SystemGuard(nil),
+		"汎用":     SystemGuard(nil),
 		"アシスタント": SystemGuard(&state.Assistant{Name: "設計（空力・構造）"}),
 	} {
 		if !strings.Contains(guard, "一般知識（WASA資料外）") {

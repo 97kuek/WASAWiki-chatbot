@@ -95,7 +95,7 @@
           <mxGeometry x="630" y="725" width="200" height="70" as="geometry" />
         </mxCell>
 
-        <mxCell id="note2" value="&lt;b&gt;check_updates.py&lt;/b&gt; が週1回（毎週月曜）、公開元が変わったかだけを見る。&lt;br&gt;&lt;b&gt;変わった週だけ通知が出る。&lt;/b&gt; 取り込むかどうかは人が決める。" style="rounded=0;whiteSpace=wrap;html=1;dashed=1;fillColor=none;strokeColor=#999999;fontSize=11;align=left;verticalAlign=top;spacing=8;fontColor=#555555;" vertex="1" parent="1">
+        <mxCell id="note2" value="管理画面の&lt;b&gt;「更新を確認」&lt;/b&gt;で、Cloud Runが公開元の改訂番号・更新日だけを見る。&lt;br&gt;&lt;b&gt;変化があれば人が確認する。&lt;/b&gt; 再構築と反映は自動で行わない。" style="rounded=0;whiteSpace=wrap;html=1;dashed=1;fillColor=none;strokeColor=#999999;fontSize=11;align=left;verticalAlign=top;spacing=8;fontColor=#555555;" vertex="1" parent="1">
           <mxGeometry x="630" y="615" width="230" height="75" as="geometry" />
         </mxCell>
 

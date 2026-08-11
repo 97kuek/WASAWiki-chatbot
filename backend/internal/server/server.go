@@ -37,10 +37,19 @@ const (
 type Config struct {
 	SessionSecret string // Cookie署名用。未設定なら起動時に生成する
 	DailyLimit    int    // 利用者1人あたりの1日の質問数上限
+	APIDailyLimit int    // Geminiのモデル別RPD。実送信回数から残量を推定する
 	AllowOrigin   string // 開発時にViteのdev serverから叩くためのCORS設定
 	SPADir        string // 指定するとビルド済みSPAも同じサーバーから配る
-	// 他人のアシスタントも削除できるWiki利用者名。役割ではなく、
-	// 明らかなゴミを片付けるための最小限の権限（docs/06-ルールベース.md）
+	StoreName     string // 管理画面へ出す保存先名（秘密値は含めない）
+	IndexSource   string // 管理画面へ出す索引の読込元
+	Revision      string // Cloud RunのK_REVISION
+	LLMName       string // APIキーを含まないプロバイダ・モデル名
+	LLMStatus     func() llm.RuntimeStatus
+	// SourceCheck は現在の索引とWiki・公式サイトを読み取り専用で照合する。
+	SourceCheck          func(context.Context) ([]state.SourceDelta, error)
+	SourceCheckAvailable bool
+	// AdminUsersは画面から外せない主管理者。共同管理者はFirestoreへ保存する。
+	// 設定を復旧口に残し、画面操作だけで管理者がゼロになる事故を防ぐ。
 	AdminUsers []string
 }
 
@@ -58,15 +67,17 @@ func spaHandler(dir string) http.Handler {
 }
 
 type Server struct {
-	cfg   Config
-	ix    *index.Index
-	pipe  *pipeline.Pipeline
-	auth  *wiki.Authenticator
-	state state.Store
+	cfg       Config
+	ix        *index.Index
+	pipe      *pipeline.Pipeline
+	auth      *wiki.Authenticator
+	state     state.Store
+	startedAt time.Time
+	sourceMu  sync.Mutex
 }
 
 func New(cfg Config, ix *index.Index, pipe *pipeline.Pipeline, auth *wiki.Authenticator, shared state.Store) *Server {
-	return &Server{cfg: cfg, ix: ix, pipe: pipe, auth: auth, state: shared}
+	return &Server{cfg: cfg, ix: ix, pipe: pipe, auth: auth, state: shared, startedAt: time.Now().UTC()}
 }
 
 func (s *Server) Routes() http.Handler {
@@ -79,6 +90,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("PUT /api/chats/{id}", s.requireAuth(s.handleSaveChat))
 	mux.HandleFunc("DELETE /api/chats/{id}", s.requireAuth(s.handleDeleteChat))
 	mux.HandleFunc("POST /api/feedback", s.requireAuth(s.handleSaveFeedback))
+	mux.HandleFunc("GET /api/admin/overview", s.requireAdmin(s.handleAdminOverview))
+	mux.HandleFunc("POST /api/admin/roles", s.requireOwner(s.handleAdminRole))
+	mux.HandleFunc("POST /api/admin/source-check", s.requireAdmin(s.handleSourceCheck))
 	mux.HandleFunc("GET /api/assistants", s.requireAuth(s.handleListAssistants))
 	mux.HandleFunc("POST /api/assistants", s.requireAuth(s.handleCreateAssistant))
 	mux.HandleFunc("PUT /api/assistants/{id}", s.requireAuth(s.handleUpdateAssistant))
@@ -176,6 +190,15 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, status, map[string]string{"error": message})
 		return
 	}
+	// 実名と利用回数を管理画面で結び付けるための最小限のプロフィール。
+	// 質問・回答はここへ保存せず、失敗しても認証自体は妨げない。
+	now := time.Now().UTC()
+	if err := s.state.SaveUserProfile(r.Context(), s.userKey(user), user, now); err != nil {
+		log.Printf("利用者プロフィールの保存に失敗: %v", err)
+	}
+	if s.isAdmin(r.Context(), user) {
+		s.saveAdminAudit(r.Context(), user, "admin.login", "")
+	}
 
 	http.SetCookie(w, appCookie(
 		cookieName,
@@ -189,6 +212,11 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.currentUser(r)
 	remaining := 0
 	if ok {
+		// デプロイ前から有効なCookieを持つ利用者も、次に画面を開いた時点で
+		// 管理用プロフィールへ載せる。質問・回答はここへ保存しない。
+		if err := s.state.SaveUserProfile(r.Context(), s.userKey(user), user, time.Now().UTC()); err != nil {
+			log.Printf("利用者プロフィールの更新に失敗: %v", err)
+		}
 		var err error
 		remaining, err = s.state.Remaining(r.Context(), s.userKey(user), today(), s.cfg.DailyLimit)
 		if err != nil {
@@ -198,7 +226,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK,
-		map[string]any{"authenticated": ok, "username": user, "remaining": remaining, "admin": ok && s.isAdmin(user)})
+		map[string]any{"authenticated": ok, "username": user, "remaining": remaining, "admin": ok && s.isAdmin(r.Context(), user)})
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, _ *http.Request) {
@@ -224,13 +252,69 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func (s *Server) isAdmin(user string) bool {
+func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := s.currentUser(r)
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "ログインしてください"})
+			return
+		}
+		if !s.isAdmin(r.Context(), user) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "管理者だけが利用できます"})
+			return
+		}
+		next(w, r)
+	}
+}
+
+func (s *Server) isOwner(user string) bool {
 	for _, admin := range s.cfg.AdminUsers {
 		if user == admin {
 			return true
 		}
 	}
 	return false
+}
+
+func (s *Server) adminRole(ctx context.Context, user string) (string, error) {
+	if s.isOwner(user) {
+		return "owner", nil
+	}
+	role, ok, err := s.state.GetAdminRole(ctx, s.userKey(user))
+	if err != nil {
+		return "", err
+	}
+	if ok && role.Role == "co_admin" && role.Username == user {
+		return role.Role, nil
+	}
+	return "", nil
+}
+
+func (s *Server) isAdmin(ctx context.Context, user string) bool {
+	if user == "" {
+		return false
+	}
+	role, err := s.adminRole(ctx, user)
+	if err != nil {
+		log.Printf("管理者ロールの読み込みに失敗: %v", err)
+		return false
+	}
+	return role != ""
+}
+
+func (s *Server) requireOwner(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := s.currentUser(r)
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "ログインしてください"})
+			return
+		}
+		if !s.isOwner(user) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "主管理者だけが共同管理者を変更できます"})
+			return
+		}
+		next(w, r)
+	}
 }
 
 // ---------------------------------------------------------------- チャット履歴
@@ -561,13 +645,14 @@ type assistantView struct {
 	CanEdit bool `json:"canEdit"`
 }
 
-func (s *Server) assistantViews(list []state.Assistant, user string) []assistantView {
+func (s *Server) assistantViews(ctx context.Context, list []state.Assistant, user string) []assistantView {
+	isAdmin := s.isAdmin(ctx, user)
 	views := make([]assistantView, 0, len(list))
 	for _, item := range list {
 		views = append(views, assistantView{
 			Assistant: item,
 			Scope:     assistant.ScopeLabel(&item),
-			CanEdit:   assistant.CanEdit(item, user, s.cfg.AdminUsers),
+			CanEdit:   assistant.CanEdit(item, user, isAdmin),
 		})
 	}
 	return views
@@ -582,7 +667,7 @@ func (s *Server) handleListAssistants(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"assistants": s.assistantViews(list, user),
+		"assistants": s.assistantViews(r.Context(), list, user),
 		"teams":      assistant.Teams,
 	})
 }
@@ -629,7 +714,7 @@ func (s *Server) handleCreateAssistant(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "アシスタントを保存できませんでした"})
 		return
 	}
-	writeJSON(w, http.StatusCreated, s.assistantViews([]state.Assistant{body}, user)[0])
+	writeJSON(w, http.StatusCreated, s.assistantViews(r.Context(), []state.Assistant{body}, user)[0])
 }
 
 // handleUpdateAssistant は作成者本人（と管理者）だけの編集を受け付ける。
@@ -657,7 +742,7 @@ func (s *Server) handleUpdateAssistant(w http.ResponseWriter, r *http.Request) {
 		if current.ID != id {
 			continue
 		}
-		if !assistant.CanEdit(current, user, s.cfg.AdminUsers) {
+		if !assistant.CanEdit(current, user, s.isAdmin(r.Context(), user)) {
 			writeJSON(w, http.StatusForbidden,
 				map[string]string{"error": "作成者本人と管理者だけが編集できます"})
 			return
@@ -675,7 +760,7 @@ func (s *Server) handleUpdateAssistant(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "アシスタントを保存できませんでした"})
 			return
 		}
-		writeJSON(w, http.StatusOK, s.assistantViews([]state.Assistant{updated}, user)[0])
+		writeJSON(w, http.StatusOK, s.assistantViews(r.Context(), []state.Assistant{updated}, user)[0])
 		return
 	}
 	writeJSON(w, http.StatusNotFound, map[string]string{"error": "アシスタントが見つかりません"})
@@ -694,7 +779,7 @@ func (s *Server) handleDeleteAssistant(w http.ResponseWriter, r *http.Request) {
 		if item.ID != id {
 			continue
 		}
-		if !assistant.CanEdit(item, user, s.cfg.AdminUsers) {
+		if !assistant.CanEdit(item, user, s.isAdmin(r.Context(), user)) {
 			writeJSON(w, http.StatusForbidden,
 				map[string]string{"error": "作成者本人と管理者だけが削除できます"})
 			return
@@ -703,6 +788,9 @@ func (s *Server) handleDeleteAssistant(w http.ResponseWriter, r *http.Request) {
 			log.Printf("アシスタントの削除に失敗: %v", err)
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "アシスタントを削除できませんでした"})
 			return
+		}
+		if user != item.Author && s.isAdmin(r.Context(), user) {
+			s.saveAdminAudit(r.Context(), user, "assistant.delete", id)
 		}
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -829,6 +917,12 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !taken {
+		now := time.Now().UTC()
+		s.saveUsageEvent(state.UsageEvent{
+			ID: s.eventID("usage", userKey, now), UserKey: userKey, OccurredAt: now,
+			Outcome: "user_daily_limit", ResponseMode: string(responseMode),
+			AssistantID: body.AssistantID, HasAttachment: len(images) > 0,
+		})
 		writeJSON(w, http.StatusTooManyRequests,
 			map[string]string{
 				"error":    "本日の質問回数の上限に達しました。日本時間の0時以降にもう一度お試しください",
@@ -837,9 +931,20 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 			})
 		return
 	}
+	usageStarted := time.Now().UTC()
+	usageEvent := state.UsageEvent{
+		ID: s.eventID("usage", userKey, usageStarted), UserKey: userKey,
+		OccurredAt: usageStarted, Outcome: "success", ResponseMode: string(responseMode),
+		AssistantID: body.AssistantID, HasAttachment: len(images) > 0,
+	}
+	defer func() {
+		usageEvent.DurationMS = time.Since(usageStarted).Milliseconds()
+		s.saveUsageEvent(usageEvent)
+	}()
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
+		usageEvent.Outcome = "unavailable"
 		if err := s.refund(r.Context(), userKey, day); err != nil {
 			log.Printf("利用回数の返却に失敗: %v", err)
 		}
@@ -854,6 +959,9 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 
 	var mu sync.Mutex
 	emit := func(e pipeline.Event) {
+		if e.Type == "mode" {
+			usageEvent.ResolvedMode = e.Mode
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		payload, err := json.Marshal(e)
@@ -870,30 +978,38 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		code := ""
 		retryAt := ""
 		if errors.Is(err, llm.ErrDailyQuota) {
+			usageEvent.Outcome = "daily_quota"
 			if refundErr := s.refund(r.Context(), userKey, day); refundErr != nil {
 				log.Printf("利用回数の返却に失敗: %v", refundErr)
 			}
 			code = "daily_quota"
 			message = "Gemini無料枠の本日分を使い切りました。Google側の上限がリセットされてからお試しください"
 		} else if errors.Is(err, llm.ErrRateLimited) {
+			usageEvent.Outcome = "rate_limit"
 			if refundErr := s.refund(r.Context(), userKey, day); refundErr != nil {
 				log.Printf("利用回数の返却に失敗: %v", refundErr)
 			}
 			code = "rate_limit"
 			message = "アクセスが集中し、Geminiの短時間の利用上限に達しました。数分後にもう一度お試しください"
 		} else if errors.Is(err, llm.ErrImagesUnsupported) {
+			usageEvent.Outcome = "images_unsupported"
 			// 画像を読めないモデルで受けた場合。利用者の質問の責任ではないので回数を返す
 			if refundErr := s.refund(r.Context(), userKey, day); refundErr != nil {
 				log.Printf("利用回数の返却に失敗: %v", refundErr)
 			}
 			message = "いま動いているモデルは画像を読めません。画像を外してもう一度お試しください"
 		} else if errors.Is(err, llm.ErrUnavailable) {
+			usageEvent.Outcome = "unavailable"
 			// 利用者ではなくGemini側の都合で失敗した質問は、個人の利用回数へ含めない。
 			if refundErr := s.refund(r.Context(), userKey, day); refundErr != nil {
 				log.Printf("利用回数の返却に失敗: %v", refundErr)
 			}
 			code = "unavailable"
 			message = "現在Geminiを利用できません。時間を置いてからもう一度お試しください"
+		} else if errors.Is(err, context.Canceled) {
+			usageEvent.Outcome = "cancelled"
+		} else {
+			usageEvent.Outcome = "failed"
 		}
 		// 従来どおり、Gemini都合以外の失敗は確保した回数へ含める。
 		if at, ok := llm.RetryAt(err); ok {

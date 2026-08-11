@@ -90,9 +90,10 @@ func TestAskCarriesTR797ContextFromHTTPToAnswerEvidence(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ix := askE2EIndex(t)
 			client := &askE2ELLm{}
+			shared := state.NewMemory()
 			srv := New(
 				Config{SessionSecret: "テスト用の固定鍵テスト用の固定鍵", DailyLimit: 30},
-				ix, pipeline.New(ix, client), nil, state.NewMemory(),
+				ix, pipeline.New(ix, client), nil, shared,
 			)
 			res := httptest.NewRecorder()
 			srv.Routes().ServeHTTP(res, srv.testRequest(http.MethodPost, "/api/ask", tc.body, "評価利用者"))
@@ -106,6 +107,10 @@ func TestAskCarriesTR797ContextFromHTTPToAnswerEvidence(t *testing.T) {
 			if !strings.Contains(res.Body.String(), `"title":"空力設計"`) ||
 				!strings.Contains(res.Body.String(), `"type":"done"`) {
 				t.Fatalf("出典または完了イベントがSSEへ流れていない: %s", res.Body.String())
+			}
+			events, err := shared.ListUsageEvents(context.Background(), 10)
+			if err != nil || len(events) != 1 || events[0].Outcome != "success" || events[0].ResolvedMode == "" {
+				t.Fatalf("本文なし利用監査ログを保存できていない: events=%+v err=%v", events, err)
 			}
 		})
 	}

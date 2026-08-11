@@ -2,6 +2,9 @@ package state
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"sort"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -96,6 +99,270 @@ func (f *Firestore) Refund(ctx context.Context, user, day string) error {
 			"updated_at": time.Now().UTC(),
 		})
 	})
+}
+
+func (f *Firestore) SaveUserProfile(ctx context.Context, key, username string, at time.Time) error {
+	ref := f.client.Collection("users").Doc(key)
+	return f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		firstSeen := at
+		snapshot, err := tx.Get(ref)
+		if err == nil {
+			if value, err := snapshot.DataAt("first_seen"); err == nil {
+				if saved, ok := value.(time.Time); ok {
+					firstSeen = saved
+				}
+			}
+		} else if status.Code(err) != codes.NotFound {
+			return err
+		}
+		return tx.Set(ref, map[string]any{
+			"username": username, "first_seen": firstSeen, "last_seen": at,
+		})
+	})
+}
+
+func (f *Firestore) ListUserProfiles(ctx context.Context) ([]UserProfile, error) {
+	snapshots, err := f.client.Collection("users").Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	list := make([]UserProfile, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		var profile UserProfile
+		if err := snapshot.DataTo(&profile); err != nil {
+			return nil, err
+		}
+		// 旧来はusers直下にドキュメントを置かなかったため、名前のあるものだけを返す。
+		if profile.Username == "" {
+			continue
+		}
+		profile.Key = snapshot.Ref.ID
+		list = append(list, profile)
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].Username < list[j].Username })
+	return list, nil
+}
+
+func (f *Firestore) ListDailyUsage(ctx context.Context, user, since string) ([]DailyUsage, error) {
+	snapshots, err := f.client.Collection("users").Doc(user).Collection("usage").Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	var list []DailyUsage
+	for _, snapshot := range snapshots {
+		if snapshot.Ref.ID < since {
+			continue
+		}
+		var usage DailyUsage
+		if err := snapshot.DataTo(&usage); err != nil {
+			return nil, err
+		}
+		usage.Day = snapshot.Ref.ID
+		list = append(list, usage)
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].Day > list[j].Day })
+	return list, nil
+}
+
+func (f *Firestore) PurgeDailyUsage(ctx context.Context, user, before string) (int, error) {
+	snapshots, err := f.client.Collection("users").Doc(user).Collection("usage").Documents(ctx).GetAll()
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, snapshot := range snapshots {
+		if snapshot.Ref.ID >= before || removed >= maxAdminPurge {
+			continue
+		}
+		if _, err := snapshot.Ref.Delete(ctx); err != nil {
+			return removed, err
+		}
+		removed++
+	}
+	return removed, nil
+}
+
+const maxAdminPurge = 100
+
+func (f *Firestore) PurgeUserProfiles(ctx context.Context, before time.Time) (int, error) {
+	snapshots, err := f.client.Collection("users").Where("last_seen", "<", before).
+		Limit(maxAdminPurge).Documents(ctx).GetAll()
+	if err != nil {
+		return 0, err
+	}
+	for _, snapshot := range snapshots {
+		// 子のusageはHMACだけで実名を持たない。親だけ消せば実名との対応は失われる。
+		if _, err := snapshot.Ref.Delete(ctx); err != nil {
+			return 0, err
+		}
+	}
+	return len(snapshots), nil
+}
+
+func (f *Firestore) SaveUsageEvent(ctx context.Context, event UsageEvent) error {
+	_, err := f.client.Collection("usage_events").Doc(event.ID).Set(ctx, event)
+	return err
+}
+
+func (f *Firestore) ListUsageEvents(ctx context.Context, limit int) ([]UsageEvent, error) {
+	query := f.client.Collection("usage_events").OrderBy("occurred_at", firestore.Desc)
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	snapshots, err := query.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	list := make([]UsageEvent, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		var event UsageEvent
+		if err := snapshot.DataTo(&event); err != nil {
+			return nil, err
+		}
+		list = append(list, event)
+	}
+	return list, nil
+}
+
+func (f *Firestore) PurgeUsageEvents(ctx context.Context, before time.Time) (int, error) {
+	return f.purgeTimedCollection(ctx, "usage_events", "occurred_at", before)
+}
+
+func (f *Firestore) SaveAdminAudit(ctx context.Context, audit AdminAudit) error {
+	_, err := f.client.Collection("admin_audits").Doc(audit.ID).Set(ctx, audit)
+	return err
+}
+
+func (f *Firestore) ListAdminAudits(ctx context.Context, limit int) ([]AdminAudit, error) {
+	query := f.client.Collection("admin_audits").OrderBy("occurred_at", firestore.Desc)
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	snapshots, err := query.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	list := make([]AdminAudit, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		var audit AdminAudit
+		if err := snapshot.DataTo(&audit); err != nil {
+			return nil, err
+		}
+		list = append(list, audit)
+	}
+	return list, nil
+}
+
+func (f *Firestore) PurgeAdminAudits(ctx context.Context, before time.Time) (int, error) {
+	return f.purgeTimedCollection(ctx, "admin_audits", "occurred_at", before)
+}
+
+func (f *Firestore) GetAdminRole(ctx context.Context, key string) (AdminRole, bool, error) {
+	snapshot, err := f.client.Collection("admin_roles").Doc(key).Get(ctx)
+	if status.Code(err) == codes.NotFound {
+		return AdminRole{}, false, nil
+	}
+	if err != nil {
+		return AdminRole{}, false, err
+	}
+	var role AdminRole
+	if err := snapshot.DataTo(&role); err != nil {
+		return AdminRole{}, false, err
+	}
+	role.Key = snapshot.Ref.ID
+	return role, true, nil
+}
+
+func (f *Firestore) ListAdminRoles(ctx context.Context) ([]AdminRole, error) {
+	snapshots, err := f.client.Collection("admin_roles").Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	list := make([]AdminRole, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		var role AdminRole
+		if err := snapshot.DataTo(&role); err != nil {
+			return nil, err
+		}
+		role.Key = snapshot.Ref.ID
+		list = append(list, role)
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].Username < list[j].Username })
+	return list, nil
+}
+
+func (f *Firestore) SaveAdminRole(ctx context.Context, key string, role AdminRole) error {
+	_, err := f.client.Collection("admin_roles").Doc(key).Set(ctx, role)
+	return err
+}
+
+func (f *Firestore) DeleteAdminRole(ctx context.Context, key string) error {
+	_, err := f.client.Collection("admin_roles").Doc(key).Delete(ctx)
+	return err
+}
+
+func (f *Firestore) LatestSourceCheck(ctx context.Context) (SourceCheck, bool, error) {
+	snapshot, err := f.client.Collection("system_state").Doc("source_check").Get(ctx)
+	if status.Code(err) == codes.NotFound {
+		return SourceCheck{}, false, nil
+	}
+	if err != nil {
+		return SourceCheck{}, false, err
+	}
+	var check SourceCheck
+	if err := snapshot.DataTo(&check); err != nil {
+		return SourceCheck{}, false, err
+	}
+	return check, true, nil
+}
+
+func (f *Firestore) SaveSourceCheck(ctx context.Context, check SourceCheck) error {
+	_, err := f.client.Collection("system_state").Doc("source_check").Set(ctx, check)
+	return err
+}
+
+func (f *Firestore) purgeTimedCollection(ctx context.Context, collection, field string, before time.Time) (int, error) {
+	snapshots, err := f.client.Collection(collection).Where(field, "<", before).
+		Limit(maxAdminPurge).Documents(ctx).GetAll()
+	if err != nil {
+		return 0, err
+	}
+	for _, snapshot := range snapshots {
+		if _, err := snapshot.Ref.Delete(ctx); err != nil {
+			return 0, err
+		}
+	}
+	return len(snapshots), nil
+}
+
+func apiUsageID(model string) string {
+	sum := sha256.Sum256([]byte(model))
+	return hex.EncodeToString(sum[:12])
+}
+
+func (f *Firestore) RecordAPIRequest(ctx context.Context, day, model string, at time.Time) error {
+	ref := f.client.Collection("api_usage").Doc(day).Collection("models").Doc(apiUsageID(model))
+	_, err := ref.Set(ctx, map[string]any{
+		"day": day, "model": model, "requests": firestore.Increment(1), "updated_at": at,
+	}, firestore.MergeAll)
+	return err
+}
+
+func (f *Firestore) ListAPIUsage(ctx context.Context, day string) ([]APIUsage, error) {
+	snapshots, err := f.client.Collection("api_usage").Doc(day).Collection("models").Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	list := make([]APIUsage, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		var usage APIUsage
+		if err := snapshot.DataTo(&usage); err != nil {
+			return nil, err
+		}
+		list = append(list, usage)
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].Model < list[j].Model })
+	return list, nil
 }
 
 func (f *Firestore) chatCollection(user string) *firestore.CollectionRef {

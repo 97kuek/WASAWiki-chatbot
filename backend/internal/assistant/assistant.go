@@ -1,6 +1,6 @@
 // Package assistant は、利用者が作って全員で共有するアシスタントを扱う。
 //
-// # 設計の芯：管理者を置かずに済ませる
+// # 設計の芯：内容審査の管理者を置かずに済ませる
 //
 // 共有できる仕組みは、放っておくと「誰かが内容を審査する」運用を要求する。
 // 一人保守の方針（AGENTS.md）とこれは噛み合わない。そこで**悪い設定が
@@ -200,22 +200,13 @@ func validID(id string) bool {
 	return true
 }
 
-func slicesContains(list []string, target string) bool {
-	for _, item := range list {
-		if item == target {
-			return true
-		}
-	}
-	return false
-}
-
 // CanEdit は編集・削除の権限。作成者本人と管理者だけが持つ。
 //
 // **他人のものは編集できない**（複製して自分のものを直す）。編集権をめぐる
 // 調整が起きないので、仲裁する人が要らなくなる。自分が作ったものを直せる
 // ことは、この性質を壊さない。
-func CanEdit(a state.Assistant, user string, admins []string) bool {
-	return a.Author == user || slicesContains(admins, user)
+func CanEdit(a state.Assistant, user string, isAdmin bool) bool {
+	return a.Author == user || isAdmin
 }
 
 // ---------------------------------------------------------------- プロンプト
