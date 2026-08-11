@@ -22,7 +22,7 @@ import {
   type Turn,
 } from "./api";
 import { stripCitation } from "./answer";
-import { chatTitle, groupChats, retryLabel, shareText, slugify } from "./chat";
+import { answerPlainText, chatTitle, groupChats, referenceSections, retryLabel, shareText, slugify } from "./chat";
 import { ACCEPTED_IMAGE_TYPES, toAttachment, type Attachment } from "./attachment";
 import { AssistantAvatar, DefaultAvatar, toIconDataURL, type IconCropPosition } from "./avatar";
 import { SelectMenu, type SelectOption } from "./SelectMenu";
@@ -647,6 +647,34 @@ export default function App() {
     inflight.current?.abort();
   }
 
+  async function handleCopyAnswer(turn: Turn) {
+    try {
+      await navigator.clipboard.writeText(answerPlainText(turn));
+      showToast("回答をコピーしました");
+    } catch {
+      showToast("コピーできませんでした");
+    }
+  }
+
+  /**
+   * 同じ質問で回答を作り直す。
+   *
+   * **質問1回分を消費する。** 画像は履歴に保存していない（Firestoreの
+   * 1ドキュメント1MB上限に対し履歴は30件）ので、画像つきの質問は
+   * 画像なしで聞き直すことになる。黙って変わると理由が分からないので確認する。
+   */
+  function handleRegenerate(chat: Chat, turnIndex: number, turn: Turn) {
+    if (streaming) return;
+    if (!turn.question.trim()) {
+      showToast("画像だけの質問は作り直せません");
+      return;
+    }
+    if (turn.hasAttachment &&
+      !window.confirm("画像は保存していないため、画像なしで聞き直します。よろしいですか？")) return;
+    setActiveChatId(chat.id);
+    void handleAsk(turn.question, turnIndex);
+  }
+
   function handleNewChat() {
     if (streaming) return;
     setActiveChatId(null);
@@ -933,7 +961,11 @@ export default function App() {
     return null;
   }
 
-  async function handleAsk(text: string) {
+  /**
+   * 質問を送る。`regenerateFrom` を渡すと、その往復以降を捨ててから
+   * 同じ位置へ入れ直す（＝回答の作り直し）。
+   */
+  async function handleAsk(text: string, regenerateFrom?: number) {
     const q = text.trim();
     // 画像だけでも送れる。「これでツイート作って」のように、文章より
     // 画像のほうが本体である使い方があるため
@@ -951,10 +983,11 @@ export default function App() {
 
     const now = new Date().toISOString();
     const chatId = activeChat?.id ?? makeId();
-    const turnIndex = activeChat?.turns.length ?? 0;
+    const turnIndex = regenerateFrom ?? activeChat?.turns.length ?? 0;
     // 全履歴を毎回送ると入力費用が増え続ける。指示語の解決に必要な直近2往復だけを送り、
     // 出典やエラー状態はサーバーへ再送しない。長さの上限はサーバー側でも検証する。
     const context = (activeChat?.turns ?? [])
+      .slice(0, turnIndex)
       .filter((item) => !item.streaming && item.question.trim() && item.answer.trim())
       .slice(-CONVERSATION_CONTEXT_TURNS)
       .map((item) => ({ question: item.question, answer: item.answer.slice(0, CONVERSATION_ANSWER_RUNES) }));
@@ -976,7 +1009,7 @@ export default function App() {
     setChats((current) => {
       const existing = current.find((chat) => chat.id === chatId);
       const updated: Chat = existing
-        ? { ...existing, updatedAt: now, turns: [...existing.turns, turn] }
+        ? { ...existing, updatedAt: now, turns: [...existing.turns.slice(0, turnIndex), turn] }
         : {
             id: chatId,
             // 本文が空でも名前が付く。画像だけを送ると空欄になっていた
@@ -1631,10 +1664,22 @@ export default function App() {
                   {turn.answer && (
                     <div>
                       <Suspense fallback={<div className="muted" role="status">回答を表示中…</div>}>
-                        <Markdown text={stripCitation(turn.answer)} />
+                        {/* 本文中の [1] を出典チップへ変えるために出典を渡す。
+                            表示する題名とURLはサーバーが索引から組み立てたもので、
+                            モデルが書けるのは番号だけ */}
+                        <Markdown text={stripCitation(turn.answer)} sources={turn.sources} />
                       </Suspense>
                       {turn.streaming && <span className="caret" />}
                     </div>
+                  )}
+
+                  {/* どこを開けば確かめられるかまで示す。出典カードはページ単位だが、
+                      こちらは実際に読んだ節まで出る */}
+                  {!turn.streaming && turn.answer && referenceSections(turn.sources).length > 0 && (
+                    <p className="answer-reference">
+                      <span aria-hidden="true">📄</span>
+                      <span>参照：{referenceSections(turn.sources).join("／")}</span>
+                    </p>
                   )}
                   {turn.error && (turn.errorCode ? (
                     <div className="service-alert" role="alert">
@@ -1654,6 +1699,9 @@ export default function App() {
                       turn={turn}
                       open={answerFeedbackOpen === `${activeChat.id}:${index}`}
                       comment={answerComments[`${activeChat.id}:${index}`] ?? turn.feedbackComment ?? ""}
+                      regenerating={streaming}
+                      onCopy={() => void handleCopyAnswer(turn)}
+                      onRegenerate={() => handleRegenerate(activeChat, index, turn)}
                       onRating={(rating) => void handleAnswerRating(activeChat, index, turn, rating)}
                       onReason={(reason) => void toggleAnswerReason(activeChat, index, turn, reason)}
                       onComment={(comment) => setAnswerComments((current) => ({ ...current, [`${activeChat.id}:${index}`]: comment }))}

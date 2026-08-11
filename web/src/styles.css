@@ -1202,6 +1202,30 @@ button:disabled {
   cursor: pointer;
 }
 
+/* コピーと再生成は線画。絵文字の👍👎と混ざるので、grayscaleは効かせない */
+.answer-feedback-row button.answer-action {
+  filter: none;
+  color: var(--muted);
+}
+
+.answer-feedback-row button.answer-action:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.answer-feedback-row button.answer-action:disabled {
+  opacity: 0.45;
+}
+
+.answer-feedback-row button.answer-action svg {
+  width: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
 .answer-feedback-row button:hover,
 .answer-feedback-row button.selected {
   border-color: var(--accent);
@@ -1492,6 +1516,54 @@ button:disabled {
 .prose a {
   color: var(--text);
   text-underline-offset: 3px;
+}
+
+/* 本文に差し込む出典チップ。文の流れを切らないよう、行の高さは変えない。
+   長い題名は markdown.tsx 側で先に切ってあるので、ここでは折り返さない */
+.prose .citation {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 2px;
+  padding: 1px 7px 1px 5px;
+  max-width: 14em;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: nowrap;
+  text-decoration: none;
+  vertical-align: 1px;
+}
+
+.prose a.citation:hover {
+  border-color: var(--line-strong);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+/* 資料を表す小さな紙のかたち。絵文字だと環境で大きさが揃わない */
+.citation-mark {
+  width: 8px;
+  height: 10px;
+  flex: none;
+  border: 1px solid currentColor;
+  border-radius: 1px;
+  border-top-right-radius: 3px;
+}
+
+.answer-reference {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
 }
 
 .prose blockquote {

@@ -26,6 +26,54 @@ const escapeHtml = (s: string) =>
 /** リンク先は http/https だけ許可する（javascript: などを弾く） */
 const safeHref = (url: string) => (/^https?:\/\//i.test(url) ? url : null);
 
+/**
+ * 本文に差し込む出典。`[1]` の番号を、この配列の1件目へ対応させる。
+ *
+ * **モデルが書けるのは番号だけである。** 表示するタイトルとURLは、
+ * サーバーが索引から組み立てたものをここへ渡す。こうしないと
+ * 「引き継ぎWiki」のような実在しない出典名を本文へ書けてしまう（docs/06）。
+ */
+export type Citation = { title: string; url: string };
+
+/** 描画中の出典。renderMarkdown の入口でだけ差し替える。 */
+let citations: Citation[] = [];
+
+/** チップに出す題名の長さ。長い題名で本文が読めなくなるのを防ぐ。 */
+const CITATION_LABEL_RUNES = 14;
+
+const shortTitle = (title: string) => {
+  const runes = Array.from(title);
+  return runes.length <= CITATION_LABEL_RUNES
+    ? title
+    : runes.slice(0, CITATION_LABEL_RUNES).join("") + "…";
+};
+
+/**
+ * `[1]` や `[1][3]` を出典チップへ変える。
+ *
+ * **範囲外の番号は消す。** 文字として残すと、モデルが番号を作ったときに
+ * 意味のない `[9]` が本文に残る。出典が1件も無いときは何もしない
+ * （番号の付いた箇条書きを壊さないため）。
+ */
+function citationChips(html: string): string {
+  if (citations.length === 0) return html;
+  return html.replace(/(?:\[(\d{1,2})\])+/g, (match) => {
+    const chips = Array.from(match.matchAll(/\[(\d{1,2})\]/g))
+      .map(([, digits]) => citations[Number(digits) - 1])
+      .filter((citation): citation is Citation => Boolean(citation))
+      .map((citation) => {
+        const href = safeHref(citation.url);
+        const label = escapeHtml(shortTitle(citation.title));
+        const full = escapeHtml(citation.title);
+        const body = `<span class="citation-mark" aria-hidden="true"></span>${label}`;
+        return href
+          ? `<a class="citation" href="${escapeHtml(href)}" target="_blank" rel="noreferrer noopener" title="${full}">${body}</a>`
+          : `<span class="citation" title="${full}">${body}</span>`;
+      });
+    return chips.join("");
+  });
+}
+
 function inline(raw: string): Inline {
   const tokens: string[] = [];
   const stash = (html: string) => {
@@ -61,6 +109,9 @@ function inline(raw: string): Inline {
     /(^|[\s(])(https?:\/\/[^\s<)]+)/g,
     '$1<a href="$2" target="_blank" rel="noreferrer noopener">$2</a>',
   );
+  // 出典チップは、退避したコードと数式を戻す**前**に作る。戻したあとだと、
+  // コード中の `[1]` までチップになってしまう
+  html = citationChips(html);
   html = html.replace(/\uE000(\d+)\uE001/g, (_, index: string) => tokens[Number(index)] ?? "");
   return { html };
 }
@@ -226,7 +277,10 @@ function listBlock(lines: string[], start: number): { html: string; next: number
   return { html: `<${tag}>${items.join("")}</${tag}>`, next: i };
 }
 
-export function renderMarkdown(source: string): string {
+export function renderMarkdown(source: string, sources: Citation[] = []): string {
+  // inline() は多くの場所から呼ばれるので、引数で持ち回らずここで差し替える。
+  // 同期的に組み立て終わるので、途中で別の回答の出典が混ざることはない
+  citations = sources;
   const lines = source.replace(/\r\n?/g, "\n").split("\n");
   const out: string[] = [];
   let i = 0;
@@ -345,10 +399,16 @@ export function renderMarkdown(source: string): string {
  * 差し替える**ことになる。20往復の会話では1デルタあたり1.49msの解析が乗り、
  * 1回の回答で約298ms（実測、手元のMacで）。スマホではこの数倍かかる。
  *
- * text は文字列なので、既定の浅い比較でそのまま効く。
+ * text は文字列なので、既定の浅い比較でそのまま効く。sources は配列なので、
+ * 毎回新しい配列を渡すと memo が効かない。**呼び出し側で turn.sources を
+ * そのまま渡すこと**（同じ回答の間は同一参照のままである）。
  */
-export const Markdown = memo(function Markdown({ text }: { text: string }) {
+export const Markdown = memo(function Markdown(
+  { text, sources }: { text: string; sources?: Citation[] },
+) {
   // renderMarkdown はエスケープ済みの文字列しか組み立てないため、
   // ここで生HTMLとして差し込んでも外部由来のタグは通らない
-  return <div className="prose" dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }} />;
+  return (
+    <div className="prose" dangerouslySetInnerHTML={{ __html: renderMarkdown(text, sources) }} />
+  );
 });

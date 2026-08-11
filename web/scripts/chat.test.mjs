@@ -28,8 +28,10 @@ await build({
   platform: "node",
   outfile,
 });
-const { chatTitle, groupChats, retryLabel, shareText, slugify, IMAGE_ONLY_TITLE } =
-  await import(pathToFileURL(outfile).href);
+const {
+  answerPlainText, chatTitle, groupChats, referenceSections,
+  retryLabel, shareText, slugify, IMAGE_ONLY_TITLE,
+} = await import(pathToFileURL(outfile).href);
 
 const turn = (over = {}) => ({
   question: "質問",
@@ -153,6 +155,44 @@ test("共有文には質問・回答・出典のURLを含める", () => {
 test("回答が無い往復はエラー文を、それも無ければ「回答なし」を出す", () => {
   assert.match(shareText(chat({ turns: [turn({ answer: "", error: "通信に失敗しました" })] })), /通信に失敗しました/);
   assert.match(shareText(chat({ turns: [turn({ answer: "" })] })), /回答なし/);
+});
+
+// ---- referenceSections / answerPlainText --------------------------------
+
+const src = (over = {}) => ({ title: "リファラルご飯制度", url: "https://example.org/a", last_edited: "2026-05", ...over });
+
+test("読んだ節を順に並べ、重複は落とす", () => {
+  const sections = referenceSections([
+    src({ sections: ["福利厚生 > リファラルご飯制度", "福利厚生 > リファラルご飯制度"] }),
+    src({ title: "経費申請方法", sections: ["経理 > 経費申請方法"] }),
+  ]);
+  assert.deepEqual(sections, ["福利厚生 > リファラルご飯制度", "経理 > 経費申請方法"]);
+});
+
+// 節が取れなくても、どのページかは分かるようにする
+test("節が無ければページ名で代替する", () => {
+  assert.deepEqual(referenceSections([src()]), ["リファラルご飯制度"]);
+  assert.deepEqual(referenceSections([src({ sections: [] })]), ["リファラルご飯制度"]);
+});
+
+test("出典が無ければ参照行は出さない", () => {
+  assert.deepEqual(referenceSections([]), []);
+});
+
+// [1] を消すと、どの文がどの資料に基づくのか分からなくなる
+test("コピーした平文は本文の番号を残し、番号付きの出典を添える", () => {
+  const text = answerPlainText({
+    answer: "税込2,500円まで出ます。[1]",
+    sources: [src({ sections: ["福利厚生 > リファラルご飯制度"] })],
+  });
+  assert.match(text, /\[1\]/);
+  assert.match(text, /出典:/);
+  assert.match(text, /\[1\] リファラルご飯制度: https:\/\/example\.org\/a/);
+  assert.match(text, /参照: 福利厚生 > リファラルご飯制度/);
+});
+
+test("出典が無ければ本文だけをコピーする", () => {
+  assert.equal(answerPlainText({ answer: "  本文だけ  ", sources: [] }), "本文だけ");
 });
 
 // ---- retryLabel ---------------------------------------------------------

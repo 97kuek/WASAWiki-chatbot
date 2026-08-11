@@ -92,19 +92,54 @@ type AnswerFeedbackProps = {
   turn: Turn;
   open: boolean;
   comment: string;
+  regenerating: boolean;
   onRating: (rating: "good" | "bad") => void;
   onReason: (reason: FeedbackReason) => void;
   onComment: (comment: string) => void;
   onSubmitComment: () => void;
   onClose: () => void;
+  onCopy: () => void;
+  onRegenerate: () => void;
 };
+
+function CopyIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M5 15V6a2 2 0 0 1 2-2h9" />
+    </svg>
+  );
+}
+
+function RegenerateIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5" />
+    </svg>
+  );
+}
 
 export function AnswerFeedback(props: AnswerFeedbackProps) {
   const { turn } = props;
   return (
-    <section className="answer-feedback" aria-label="回答の評価">
+    <section className="answer-feedback" aria-label="回答の操作と評価">
       <div className="answer-feedback-row">
         <span>{turn.feedbackRating ? "評価済み" : "この回答は役に立ちましたか？"}{!turn.feedbackRating && <small>質問・回答も送信</small>}</span>
+        {/* コピーと再生成は評価より前に置く。押す頻度が高く、
+            評価と違って押しても取り消せる */}
+        <button type="button" className="answer-action" aria-label="回答をコピー" title="回答をコピー" onClick={props.onCopy}>
+          <CopyIcon />
+        </button>
+        <button
+          type="button"
+          className="answer-action"
+          aria-label="回答を作り直す"
+          title="回答を作り直す（質問1回分を使います）"
+          disabled={props.regenerating}
+          onClick={props.onRegenerate}
+        >
+          <RegenerateIcon />
+        </button>
         <button type="button" className={turn.feedbackRating === "good" ? "selected" : ""} aria-label="役に立った" aria-pressed={turn.feedbackRating === "good"} onClick={() => props.onRating("good")}>👍</button>
         <button type="button" className={turn.feedbackRating === "bad" ? "selected" : ""} aria-label="改善が必要" aria-pressed={turn.feedbackRating === "bad"} onClick={() => props.onRating("bad")}>👎</button>
       </div>

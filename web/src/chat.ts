@@ -10,7 +10,7 @@
  * 持ち込んだ時点でテストできなくなり、切り出した意味が消える。
  */
 
-import type { Chat } from "./api";
+import type { Chat, Source } from "./api";
 
 /** チャット一覧に出すタイトルの長さ。日本語なので文字数で数える。 */
 export const CHAT_TITLE_RUNES = 28;
@@ -85,6 +85,39 @@ export function groupChats(chats: Chat[], now: Date = new Date()): HistorySectio
     sections.set(label, section);
   }
   return Array.from(sections, ([label, grouped]) => ({ label, chats: grouped }));
+}
+
+/**
+ * 回答1件分の平文。コピーボタンで持ち出すときに使う。
+ *
+ * 本文の `[1]` は残す。**消すと、どの文がどの資料に基づくのかが失われる。**
+ * 貼り付け先で番号を追えるよう、出典を番号付きで添える。
+ */
+export function answerPlainText(turn: { answer: string; sources: Source[] }): string {
+  const list = turn.sources.map((source, index) => {
+    const sections = source.sections?.length ? `\n   参照: ${source.sections.join(" / ")}` : "";
+    return `[${index + 1}] ${source.title}: ${source.url}${sections}`;
+  });
+  return list.length === 0 ? turn.answer.trim() : `${turn.answer.trim()}\n\n出典:\n${list.join("\n")}`;
+}
+
+/**
+ * 回答末尾の「参照」に出す行。どこを開けば確かめられるかまで示す。
+ *
+ * 節が取れていない資料はページ名で代替する。空欄を出すより、
+ * 少なくともどのページかは分かるほうがよい。
+ */
+export function referenceSections(sources: Source[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const source of sources) {
+    for (const section of source.sections?.length ? source.sections : [source.title]) {
+      if (!section || seen.has(section)) continue;
+      seen.add(section);
+      out.push(section);
+    }
+  }
+  return out;
 }
 
 /** 共有・コピー用の平文。出典のURLも一緒に持ち出せるようにする。 */

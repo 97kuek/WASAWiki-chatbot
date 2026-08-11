@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -57,6 +58,11 @@ type Source struct {
 	// "fee"（フライトシミュレータのガイド）。
 	// 画面で見分けられないと、部外に出せる情報かどうかが判断できない
 	Origin string `json:"origin"`
+	// Sections はこの資料から実際に読んだ節のパンくず（「ページ名 > 見出し」）。
+	// 回答の末尾に「参照: ページ名 > 見出し」を出し、**どこを開けば確かめられるか**
+	// まで示すために使う。節を選び終えるまで確定しないので、pages イベントは
+	// 2回流れる（1回目は参照中の資料、2回目は節つきの確定版）。
+	Sections []string `json:"sections,omitempty"`
 }
 
 // ConversationTurn は検索と回答に渡す直近の会話。Firestoreの履歴全体を
@@ -194,7 +200,11 @@ const answerPrompt = `# タスク
 # 出力の規則
 
 - 日本語で結論から書き、思考過程は書かない
-- 出典一覧は画面が索引から別に表示するため、回答内に出典一覧を作らない
+- 資料に基づいて事実を述べた文は、その**文末**に根拠の資料番号を [1] の形で付ける。
+  複数の資料が根拠なら [1][3] と並べる
+- 資料番号は各資料の見出しにある番号だけを使う。**書かれていない番号を作らない**
+- 番号を付けるのは事実を述べた文だけでよい。前置きや言い換えには付けない
+- 出典の一覧とリンクは画面が索引から表示するため、回答内に出典一覧を作らない
 - 回答に必要なリンクは資料本文にあるURLだけをそのまま載せる。URLを推測して作らない
 
 # 資料
@@ -338,6 +348,15 @@ func (p *Pipeline) run(ctx context.Context, question string, history []Conversat
 	emitTiming("chunks", chunkStarted)
 	emit(Event{Type: "status", Message: fmt.Sprintf("%d件の資料を読んでいます", len(chunks))})
 
+	// 資料番号は sources の並び順（1始まり）。モデルには**この番号だけ**を
+	// 書かせ、タイトルとURLはサーバーが索引から組み立てたものを使う。
+	// こうすると、モデルが書けるのは「何番目か」だけになり、
+	// 「引き継ぎWiki」のような実在しない出典名を作る経路が残らない。
+	sourceNumber := make(map[string]int, len(pages))
+	for i, pg := range pages {
+		sourceNumber[pg.Title] = i + 1
+	}
+
 	var blocks []string
 	for _, id := range chunks {
 		c, pg, ok := p.ix.Chunk(id)
@@ -351,9 +370,20 @@ func (p *Pipeline) run(ctx context.Context, question string, history []Conversat
 		if label := c.Era.Label(); label != "" {
 			era = " / 本文の年代: " + label
 		}
-		blocks = append(blocks, fmt.Sprintf("## %s\n（出所: %s / ページ: %s / URL: %s / 最終更新: %s%s）\n\n%s",
-			c.Breadcrumb, origin, pg.Title, pg.URL, pg.LastEdited, era, c.Text))
+		number := sourceNumber[pg.Title]
+		blocks = append(blocks, fmt.Sprintf("## [%d] %s\n（資料番号: %d / 出所: %s / ページ: %s / URL: %s / 最終更新: %s%s）\n\n%s",
+			number, c.Breadcrumb, number, origin, pg.Title, pg.URL, pg.LastEdited, era, c.Text))
+		// 読んだ節を、その資料の「参照」として控える
+		if number >= 1 && number <= len(sources) && c.Breadcrumb != "" {
+			s := &sources[number-1]
+			if !slices.Contains(s.Sections, c.Breadcrumb) {
+				s.Sections = append(s.Sections, c.Breadcrumb)
+			}
+		}
 	}
+	// 節が確定したので、出典を差し替える。1回目は「参照中の資料」として
+	// 早く出すためのもので、こちらが確定版
+	emit(Event{Type: "pages", Pages: sources})
 
 	emit(Event{Type: "status", Message: "回答を作成しています"})
 	answerStarted := time.Now()

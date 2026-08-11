@@ -384,6 +384,10 @@ class Pipeline:
 # 出力の規則
 
 - 日本語で結論から書き、思考過程は書かない
+- 資料に基づいて事実を述べた文は、その**文末**に根拠の資料番号を [1] の形で付ける。
+  複数の資料が根拠なら [1][3] と並べる
+- 資料番号は各資料の見出しにある番号だけを使う。**書かれていない番号を作らない**
+- 番号を付けるのは事実を述べた文だけでよい。前置きや言い換えには付けない
 - 資料があれば末尾に `- [ページ名](URL)（Wiki / 公式サイト、本文の年代: YYYY年）` 形式で出典を書く
 - URLは資料記載のものだけを使う。資料が無ければ出典を作らない。回答に関係する本文中のURLはそのまま載せる
 
@@ -421,6 +425,9 @@ class Pipeline:
             titles = self.fallback_pages(search_question)
 
         chunk_ids = self.select_chunks(search_question, titles, mode)
+        # 資料番号はページの並び順（1始まり）。本番Goと同じ振り方にしないと、
+        # 測定した [n] の付き方が本番を説明しない
+        source_number = {title: i + 1 for i, title in enumerate(titles)}
         blocks = []
         for cid in chunk_ids:
             page = self.pages[self.chunk_page[cid]]
@@ -428,9 +435,10 @@ class Pipeline:
             # 年代は拾えないことがある（実測で38%）。空欄を出すとモデルが
             # 「不明」を「古い」と読み替えるので、その場合は項目ごと省く
             era = era_label(self.chunks[cid].get("era"))
+            number = source_number.get(page["title"], 0)
             blocks.append(
-                f"## {self.chunks[cid]['breadcrumb']}\n"
-                f"（出所: {origin} / ページ: {page['title']} / URL: {page['url']} / "
+                f"## [{number}] {self.chunks[cid]['breadcrumb']}\n"
+                f"（資料番号: {number} / 出所: {origin} / ページ: {page['title']} / URL: {page['url']} / "
                 f"最終更新: {page['last_edited']}{' / 本文の年代: ' + era if era else ''}）\n\n"
                 f"{self.chunks[cid]['text']}"
             )

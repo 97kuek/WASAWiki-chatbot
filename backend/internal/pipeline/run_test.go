@@ -474,15 +474,50 @@ func titlesOf(pages []*index.Page) []string {
 	return out
 }
 
+// モデルに書かせてよいのは**資料の番号だけ**である。タイトルとURLを書かせると
+// 「引き継ぎWiki」のような実在しない出典名を作れてしまう（docs/06）。
 func TestAnswerPromptLeavesSourceListToServer(t *testing.T) {
 	client := &stubLLM{titles: []string{"電装班"}}
 	pipe := New(testIndex(t), client)
 	if err := pipe.Run(context.Background(), "電装班について", nil, nil, func(Event) {}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(client.lastAnswer, "出典一覧は画面が索引から別に表示") ||
+	if !strings.Contains(client.lastAnswer, "回答内に出典一覧を作らない") ||
 		strings.Contains(client.lastAnswer, "[ページ名](URL)") {
 		t.Fatal("モデルに出典一覧を作らせる古い規則が残っている")
+	}
+	// 番号で引かせる以上、番号の作り方まで縛らないと同じ穴が開く
+	if !strings.Contains(client.lastAnswer, "書かれていない番号を作らない") {
+		t.Fatal("存在しない資料番号を禁じる規則が無い")
+	}
+	if !strings.Contains(client.lastAnswer, "資料番号: 1") {
+		t.Fatal("資料に番号が振られていない。モデルが [n] を書けない")
+	}
+}
+
+// 回答末尾の「参照」に出す節は、索引のパンくずをそのまま渡す。
+func TestPagesEventCarriesReadSections(t *testing.T) {
+	client := &stubLLM{titles: []string{"電装班"}}
+	pipe := New(testIndex(t), client)
+	var last []Source
+	err := pipe.Run(context.Background(), "電装班について", nil, nil, func(e Event) {
+		if e.Type == "pages" {
+			last = e.Pages
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(last) == 0 {
+		t.Fatal("pagesイベントが流れていない")
+	}
+	if len(last[0].Sections) == 0 {
+		t.Fatalf("読んだ節が入っていない: %+v", last[0])
+	}
+	for _, section := range last[0].Sections {
+		if !strings.Contains(section, last[0].Title) {
+			t.Fatalf("パンくずがページ名から始まっていない: %q", section)
+		}
 	}
 }
 

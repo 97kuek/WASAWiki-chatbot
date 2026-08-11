@@ -7,6 +7,10 @@ export type Source = {
   /** "wiki" = 部内限定の引き継ぎWiki、"site" = 一般公開の公式サイト。
    *  部外に出せる情報かどうかの判断に要るので、出典に必ず出す。 */
   origin?: "wiki" | "site";
+  /** この資料から実際に読んだ節のパンくず（「ページ名 &gt; 見出し」）。
+   *  回答末尾の「参照」に出し、どこを開けば確かめられるかまで示す。
+   *  節を選び終えるまで確定しないので、`pages`イベントは2回流れる。 */
+  sections?: string[];
 };
 
 export type ResponseMode = "auto" | "fast" | "standard" | "deep";

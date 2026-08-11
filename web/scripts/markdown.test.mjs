@@ -177,6 +177,55 @@ test("リストの次の段落はリストの外に出す", () => {
   assert.match(renderWithin("- a\n次の段落"), /<ul><li>a<\/li><\/ul><p>次の段落<\/p>/);
 });
 
+// ---- 本文中の出典チップ（2026-08-11に追加） ----------------------------
+//
+// モデルが書けるのは**番号だけ**である。題名とURLはサーバーが索引から
+// 組み立てたものを渡す。番号の解決を間違えると、別の資料が根拠として出る。
+
+const CITES = [
+  { title: "リファラルご飯制度", url: "https://example.org/a" },
+  { title: "経費申請方法", url: "https://example.org/b" },
+];
+
+test("[1] は1件目の出典チップになる", () => {
+  const html = renderMarkdown("税込2,500円まで出ます。[1]", CITES);
+  assert.match(html, /<a class="citation" href="https:\/\/example\.org\/a"/);
+  assert.match(html, /title="リファラルご飯制度"/);
+  assert.doesNotMatch(html, /\[1\]/);
+});
+
+test("[1][2] は2つのチップになる", () => {
+  const html = renderMarkdown("領収書をもらいます。[1][2]", CITES);
+  assert.equal(html.match(/class="citation"/g).length, 2);
+});
+
+// モデルが番号を作ったとき、意味のない [9] を本文に残さない
+test("範囲外の番号は消す", () => {
+  const html = renderMarkdown("そんな資料はありません。[9]", CITES);
+  assert.doesNotMatch(html, /\[9\]/);
+  assert.doesNotMatch(html, /class="citation"/);
+});
+
+// 出典が無い場面（履歴の読み直しなど）で本文を勝手に削らない
+test("出典が空なら本文の [1] に触らない", () => {
+  assert.match(renderMarkdown("配列の [1] 番目", []), /\[1\]/);
+});
+
+test("コード中の [1] はチップにしない", () => {
+  const html = renderMarkdown("`array[1]` と書きます。[2]", CITES);
+  assert.match(html, /<code>array\[1\]<\/code>/);
+  assert.equal(html.match(/class="citation"/g).length, 1);
+});
+
+test("チップの題名と属性もエスケープする", () => {
+  const html = renderMarkdown("危ない題名。[1]", [
+    { title: '<img src=x onerror="alert(1)">', url: "javascript:alert(1)" },
+  ]);
+  assert.doesNotMatch(html, /<img/);
+  assert.doesNotMatch(html, /href="javascript/);
+  assert.match(html, /class="citation"/);
+});
+
 // 入れ子と継続行を足したので、止まらなくなる経路が増えていないかを見る。
 test("コードと入れ子リストを含む本文でも、どの長さで切っても描画が終わる", () => {
   const answer = [
