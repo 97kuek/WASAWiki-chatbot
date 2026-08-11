@@ -1,4 +1,6 @@
-// バックエンドとの通信。SSEでの逐次受信をここに閉じ込める。
+// 通常画面とバックエンドの通信。管理画面は遅延読込を保つため admin/api.ts へ分離する。
+
+import { API_ORIGIN } from "./config";
 
 export type Source = {
   title: string;
@@ -71,106 +73,7 @@ export type Event =
   | { type: "done" }
   | { type: "error"; message: string; code?: "daily_quota" | "rate_limit" | "user_daily_limit" | "unavailable"; retry_at?: string };
 
-const base = import.meta.env.VITE_API_ORIGIN ?? "";
-
 export type Session = { authenticated: boolean; username: string; remaining: number; admin: boolean };
-
-export type AdminUserUsage = {
-  username: string;
-  today: number;
-  sevenDays: number;
-  thirtyDays: number;
-  lastUsed?: string;
-  limitReached: boolean;
-  role?: "owner" | "co_admin";
-};
-
-export type AdminRole = {
-  username: string;
-  role: "owner" | "co_admin";
-  grantedBy?: string;
-  grantedAt?: string;
-};
-
-export type SourceDelta = {
-  source: "wiki" | "site";
-  added: string[];
-  updated: string[];
-  removed: string[];
-};
-
-export type SourceCheckResult = {
-  checkedAt: string;
-  checkedBy: string;
-  changed: boolean;
-  deltas: SourceDelta[];
-};
-
-export type AdminUsageEvent = {
-  id: string;
-  username: string;
-  occurredAt: string;
-  outcome: string;
-  responseMode?: string;
-  resolvedMode?: string;
-  assistantId?: string;
-  hasAttachment?: boolean;
-  durationMs: number;
-};
-
-export type AdminAudit = {
-  id: string;
-  actor: string;
-  action: string;
-  target?: string;
-  occurredAt: string;
-};
-
-export type AdminOverview = {
-  generatedAt: string;
-  system: {
-    ok: boolean;
-    llm: string;
-    store: string;
-    indexSource: string;
-    revision: string;
-    codeVersion: string;
-    indexVersion: string;
-    indexPublishedAt?: string;
-    startedAt: string;
-  };
-  currentAdmin: { username: string; role: "owner" | "co_admin" };
-  admins: AdminRole[];
-  sourceCheck: {
-    available: boolean;
-    hasResult: boolean;
-    last?: SourceCheckResult;
-  };
-  updateProgress: {
-    stage: "unavailable" | "not_checked" | "current" | "changes_detected" | "verify_needed";
-    checkedAt?: string;
-    publishedAt?: string;
-    changes: number;
-  };
-  quota: {
-    day: string;
-    resetAt: string;
-    state: "available" | "rate_limited" | "daily_quota";
-    retryAt?: string;
-    totalRequests: number;
-    estimated: boolean;
-    models: { model: string; requests: number; limit: number; remaining: number }[];
-  };
-  summary: {
-    todayQuestions: number;
-    activeUsersToday: number;
-    knownUsers: number;
-    dailyLimit: number;
-  };
-  users: AdminUserUsage[];
-  usageEvents: AdminUsageEvent[];
-  adminAudits: AdminAudit[];
-};
 
 /**
  * Wikiのアカウントでログインする。
@@ -180,7 +83,7 @@ export type AdminOverview = {
  * 失敗理由はサーバーの文言をそのまま出す（Wiki接続失敗と認証失敗を区別するため）。
  */
 export async function login(username: string, password: string): Promise<string | null> {
-  const res = await fetch(`${base}/api/login`, {
+  const res = await fetch(`${API_ORIGIN}/api/login`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
@@ -192,41 +95,13 @@ export async function login(username: string, password: string): Promise<string 
 }
 
 export async function logout(): Promise<void> {
-  await fetch(`${base}/api/logout`, { method: "POST", credentials: "include" });
+  await fetch(`${API_ORIGIN}/api/logout`, { method: "POST", credentials: "include" });
 }
 
 export async function session(): Promise<Session> {
-  const res = await fetch(`${base}/api/session`, { credentials: "include" });
+  const res = await fetch(`${API_ORIGIN}/api/session`, { credentials: "include" });
   if (!res.ok) return { authenticated: false, username: "", remaining: 0, admin: false };
   return res.json();
-}
-
-export async function adminOverview(): Promise<AdminOverview> {
-  const res = await fetch(`${base}/api/admin/overview`, { credentials: "include" });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error ?? "管理情報を読み込めませんでした");
-  return body as AdminOverview;
-}
-
-export async function setCoAdmin(username: string, enabled: boolean): Promise<void> {
-  const res = await fetch(`${base}/api/admin/roles`, {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, enabled }),
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error ?? "管理者権限を変更できませんでした");
-}
-
-export async function checkSources(): Promise<SourceCheckResult> {
-  const res = await fetch(`${base}/api/admin/source-check`, {
-    method: "POST",
-    credentials: "include",
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error ?? "更新を確認できませんでした");
-  return body as SourceCheckResult;
 }
 
 export type FeedbackReason =
@@ -254,7 +129,7 @@ export type FeedbackPayload = {
 };
 
 export async function submitFeedback(payload: FeedbackPayload): Promise<void> {
-  const res = await fetch(`${base}/api/feedback`, {
+  const res = await fetch(`${API_ORIGIN}/api/feedback`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
@@ -290,7 +165,7 @@ export type Assistant = {
 export type Team = { value: string; label: string };
 
 export async function listAssistants(): Promise<{ assistants: Assistant[]; teams: Team[] }> {
-  const res = await fetch(`${base}/api/assistants`, { credentials: "include" });
+  const res = await fetch(`${API_ORIGIN}/api/assistants`, { credentials: "include" });
   if (!res.ok) throw new Error("アシスタントを読み込めませんでした");
   const body = await res.json() as { assistants?: Assistant[]; teams?: Team[] };
   return { assistants: body.assistants ?? [], teams: body.teams ?? [] };
@@ -307,7 +182,7 @@ export type AssistantDraft = {
 };
 
 export async function createAssistant(draft: AssistantDraft): Promise<Assistant> {
-  const res = await fetch(`${base}/api/assistants`, {
+  const res = await fetch(`${API_ORIGIN}/api/assistants`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
@@ -319,7 +194,7 @@ export async function createAssistant(draft: AssistantDraft): Promise<Assistant>
 }
 
 export async function updateAssistant(id: string, draft: AssistantDraft): Promise<Assistant> {
-  const res = await fetch(`${base}/api/assistants/${encodeURIComponent(id)}`, {
+  const res = await fetch(`${API_ORIGIN}/api/assistants/${encodeURIComponent(id)}`, {
     method: "PUT",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
@@ -331,7 +206,7 @@ export async function updateAssistant(id: string, draft: AssistantDraft): Promis
 }
 
 export async function deleteAssistant(id: string): Promise<void> {
-  const res = await fetch(`${base}/api/assistants/${encodeURIComponent(id)}`, {
+  const res = await fetch(`${API_ORIGIN}/api/assistants/${encodeURIComponent(id)}`, {
     method: "DELETE",
     credentials: "include",
   });
@@ -362,14 +237,14 @@ function normalizeChat(chat: Chat): Chat {
 }
 
 export async function listChats(): Promise<Chat[]> {
-  const res = await fetch(`${base}/api/chats`, { credentials: "include" });
+  const res = await fetch(`${API_ORIGIN}/api/chats`, { credentials: "include" });
   if (!res.ok) throw new Error("チャット履歴を読み込めませんでした");
   const body = await res.json() as { chats?: Chat[] };
   return Array.isArray(body.chats) ? body.chats.map(normalizeChat) : [];
 }
 
 export async function saveChat(chat: Chat): Promise<void> {
-  const res = await fetch(`${base}/api/chats/${encodeURIComponent(chat.id)}`, {
+  const res = await fetch(`${API_ORIGIN}/api/chats/${encodeURIComponent(chat.id)}`, {
     method: "PUT",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
@@ -379,7 +254,7 @@ export async function saveChat(chat: Chat): Promise<void> {
 }
 
 export async function deleteChat(chatId: string): Promise<void> {
-  const res = await fetch(`${base}/api/chats/${encodeURIComponent(chatId)}`, {
+  const res = await fetch(`${API_ORIGIN}/api/chats/${encodeURIComponent(chatId)}`, {
     method: "DELETE",
     credentials: "include",
   });
@@ -403,7 +278,7 @@ export async function ask(
   attachments: string[] = [],
 ): Promise<void> {
   // 非公開Wikiに関する質問をURLへ載せるとアクセスログに残るため、本文で送る。
-  const res = await fetch(`${base}/api/ask`, {
+  const res = await fetch(`${API_ORIGIN}/api/ask`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },

@@ -29,11 +29,6 @@ import (
 	"github.com/97kuek/wasa-chat/backend/internal/wiki"
 )
 
-const (
-	cookieName    = "wasa_session"
-	sessionMaxAge = 30 * 24 * time.Hour
-)
-
 type Config struct {
 	SessionSecret    string // Cookie署名用。未設定なら起動時に生成する
 	DailyLimit       int    // 利用者1人あたりの1日の質問数上限
@@ -174,7 +169,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSmallRequestBodyBytes)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "リクエストが不正です"})
 		return
 	}
@@ -182,7 +177,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// パスワードはここで使い切る。保存もログ出力もしない
 	user, err := s.auth.Login(r.Context(), strings.TrimSpace(body.Username), body.Password)
 	if err != nil {
-		time.Sleep(300 * time.Millisecond) // 総当たりの速度を落とす
+		time.Sleep(loginFailureDelay) // 総当たりの速度を落とす
 		status, message := http.StatusUnauthorized, err.Error()
 		if errors.Is(err, wiki.ErrUnavailable) {
 			status = http.StatusBadGateway
@@ -321,8 +316,6 @@ func (s *Server) requireOwner(next http.HandlerFunc) http.HandlerFunc {
 
 // ---------------------------------------------------------------- チャット履歴
 
-const maxChats = 30
-
 func (s *Server) handleListChats(w http.ResponseWriter, r *http.Request) {
 	user, _ := s.currentUser(r)
 	chats, err := s.state.ListChats(r.Context(), s.userKey(user), maxChats)
@@ -339,7 +332,7 @@ func (s *Server) handleListChats(w http.ResponseWriter, r *http.Request) {
 }
 
 func validChatID(id string) bool {
-	if id == "" || len(id) > 64 {
+	if id == "" || len(id) > maxChatIDBytes {
 		return false
 	}
 	for _, char := range id {
@@ -354,23 +347,23 @@ func validChatID(id string) bool {
 
 func validTime(value string) bool {
 	parsed, err := time.Parse(time.RFC3339, value)
-	return err == nil && parsed.Before(time.Now().Add(5*time.Minute))
+	return err == nil && parsed.Before(time.Now().Add(maxFutureClockSkew))
 }
 
 func validateChat(chat *state.Chat, expectedID string) bool {
 	if chat.ID != expectedID || !validChatID(chat.ID) ||
-		strings.TrimSpace(chat.Title) == "" || len([]rune(chat.Title)) > 80 ||
+		strings.TrimSpace(chat.Title) == "" || len([]rune(chat.Title)) > maxChatTitleRunes ||
 		!validTime(chat.CreatedAt) || !validTime(chat.UpdatedAt) ||
-		len(chat.Turns) == 0 || len(chat.Turns) > 100 {
+		len(chat.Turns) == 0 || len(chat.Turns) > maxTurnsPerChat {
 		return false
 	}
 	for i := range chat.Turns {
 		turn := &chat.Turns[i]
-		if strings.TrimSpace(turn.Question) == "" || len([]rune(turn.Question)) > 500 ||
-			len([]rune(turn.Answer)) > 300_000 || len([]rune(turn.Error)) > 2_000 ||
-			len(turn.Sources) > 100 ||
+		if strings.TrimSpace(turn.Question) == "" || len([]rune(turn.Question)) > maxQuestionRunes ||
+			len([]rune(turn.Answer)) > maxAnswerRunes || len([]rune(turn.Error)) > maxTurnErrorRunes ||
+			len(turn.Sources) > maxSourcesPerTurn ||
 			// 画像を履歴へ入れさせない。1チャットで上限を超える
-			len(turn.AssistantID) > 64 || len([]rune(turn.AssistantName)) > 40 {
+			len(turn.AssistantID) > maxAssistantIDBytes || len([]rune(turn.AssistantName)) > maxAssistantNameRunes {
 			return false
 		}
 		if _, ok := pipeline.ParseResponseMode(turn.ResponseMode); !ok {
@@ -387,7 +380,7 @@ func validateChat(chat *state.Chat, expectedID string) bool {
 		}
 		if turn.FeedbackRating != "" && turn.FeedbackRating != "good" && turn.FeedbackRating != "bad" ||
 			turn.FeedbackRating == "" && (len(turn.FeedbackReasons) > 0 || turn.FeedbackComment != "") ||
-			len(turn.FeedbackReasons) > 5 || len([]rune(turn.FeedbackComment)) > 500 ||
+			len(turn.FeedbackReasons) > maxFeedbackReasons || len([]rune(turn.FeedbackComment)) > maxFeedbackCommentRunes ||
 			!validFeedbackReasons(turn.FeedbackReasons) ||
 			!feedbackReasonsMatch("answer", turn.FeedbackRating, turn.FeedbackReasons) {
 			return false
@@ -395,7 +388,7 @@ func validateChat(chat *state.Chat, expectedID string) bool {
 		for _, source := range turn.Sources {
 			parsed, err := url.Parse(source.URL)
 			if err != nil || parsed.Host == "" || parsed.Scheme != "http" && parsed.Scheme != "https" ||
-				len([]rune(source.Title)) > 300 || len(source.URL) > 4_000 {
+				len([]rune(source.Title)) > maxSourceTitleRunes || len(source.URL) > maxSourceURLBytes {
 				return false
 			}
 		}
@@ -409,7 +402,7 @@ func validateChat(chat *state.Chat, expectedID string) bool {
 func (s *Server) handleSaveChat(w http.ResponseWriter, r *http.Request) {
 	chatID := r.PathValue("id")
 	var chat state.Chat
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&chat); err != nil ||
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxChatBodyBytes)).Decode(&chat); err != nil ||
 		!validateChat(&chat, chatID) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "チャット履歴が不正です"})
 		return
@@ -439,22 +432,6 @@ func (s *Server) handleDeleteChat(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------- フィードバック
-
-const (
-	maxFeedbackBodyBytes      = 128 << 10
-	maxFeedbackReasons        = 5
-	maxFeedbackCommentRunes   = 500
-	maxFeedbackQuestionRunes  = 500
-	maxFeedbackAnswerRunes    = 20_000
-	maxFeedbackSources        = 8
-	maxFeedbackAssistantID    = 64
-	maxFeedbackAssistantRunes = 40
-	maxFeedbackChatID         = 64
-	maxFeedbackTurnIndex      = 99
-	maxFeedbackSourceTitle    = 300
-	maxFeedbackSourceURL      = 4_000
-	maxStageTimingMS          = int64((30 * time.Minute) / time.Millisecond)
-)
 
 func validStageTimings(timings *state.StageTimings) bool {
 	if timings == nil {
@@ -518,7 +495,7 @@ func feedbackReasonsMatch(kind, rating string, reasons []string) bool {
 }
 
 func validFeedbackClientID(id string) bool {
-	if id == "" || len(id) > 128 {
+	if id == "" || len(id) > maxFeedbackClientIDBytes {
 		return false
 	}
 	for _, char := range id {
@@ -635,8 +612,6 @@ func (s *Server) handleSaveFeedback(w http.ResponseWriter, r *http.Request) {
 // 全員で共有する。審査はしない代わりに、悪い設定が危険ではなく退屈になるよう
 // 構造で縛ってある（internal/assistant のパッケージコメントを参照）。
 
-const maxAssistants = 100
-
 // assistantView は一覧に載せる形。権限の判定結果をサーバー側で付ける。
 // 画面側で作成者名を突き合わせる実装にすると、判定が2箇所に散る。
 type assistantView struct {
@@ -677,7 +652,7 @@ func (s *Server) handleListAssistants(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCreateAssistant(w http.ResponseWriter, r *http.Request) {
 	var body state.Assistant
 	// アイコン画像（data URI・最大96KB）を含むので、他のAPIより大きく取る
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256<<10)).Decode(&body); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxAssistantBodyBytes)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "リクエストが不正です"})
 		return
 	}
@@ -728,7 +703,7 @@ func (s *Server) handleUpdateAssistant(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var body state.Assistant
 	// アイコン画像（data URI・最大96KB）を含むので、他のAPIより大きく取る
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256<<10)).Decode(&body); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxAssistantBodyBytes)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "リクエストが不正です"})
 		return
 	}
@@ -826,16 +801,6 @@ func (s *Server) lookupAssistant(ctx context.Context, id string) (*state.Assista
 }
 
 // ---------------------------------------------------------------- 質問
-
-const (
-	maxConversationTurns         = 2
-	maxConversationQuestionRunes = 500
-	maxConversationAnswerRunes   = 2_000
-	maxQuestionRunes             = 500
-	// 画像1枚（縮小後400KBまで）をbase64で載せる余地を持たせる。
-	// 32KBのままだと添付が一切通らない
-	maxAskBodyBytes = 1 << 20
-)
 
 func validConversationContext(context []pipeline.ConversationTurn) bool {
 	// 全履歴を毎回送ると入力費用が会話の長さに比例して増える。指示語の解決には

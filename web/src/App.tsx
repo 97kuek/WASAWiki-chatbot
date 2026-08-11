@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ask,
   createAssistant,
@@ -22,10 +22,15 @@ import {
   type Turn,
 } from "./api";
 import { stripCitation } from "./answer";
-import { answerPlainText, chatTitle, groupChats, referenceSections, retryLabel, shareText, slugify } from "./chat";
+import { answerPlainText, chatTitle, groupChats, retryLabel, shareText, slugify } from "./chat";
 import { ACCEPTED_IMAGE_TYPES, toAttachment, type Attachment } from "./attachment";
 import { AssistantAvatar, DefaultAvatar, toIconDataURL, type IconCropPosition } from "./avatar";
-import { SelectMenu, type SelectOption } from "./SelectMenu";
+import { LoadingScreen } from "./components/LoadingScreen";
+import { ReferenceSummary } from "./components/ReferenceSummary";
+import { SelectMenu, type SelectOption } from "./components/SelectMenu";
+import { Spinner } from "./components/Spinner";
+import { Toast } from "./components/Toast";
+import { APP_LIMITS, APP_URLS, LAYOUT_QUERY, STICK_TO_BOTTOM_PX, UI_TIMING } from "./config";
 import {
   AnswerFeedback,
   FEEDBACK_ANSWER_MAX,
@@ -33,53 +38,18 @@ import {
   FeedbackPopover,
   feedbackNotificationMessage,
 } from "./feedback";
+import { useToast } from "./hooks/useToast";
+import { readStored, readStoredIds, writeStored } from "./lib/storage";
 
 // KaTeXは初期JSの大半を占めるが、回答が表示されるまでは不要である。
 // 質問送信時に先読みし、ログイン画面の初期表示と回答開始時の待ち時間を両立する。
 const loadMarkdownModule = () => import("./markdown");
 const AdminPage = lazy(async () => {
-  const module = await import("./AdminPage");
+  const module = await import("./admin/AdminPage");
   return { default: module.AdminPage };
 });
 
 const CHUNK_RELOAD_KEY = "wasa-chat-chunk-reload";
-
-/**
- * localStorage と sessionStorage は、**参照そのものが例外を投げることがある。**
- * Cookieを全面遮断した設定の端末が該当する。読めない・書けないだけなら
- * 動作を続けられるので、必ずここを通す。
- *
- * 素で呼んでいた5か所のうち2か所は `useState` の初期化子だったため、
- * その環境では**描画が始まる前に落ちて、エラー境界の画面になっていた**
- * （2026-08-11に確認）。M30の白画面と同じ入口である。
- */
-function readStored(area: "local" | "session", key: string): string | null {
-  try {
-    return (area === "local" ? localStorage : sessionStorage).getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function writeStored(area: "local" | "session", key: string, value: string | null) {
-  try {
-    const storage = area === "local" ? localStorage : sessionStorage;
-    if (value === null) storage.removeItem(key);
-    else storage.setItem(key, value);
-  } catch {
-    /* 保存できなくても、現在のタブでは選んだ状態を維持する */
-  }
-}
-
-/** 保存してあるJSON配列を文字列の配列として読む。壊れていれば空にする。 */
-function readStoredIds(key: string): string[] {
-  try {
-    const parsed = JSON.parse(readStored("local", key) ?? "[]") as unknown;
-    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
-  } catch {
-    return [];
-  }
-}
 
 const Markdown = lazy(async () => {
   try {
@@ -108,18 +78,24 @@ type Announcement = {
   date: string;
 };
 
-const MAX_CHATS = 30;
-const CONVERSATION_CONTEXT_TURNS = 2;
-const CONVERSATION_ANSWER_RUNES = 2_000;
 const ANNOUNCEMENT_READ_KEY = "wasa-chat-read-announcements";
 const ASSISTANT_KEY = "wasa-chat-assistant";
 const ASSISTANT_FAVORITES_KEY = "wasa-chat-assistant-favorites";
 const ASSISTANT_SORT_KEY = "wasa-chat-assistant-sort";
 const RESPONSE_MODE_KEY = "wasa-chat-response-mode";
-const TOAST_DURATION_MS = 3000;
-/** これ以内なら「下端を見ている」とみなし、回答の伸びに追従する。 */
-const STICK_TO_BOTTOM_PX = 80;
 const CENTER_ICON_POSITION: IconCropPosition = { x: 50, y: 50 };
+
+function resizeComposerTextarea(target: HTMLTextAreaElement | null): void {
+  if (!target) return;
+  target.style.height = "auto";
+  const computed = getComputedStyle(target);
+  const lineHeight = Number.parseFloat(computed.lineHeight);
+  const verticalPadding = Number.parseFloat(computed.paddingTop) + Number.parseFloat(computed.paddingBottom);
+  const maxHeight = lineHeight * APP_LIMITS.composerVisibleLines + verticalPadding;
+  const nextHeight = Math.min(target.scrollHeight, maxHeight);
+  target.style.height = `${nextHeight}px`;
+  target.style.overflowY = target.scrollHeight > maxHeight ? "auto" : "hidden";
+}
 
 type AssistantSort = "favorite" | "name" | "author";
 
@@ -155,11 +131,6 @@ function loadResponseMode(): "auto" | "deep" {
 }
 
 const emptyDraft: AssistantDraft = { id: "", name: "", description: "", instruction: "" };
-
-const WIKI_URL = import.meta.env.VITE_WIKI_URL ?? "https://wasabirdman.sakura.ne.jp/wbwiki/w/index.php";
-// 使い方・注意事項・プライバシーポリシーの静的ページ。SPAの初回JavaScriptを
-// 増やさないよう、web/public/support.html として素のHTMLで置いてある。
-const SUPPORT_URL = "/support.html";
 
 /**
  * 回答末尾の「出典: ページ名（最終更新: YYYY-MM）」を落とす。
@@ -201,10 +172,6 @@ function HistoryIcon() {
 }
 
 /** 読込中を示す円形スピナー。待ち時間の表示に凝ると、待っている事実が伝わりにくい。 */
-function Spinner() {
-  return <span className="spinner" aria-hidden="true" />;
-}
-
 export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [username, setUsername] = useState("");
@@ -225,7 +192,7 @@ export default function App() {
   const [dragging, setDragging] = useState(false);
   const [chats, setChats] = useState<Chat[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(() => window.matchMedia("(min-width: 901px)").matches);
+  const [sidebarOpen, setSidebarOpen] = useState(() => window.matchMedia(LAYOUT_QUERY.wide).matches);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [readAnnouncementIds, setReadAnnouncementIds] = useState(loadReadAnnouncementIds);
   const [noticeOpen, setNoticeOpen] = useState(false);
@@ -240,7 +207,7 @@ export default function App() {
   const [historyMenuId, setHistoryMenuId] = useState<string | null>(null);
   const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
   const [renameTitle, setRenameTitle] = useState("");
-  const [toast, setToast] = useState("");
+  const { toast, showToast, hideToast } = useToast();
   const [clock, setClock] = useState(Date.now());
   const [assistants, setAssistants] = useState<Assistant[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
@@ -263,6 +230,7 @@ export default function App() {
   const [iconPosition, setIconPosition] = useState<IconCropPosition>(CENTER_ICON_POSITION);
   const bottom = useRef<HTMLDivElement>(null);
   const conversation = useRef<HTMLElement>(null);
+  const questionInput = useRef<HTMLTextAreaElement>(null);
   // 下端に張り付いているか。読み返すために上へ動かした人を、回答が届くたびに
   // 引き戻さないための判定である
   const stickToBottom = useRef(true);
@@ -277,8 +245,6 @@ export default function App() {
   const profileTrigger = useRef<HTMLButtonElement>(null);
   const historyMenuTrigger = useRef<HTMLButtonElement>(null);
   const syncedChats = useRef<Map<string, string>>(new Map());
-  const toastTimer = useRef<number | null>(null);
-  const toastMessage = useRef("");
 
   const activeAssistant = assistants.find((item) => item.id === assistantId);
   const activeChat = chats.find((chat) => chat.id === activeChatId);
@@ -295,31 +261,15 @@ export default function App() {
     return left.name.localeCompare(right.name, "ja");
   });
 
-  function hideToast() {
-    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
-    toastTimer.current = null;
-    toastMessage.current = "";
-    setToast("");
-  }
-
-  /** 同じ失敗の再通知でタイマーが延び続けないよう、表示中の同一文言は更新しない。 */
-  function showToast(message: string) {
-    if (toastMessage.current === message && toastTimer.current !== null) return;
-    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
-    toastMessage.current = message;
-    setToast(message);
-    toastTimer.current = window.setTimeout(() => {
-      setToast("");
-      toastTimer.current = null;
-      toastMessage.current = "";
-    }, TOAST_DURATION_MS);
-  }
+  useLayoutEffect(() => {
+    resizeComposerTextarea(questionInput.current);
+  }, [question]);
 
   async function restoreHistory() {
     try {
       const restored = (await listChats())
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-        .slice(0, MAX_CHATS)
+        .slice(0, APP_LIMITS.chats)
         .map((chat) => ({
           ...chat,
           turns: chat.turns.map((turn) => ({ ...turn, status: "", streaming: false })),
@@ -417,14 +367,10 @@ export default function App() {
   }, [feedbackOpen, historyMenuId, noticeOpen, profileOpen, renamingChatId]);
 
   useEffect(() => {
-    const wide = window.matchMedia("(min-width: 901px)");
+    const wide = window.matchMedia(LAYOUT_QUERY.wide);
     const followViewport = (event: MediaQueryListEvent) => setSidebarOpen(event.matches);
     wide.addEventListener("change", followViewport);
     return () => wide.removeEventListener("change", followViewport);
-  }, []);
-
-  useEffect(() => () => {
-    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
   }, []);
 
   useEffect(() => {
@@ -472,7 +418,7 @@ export default function App() {
   useEffect(() => {
     if (!authed || !username || streaming) return;
     const timer = window.setTimeout(() => {
-      const pending = chats.slice(0, MAX_CHATS).filter((chat) => (
+      const pending = chats.slice(0, APP_LIMITS.chats).filter((chat) => (
         syncedChats.current.get(chat.id) !== JSON.stringify(chat)
       ));
       void Promise.allSettled(pending.map(async (chat) => {
@@ -483,13 +429,13 @@ export default function App() {
           showToast("チャット履歴を同期できませんでした");
         }
       });
-    }, 400);
+    }, UI_TIMING.historySaveDebounceMs);
     return () => window.clearTimeout(timer);
   }, [authed, chats, streaming, username]);
 
   useEffect(() => {
     if (!chats.some((chat) => chat.turns.some((turn) => turn.retryAt))) return;
-    const timer = window.setInterval(() => setClock(Date.now()), 1000);
+    const timer = window.setInterval(() => setClock(Date.now()), UI_TIMING.clockTickMs);
     return () => window.clearInterval(timer);
   }, [chats]);
 
@@ -724,7 +670,7 @@ export default function App() {
   }
 
   function closeSidebarOnMobile() {
-    if (window.matchMedia("(max-width: 900px)").matches) setSidebarOpen(false);
+    if (window.matchMedia(LAYOUT_QUERY.compact).matches) setSidebarOpen(false);
   }
 
   function handleTogglePin(chatId: string) {
@@ -1029,8 +975,8 @@ export default function App() {
     const context = (activeChat?.turns ?? [])
       .slice(0, turnIndex)
       .filter((item) => !item.streaming && item.question.trim() && item.answer.trim())
-      .slice(-CONVERSATION_CONTEXT_TURNS)
-      .map((item) => ({ question: item.question, answer: item.answer.slice(0, CONVERSATION_ANSWER_RUNES) }));
+      .slice(-APP_LIMITS.conversationTurns)
+      .map((item) => ({ question: item.question, answer: item.answer.slice(0, APP_LIMITS.conversationAnswerRunes) }));
     const turn: Turn = {
       question: q,
       answer: "",
@@ -1058,7 +1004,7 @@ export default function App() {
             updatedAt: now,
             turns: [turn],
           };
-      return [updated, ...current.filter((chat) => chat.id !== chatId)].slice(0, MAX_CHATS);
+      return [updated, ...current.filter((chat) => chat.id !== chatId)].slice(0, APP_LIMITS.chats);
     });
     setActiveChatId(chatId);
 
@@ -1149,19 +1095,13 @@ export default function App() {
     }
   }
 
-  if (authed === null) return (
-    <div className="center app-loading" role="status" aria-label="WASA Chatを読み込んでいます">
-      <img src="/assets/wasa-chat-logo-photo-trimmed.png" alt="WASA Chat" className="loading-wordmark" />
-      <Spinner />
-      <span className="muted">読み込み中…</span>
-    </div>
-  );
+  if (authed === null) return <LoadingScreen label="WASA Chatを読み込んでいます" message="読み込み中" />;
 
   if (!authed) {
     return (
       <div className="center login-page">
         <form className="card gate" onSubmit={handleLogin}>
-          <img src="/assets/wasa-chat-logo-photo-trimmed.png" alt="WASA Chat" className="brand-logo-large" />
+          <img src={APP_URLS.logo} alt="WASA Chat" className="brand-logo-large" />
           <div className="login-heading">
             <h1 className="visually-hidden">WASA Chat</h1>
             <p className="muted">WASA Wikiと同じ利用者名・パスワードでログイン</p>
@@ -1214,9 +1154,9 @@ export default function App() {
           <p className="note">パスワードはWikiで本人確認をするためだけに使用します</p>
           {/* ログイン前に読めないと、初めて使う人が何に同意して入るのか分からない */}
           <p className="login-links">
-            <a href={SUPPORT_URL} target="_blank" rel="noreferrer noopener">使い方</a>
-            <a href={`${SUPPORT_URL}#terms`} target="_blank" rel="noreferrer noopener">注意事項</a>
-            <a href={`${SUPPORT_URL}#privacy`} target="_blank" rel="noreferrer noopener">プライバシーポリシー</a>
+            <a href={APP_URLS.support} target="_blank" rel="noreferrer noopener">使い方</a>
+            <a href={`${APP_URLS.support}#terms`} target="_blank" rel="noreferrer noopener">注意事項</a>
+            <a href={`${APP_URLS.support}#privacy`} target="_blank" rel="noreferrer noopener">プライバシーポリシー</a>
           </p>
         </form>
       </div>
@@ -1224,13 +1164,7 @@ export default function App() {
   }
 
 	if (view === "admin" && isAdmin) {
-		return <Suspense fallback={(
-      <div className="center app-loading admin-initial-loading" role="status" aria-label="管理者情報を確認しています">
-        <img src="/assets/wasa-chat-logo-photo-trimmed.png" alt="WASA Chat" className="loading-wordmark" />
-        <Spinner />
-        <span className="muted">管理者情報を確認しています…</span>
-      </div>
-    )}><AdminPage username={username} onBack={closeAdmin} onLogout={() => void handleLogout()} /></Suspense>;
+		return <Suspense fallback={<LoadingScreen label="管理者情報を確認しています" admin />}><AdminPage username={username} onBack={closeAdmin} onLogout={() => void handleLogout()} /></Suspense>;
 	}
 
   return (
@@ -1238,7 +1172,7 @@ export default function App() {
       <aside className="history-panel" aria-label="チャット履歴" aria-hidden={!sidebarOpen}>
         <div className="brand-row">
           <div className="brand">
-            <img src="/assets/wasa-chat-logo-photo-trimmed.png" alt="WASA Chat" className="brand-logo" />
+            <img src={APP_URLS.logo} alt="WASA Chat" className="brand-logo" />
           </div>
           <button type="button" className="sidebar-close" onClick={() => setSidebarOpen(false)} aria-label="履歴を閉じる">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6" /></svg>
@@ -1462,8 +1396,8 @@ export default function App() {
                     <span>ログイン中</span>
                     <strong>{username}</strong>
                   </div>
-                  <a href={WIKI_URL} target="_blank" rel="noreferrer noopener">WASA Wikiを開く</a>
-                  <a href={SUPPORT_URL} target="_blank" rel="noreferrer noopener">ヘルプとポリシー</a>
+                  <a href={APP_URLS.wiki} target="_blank" rel="noreferrer noopener">WASA Wikiを開く</a>
+                  <a href={APP_URLS.support} target="_blank" rel="noreferrer noopener">ヘルプとポリシー</a>
 									{isAdmin && <button type="button" onClick={openAdmin}>管理画面</button>}
                   <button type="button" onClick={handleLogout}>ログアウト</button>
                 </section>
@@ -1534,17 +1468,17 @@ export default function App() {
                 </div>
                 <label>
                   <span>名前</span>
-                  <input value={assistantDraft.name} maxLength={40} required
+                  <input value={assistantDraft.name} maxLength={APP_LIMITS.assistantNameRunes} required
                     onChange={(event) => setAssistantDraft((d) => ({ ...d, name: event.target.value }))} />
                 </label>
                 <label>
                   <span>説明（一覧に出ます）</span>
-                  <input value={assistantDraft.description} maxLength={120}
+                  <input value={assistantDraft.description} maxLength={APP_LIMITS.assistantDescriptionRunes}
                     onChange={(event) => setAssistantDraft((d) => ({ ...d, description: event.target.value }))} />
                 </label>
                 <label>
                   <span>指示（口調・書き方）</span>
-                  <textarea value={assistantDraft.instruction} rows={8} maxLength={1500} required
+                  <textarea value={assistantDraft.instruction} rows={8} maxLength={APP_LIMITS.assistantInstructionRunes} required
                     placeholder="例: 語尾を「〜しゅよ」にする。一人称は「ぼく」。明るくのんびりした調子で話す。"
                     onChange={(event) => setAssistantDraft((d) => ({ ...d, instruction: event.target.value }))} />
                 </label>
@@ -1661,7 +1595,7 @@ export default function App() {
         <main className="conversation" ref={conversation} aria-live="polite">
           {!activeChat && (
             <div className="intro">
-              <img src="/assets/wasa-chat-logo-photo-trimmed.png" alt="WASA Chat" className="intro-logo" />
+              <img src={APP_URLS.logo} alt="WASA Chat" className="intro-logo" />
               <h2>引き継ぎ資料を、会話で探す</h2>
               <p className="muted">
                 部内Wikiと公式サイトを横断して回答し、参照した資料を示します。
@@ -1699,7 +1633,7 @@ export default function App() {
                     WASAロゴのままだと、口調が変わった理由が画面から分からない */}
                 {turn.assistantName
                   ? <AssistantAvatar name={turn.assistantName} icon={assistants.find((a) => a.id === turn.assistantId)?.icon} size={34} />
-                  : <img src="/assets/wasa-chat-mark-photo-trimmed.png" alt="" className="assistant-avatar" />}
+                  : <img src={APP_URLS.mark} alt="" className="assistant-avatar" />}
                 <div className="assistant-content">
                   <div className="answer-author">
                     <span>{turn.assistantName ?? "WASA Chat"}</span>
@@ -1724,13 +1658,10 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* どこを開けば確かめられるかまで示す。出典カードはページ単位だが、
-                      こちらは実際に読んだ節まで出る */}
-                  {!turn.streaming && turn.answer && referenceSections(turn.sources).length > 0 && (
-                    <p className="answer-reference">
-                      <span aria-hidden="true">📄</span>
-                      <span>参照：{referenceSections(turn.sources).join("／")}</span>
-                    </p>
+                  {/* 回答中だけ大きなカードを出すと完了時に画面が跳ねるため、
+                      前後とも実際に読んだ節を同じ1行で示す。 */}
+                  {turn.sources.length > 0 && (turn.streaming || turn.answer) && (
+                    <ReferenceSummary sources={turn.sources} active={turn.streaming} />
                   )}
                   {turn.error && (turn.errorCode ? (
                     <div className="service-alert" role="alert">
@@ -1761,25 +1692,6 @@ export default function App() {
                     />
                   )}
 
-                  {turn.streaming && turn.sources.length > 0 && (
-                    <section className="sources">
-                      <h2>参照中の資料</h2>
-                      <ul>
-                        {turn.sources.map((source) => (
-                          <li key={source.url}>
-                            <a href={source.url} target="_blank" rel="noreferrer noopener">
-                              <span className={`source-origin ${source.origin === "site" ? "public" : ""}`}>
-                                {source.origin === "site" ? "公式サイト" : "Wiki"}
-                              </span>
-                              <span className="source-title">{source.title}</span>
-                              <span className="source-meta">最終更新 {source.last_edited}</span>
-                              <span className="source-arrow" aria-hidden="true">↗</span>
-                            </a>
-                          </li>
-                        ))}
-                      </ul>
-                    </section>
-                  )}
                 </div>
               </div>
             </article>
@@ -1829,8 +1741,12 @@ export default function App() {
             }}
           >
             <textarea
+              ref={questionInput}
               value={question}
-              onChange={(event) => setQuestion(event.target.value)}
+              onChange={(event) => {
+                setQuestion(event.target.value);
+                resizeComposerTextarea(event.currentTarget);
+              }}
               onPaste={(event) => {
                 const file = imageFromDataTransfer(event.clipboardData);
                 if (!file) return; // 文字の貼り付けはそのまま通す
@@ -1838,8 +1754,8 @@ export default function App() {
                 void attachImage(file);
               }}
               aria-label="質問"
-              placeholder="引き継ぎ資料について質問する（画像は貼り付けもできます）"
-              maxLength={500}
+              placeholder="引き継ぎ資料について質問する"
+              maxLength={APP_LIMITS.questionRunes}
               rows={1}
               disabled={streaming}
             />
@@ -1905,7 +1821,7 @@ export default function App() {
             <input
               value={renameTitle}
               onChange={(event) => setRenameTitle(event.target.value)}
-              maxLength={80}
+              maxLength={APP_LIMITS.chatTitleRunes}
               autoFocus
               aria-label="新しいタイトル"
             />
@@ -1916,15 +1832,7 @@ export default function App() {
           </form>
         </div>
       )}
-      {/* ライブリージョンは中身と一緒に現れると読み上げられない。常に置いておき、
-          文字だけを差し替える。見えるトースト側は同じ文を二重に読ませないため隠す */}
-      <div className="visually-hidden" role="status" aria-live="polite">{toast}</div>
-      {toast && (
-        <div className="toast" key={toast}>
-          <span aria-hidden="true">{toast}</span>
-          <button type="button" onClick={hideToast} aria-label="通知を閉じる">×</button>
-        </div>
-      )}
+      <Toast message={toast} onClose={hideToast} />
     </div>
   );
 }

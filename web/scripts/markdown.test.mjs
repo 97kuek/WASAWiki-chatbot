@@ -199,6 +199,12 @@ test("[1][2] は2つのチップになる", () => {
   assert.equal(html.match(/class="citation"/g).length, 2);
 });
 
+test("句点の前に来た出典番号は、句点の後へ移してからチップにする", () => {
+  const html = renderMarkdown("主翼を確認します[1]。", CITES);
+  assert.match(html, /確認します。<a class="citation"/);
+  assert.doesNotMatch(html, /<\/a>。/);
+});
+
 // モデルが番号を作ったとき、意味のない [9] を本文に残さない
 test("範囲外の番号は消す", () => {
   const html = renderMarkdown("そんな資料はありません。[9]", CITES);

@@ -7,7 +7,11 @@ import {
   type AdminUserUsage,
   type SourceCheckResult,
 } from "./api";
-import { SelectMenu, type SelectOption } from "./SelectMenu";
+import { LoadingScreen } from "../components/LoadingScreen";
+import { SelectMenu, type SelectOption } from "../components/SelectMenu";
+import { Toast } from "../components/Toast";
+import { APP_URLS } from "../config";
+import { useToast } from "../hooks/useToast";
 
 type Props = {
   username: string;
@@ -18,9 +22,11 @@ type Props = {
 type SortKey = "username" | "today" | "sevenDays" | "thirtyDays" | "lastUsed";
 type AdminTab = "overview" | "sources" | "users" | "quota" | "logs";
 
-const TOAST_DURATION_MS = 3000;
-const WIKI_URL = import.meta.env.VITE_WIKI_URL ?? "https://wasabirdman.sakura.ne.jp/wbwiki/";
-const SUPPORT_URL = "/support.html";
+const MILLISECONDS_PER_SECOND = 1_000;
+const MILLISECONDS_PER_DAY = 24 * 60 * 60 * MILLISECONDS_PER_SECOND;
+const API_CALLS_PER_QUESTION = 3;
+const DEFAULT_USAGE_PERIOD = "7";
+const DEFAULT_AUDIT_PERIOD = "30";
 const USER_SORT_OPTIONS: SelectOption[] = [
   { value: "thirtyDays:desc", label: "30日利用が多い順" },
   { value: "sevenDays:desc", label: "7日利用が多い順" },
@@ -54,8 +60,8 @@ function formatDateTime(value?: string): string {
 }
 
 function duration(milliseconds: number): string {
-  if (milliseconds < 1000) return `${milliseconds}ms`;
-  return `${(milliseconds / 1000).toFixed(1)}秒`;
+  if (milliseconds < MILLISECONDS_PER_SECOND) return `${milliseconds}ms`;
+  return `${(milliseconds / MILLISECONDS_PER_SECOND).toFixed(1)}秒`;
 }
 
 const outcomeLabels: Record<string, string> = {
@@ -105,7 +111,7 @@ function inPeriod(value: string, period: string): boolean {
   const occurred = new Date(value).getTime();
   if (Number.isNaN(occurred)) return false;
   const days = Number(period);
-  return occurred >= Date.now() - days * 24 * 60 * 60 * 1000;
+  return occurred >= Date.now() - days * MILLISECONDS_PER_DAY;
 }
 
 function sameVersion(frontend: string, backend: string): boolean {
@@ -143,37 +149,15 @@ export function AdminPage({ username, onBack, onLogout }: Props) {
   const [sortKey, setSortKey] = useState<SortKey>("thirtyDays");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [usageLogSearch, setUsageLogSearch] = useState("");
-  const [usageLogPeriod, setUsageLogPeriod] = useState("7");
+  const [usageLogPeriod, setUsageLogPeriod] = useState(DEFAULT_USAGE_PERIOD);
   const [usageLogOutcome, setUsageLogOutcome] = useState("all");
   const [auditLogSearch, setAuditLogSearch] = useState("");
-  const [auditLogPeriod, setAuditLogPeriod] = useState("30");
+  const [auditLogPeriod, setAuditLogPeriod] = useState(DEFAULT_AUDIT_PERIOD);
   const [auditLogAction, setAuditLogAction] = useState("all");
   const [profileOpen, setProfileOpen] = useState(false);
-  const [toast, setToast] = useState("");
-  const toastTimer = useRef<number | null>(null);
-  const toastMessage = useRef("");
+  const { toast, showToast, hideToast } = useToast();
   const headerMenus = useRef<HTMLDivElement>(null);
   const profileTrigger = useRef<HTMLButtonElement>(null);
-
-  function hideToast() {
-    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
-    toastTimer.current = null;
-    toastMessage.current = "";
-    setToast("");
-  }
-
-  // チャット画面と同じく、同一文言の再通知で表示時間を延ばさない。
-  function showToast(message: string) {
-    if (toastMessage.current === message && toastTimer.current !== null) return;
-    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
-    toastMessage.current = message;
-    setToast(message);
-    toastTimer.current = window.setTimeout(() => {
-      setToast("");
-      toastTimer.current = null;
-      toastMessage.current = "";
-    }, TOAST_DURATION_MS);
-  }
 
   async function refresh() {
     setLoading(true);
@@ -188,9 +172,6 @@ export function AdminPage({ username, onBack, onLogout }: Props) {
 
   useEffect(() => {
     void refresh();
-    return () => {
-      if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
-    };
   }, []);
 
   useEffect(() => {
@@ -324,13 +305,7 @@ export function AdminPage({ username, onBack, onLogout }: Props) {
   ], [auditActions]);
 
   if (!data && loading) {
-    return (
-      <div className="center app-loading admin-initial-loading" role="status" aria-label="管理者情報を確認しています">
-        <img src="/assets/wasa-chat-logo-photo-trimmed.png" alt="WASA Chat" className="loading-wordmark" />
-        <span className="spinner" aria-hidden="true" />
-        <span className="muted">管理者情報を確認しています…</span>
-      </div>
-    );
+    return <LoadingScreen label="管理者情報を確認しています" admin />;
   }
 
   return (
@@ -340,7 +315,7 @@ export function AdminPage({ username, onBack, onLogout }: Props) {
           <button type="button" className="sidebar-toggle admin-back" onClick={onBack} aria-label="チャットへ戻る" title="チャットへ戻る">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6" /></svg>
           </button>
-          <img src="/assets/wasa-chat-logo-photo-trimmed.png" alt="WASA Chat" className="admin-logo" />
+          <img src={APP_URLS.logo} alt="WASA Chat" className="admin-logo" />
           <span className="admin-mode-label">管理画面</span>
         </div>
         <div className="header-actions" ref={headerMenus}>
@@ -365,8 +340,8 @@ export function AdminPage({ username, onBack, onLogout }: Props) {
               <section className="header-popover profile-popover" id="admin-profile-popover" aria-label="利用者メニュー">
                 <div className="profile-summary"><span>管理者としてログイン中</span><strong>{username}</strong></div>
                 <button type="button" onClick={onBack}>チャットへ戻る</button>
-                <a href={WIKI_URL} target="_blank" rel="noreferrer noopener">WASA Wikiを開く</a>
-                <a href={SUPPORT_URL} target="_blank" rel="noreferrer noopener">ヘルプとポリシー</a>
+                <a href={APP_URLS.wiki} target="_blank" rel="noreferrer noopener">WASA Wikiを開く</a>
+                <a href={APP_URLS.support} target="_blank" rel="noreferrer noopener">ヘルプとポリシー</a>
                 <button type="button" onClick={onLogout}>ログアウト</button>
               </section>
             )}
@@ -389,6 +364,7 @@ export function AdminPage({ username, onBack, onLogout }: Props) {
             <p>{currentTab.description}</p>
           </header>
 
+          <div key={activeTab} className="admin-tab-panel">
           {activeTab === "overview" && (
             <>
               <section aria-labelledby="admin-summary-title">
@@ -487,7 +463,7 @@ export function AdminPage({ username, onBack, onLogout }: Props) {
                   <table className="admin-table">
                     <thead><tr><th>Wiki利用者名</th><th>権限</th><th>付与者</th><th>付与日時</th></tr></thead>
                     <tbody>{data.admins.map((admin) => (
-                      <tr key={admin.username}><th>{admin.username}</th><td><span className="admin-role-badge">{admin.role === "owner" ? "主管理者" : "共同管理者"}</span></td><td>{admin.grantedBy || "—"}</td><td>{formatDateTime(admin.grantedAt)}</td></tr>
+                      <tr key={admin.username}><th data-label="Wiki利用者名">{admin.username}</th><td data-label="権限"><span className="admin-role-badge">{admin.role === "owner" ? "主管理者" : "共同管理者"}</span></td><td data-label="付与者">{admin.grantedBy || "—"}</td><td data-label="付与日時">{formatDateTime(admin.grantedAt)}</td></tr>
                     ))}</tbody>
                   </table>
                 </div>
@@ -513,11 +489,11 @@ export function AdminPage({ username, onBack, onLogout }: Props) {
                       <th>管理権限</th>
                     </tr></thead>
                     <tbody>{users.length === 0 ? (
-                      <tr><td colSpan={6} className="admin-empty">該当する利用者はいません</td></tr>
+                      <tr className="admin-empty-row"><td colSpan={6} className="admin-empty">該当する利用者はいません</td></tr>
                     ) : users.map((user) => (
                       <tr key={user.username}>
-                        <th>{user.username}</th><td>{user.today}{user.limitReached && <span className="admin-warning">上限</span>}</td><td>{user.sevenDays}</td><td>{user.thirtyDays}</td><td>{formatDateTime(user.lastUsed)}</td>
-                        <td>{user.role === "owner" ? <span className="admin-role-badge">主管理者</span> : user.role === "co_admin" ? (
+                        <th data-label="Wiki利用者名">{user.username}</th><td data-label="今日">{user.today}{user.limitReached && <span className="admin-warning">上限</span>}</td><td data-label="7日">{user.sevenDays}</td><td data-label="30日">{user.thirtyDays}</td><td data-label="最終利用">{formatDateTime(user.lastUsed)}</td>
+                        <td data-label="管理権限">{user.role === "owner" ? <span className="admin-role-badge">主管理者</span> : user.role === "co_admin" ? (
                           <div className="admin-role-action"><span className="admin-role-badge">共同管理者</span>{isOwner && <button type="button" disabled={roleBusy === user.username} onClick={() => void changeRole(user, false)}>解除</button>}</div>
                         ) : isOwner ? <button type="button" className="admin-link-button" disabled={roleBusy === user.username} onClick={() => void changeRole(user, true)}>共同管理者にする</button> : "—"}</td>
                       </tr>
@@ -534,7 +510,7 @@ export function AdminPage({ username, onBack, onLogout }: Props) {
               <div className="admin-section-head"><div><h3 id="admin-quota-title">Gemini無料枠</h3><p>WASA ChatからGeminiへ送った、本日分のリクエストを確認します。</p></div><span className="admin-pill">太平洋時間 {data.quota.day}</span></div>
               <div className="admin-quota-summary">
                 <article><span>本日のAPI送信</span><strong>{number.format(data.quota.totalRequests)}</strong><small>再試行を含む実測値</small></article>
-                <article><span>質問数の目安</span><strong>約{number.format(Math.floor(data.quota.totalRequests / 3))}</strong><small>質問1回につき通常約3回送信</small></article>
+                <article><span>質問数の目安</span><strong>約{number.format(Math.floor(data.quota.totalRequests / API_CALLS_PER_QUESTION))}</strong><small>質問1回につき通常約{API_CALLS_PER_QUESTION}回送信</small></article>
                 <article><span>リセット</span><strong>{formatDateTime(data.quota.resetAt)}</strong><small>Gemini無料枠の基準</small></article>
               </div>
               <div className="admin-quota-list">
@@ -545,7 +521,7 @@ export function AdminPage({ username, onBack, onLogout }: Props) {
                     <article key={model.model} className="admin-quota-card">
                       <div><strong>{model.model}</strong><span>推定残り {number.format(model.remaining)}回</span></div>
                       <div className="admin-meter" role="meter" aria-label={`${model.model}の利用率`} aria-valuemin={0} aria-valuemax={model.limit} aria-valuenow={model.requests}><span style={{ width: `${ratio * 100}%` }} /></div>
-                      <small>{number.format(model.requests)} / {number.format(model.limit)}リクエスト・通常約{number.format(Math.floor(model.remaining / 3))}質問分</small>
+                      <small>{number.format(model.requests)} / {number.format(model.limit)}リクエスト・通常約{number.format(Math.floor(model.remaining / API_CALLS_PER_QUESTION))}質問分</small>
                     </article>
                   );
                 })}
@@ -562,13 +538,13 @@ export function AdminPage({ username, onBack, onLogout }: Props) {
                   <label><span>検索</span><input type="search" value={usageLogSearch} onChange={(event) => setUsageLogSearch(event.target.value)} placeholder="利用者・アシスタント" /></label>
                   <div className="admin-filter-field"><span>期間</span><div className="admin-select-control"><SelectMenu label="利用ログの期間" value={usageLogPeriod} options={PERIOD_OPTIONS} onChange={setUsageLogPeriod} /></div></div>
                   <div className="admin-filter-field"><span>結果</span><div className="admin-select-control"><SelectMenu label="利用ログの結果" value={usageLogOutcome} options={outcomeOptions} onChange={setUsageLogOutcome} /></div></div>
-                  <button type="button" className="admin-filter-reset" aria-label="利用ログの絞り込みを解除" title="絞り込みを解除" onClick={() => { setUsageLogSearch(""); setUsageLogPeriod("7"); setUsageLogOutcome("all"); }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4v5h5M4.8 9A8 8 0 1 1 6 17.5" /></svg></button>
+                  <button type="button" className="admin-filter-reset" aria-label="利用ログの絞り込みを解除" title="絞り込みを解除" onClick={() => { setUsageLogSearch(""); setUsageLogPeriod(DEFAULT_USAGE_PERIOD); setUsageLogOutcome("all"); }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4v5h5M4.8 9A8 8 0 1 1 6 17.5" /></svg></button>
                 </div>
                 <div className="admin-table-wrap">
                   <table className="admin-table admin-log-table">
                     <thead><tr><th>日時</th><th>利用者</th><th>結果</th><th>利用</th><th>モード</th><th>所要時間</th></tr></thead>
-                    <tbody>{usageEvents.length === 0 ? <tr><td colSpan={6} className="admin-empty">条件に一致する記録はありません</td></tr> : usageEvents.map((event) => (
-                      <tr key={event.id}><td>{formatDateTime(event.occurredAt)}</td><th>{event.username}</th><td>{outcomeLabels[event.outcome] ?? event.outcome}</td><td>{event.assistantId || "汎用"}{event.hasAttachment ? "・画像" : ""}</td><td>{event.resolvedMode || event.responseMode || "—"}</td><td>{duration(event.durationMs)}</td></tr>
+                    <tbody>{usageEvents.length === 0 ? <tr className="admin-empty-row"><td colSpan={6} className="admin-empty">条件に一致する記録はありません</td></tr> : usageEvents.map((event) => (
+                      <tr key={event.id}><td data-label="日時">{formatDateTime(event.occurredAt)}</td><th data-label="利用者">{event.username}</th><td data-label="結果">{outcomeLabels[event.outcome] ?? event.outcome}</td><td data-label="利用">{event.assistantId || "汎用"}{event.hasAttachment ? "・画像" : ""}</td><td data-label="モード">{event.resolvedMode || event.responseMode || "—"}</td><td data-label="所要時間">{duration(event.durationMs)}</td></tr>
                     ))}</tbody>
                   </table>
                 </div>
@@ -579,29 +555,24 @@ export function AdminPage({ username, onBack, onLogout }: Props) {
                   <label><span>検索</span><input type="search" value={auditLogSearch} onChange={(event) => setAuditLogSearch(event.target.value)} placeholder="管理者・対象" /></label>
                   <div className="admin-filter-field"><span>期間</span><div className="admin-select-control"><SelectMenu label="管理者操作ログの期間" value={auditLogPeriod} options={PERIOD_OPTIONS} onChange={setAuditLogPeriod} /></div></div>
                   <div className="admin-filter-field"><span>操作</span><div className="admin-select-control"><SelectMenu label="管理者操作ログの操作" value={auditLogAction} options={actionOptions} onChange={setAuditLogAction} /></div></div>
-                  <button type="button" className="admin-filter-reset" aria-label="管理者操作ログの絞り込みを解除" title="絞り込みを解除" onClick={() => { setAuditLogSearch(""); setAuditLogPeriod("30"); setAuditLogAction("all"); }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4v5h5M4.8 9A8 8 0 1 1 6 17.5" /></svg></button>
+                  <button type="button" className="admin-filter-reset" aria-label="管理者操作ログの絞り込みを解除" title="絞り込みを解除" onClick={() => { setAuditLogSearch(""); setAuditLogPeriod(DEFAULT_AUDIT_PERIOD); setAuditLogAction("all"); }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4v5h5M4.8 9A8 8 0 1 1 6 17.5" /></svg></button>
                 </div>
                 <div className="admin-table-wrap">
                   <table className="admin-table admin-log-table">
                     <thead><tr><th>日時</th><th>管理者</th><th>操作</th><th>対象</th></tr></thead>
-                    <tbody>{adminAudits.length === 0 ? <tr><td colSpan={4} className="admin-empty">条件に一致する記録はありません</td></tr> : adminAudits.map((audit) => (
-                      <tr key={audit.id}><td>{formatDateTime(audit.occurredAt)}</td><th>{audit.actor}</th><td>{auditLabels[audit.action] ?? audit.action}</td><td>{audit.target || "—"}</td></tr>
+                    <tbody>{adminAudits.length === 0 ? <tr className="admin-empty-row"><td colSpan={4} className="admin-empty">条件に一致する記録はありません</td></tr> : adminAudits.map((audit) => (
+                      <tr key={audit.id}><td data-label="日時">{formatDateTime(audit.occurredAt)}</td><th data-label="管理者">{audit.actor}</th><td data-label="操作">{auditLabels[audit.action] ?? audit.action}</td><td data-label="対象">{audit.target || "—"}</td></tr>
                     ))}</tbody>
                   </table>
                 </div>
               </section>
             </>
           )}
+          </div>
         </main>
       )}
 
-      <div className="visually-hidden" role="status" aria-live="polite">{toast}</div>
-      {toast && (
-        <div className="toast" key={toast}>
-          <span aria-hidden="true">{toast}</span>
-          <button type="button" onClick={hideToast} aria-label="通知を閉じる">×</button>
-        </div>
-      )}
+      <Toast message={toast} onClose={hideToast} />
     </div>
   );
 }

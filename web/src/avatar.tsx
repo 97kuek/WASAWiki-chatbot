@@ -5,6 +5,8 @@
  * 状態にすると、結局だれもアシスタントを作らなくなるため、既定でも成立させる。
  */
 
+import { APP_URLS } from "./config";
+
 /** 画像は data URI だけ受け付ける。外部URLは弾かれてもここでは描かない。 */
 const isDataImage = (value: string | undefined): value is string =>
   typeof value === "string" && /^data:image\/(png|jpeg|webp);base64,/.test(value);
@@ -69,7 +71,7 @@ export function DefaultAvatar({ size = 40 }: { size?: number }) {
   return (
     <img
       className="avatar avatar-default"
-      src="/assets/wasa-chat-mark-photo-trimmed.png"
+      src={APP_URLS.mark}
       alt=""
       width={size}
       height={size}

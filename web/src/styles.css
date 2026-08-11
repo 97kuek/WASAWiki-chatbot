@@ -456,7 +456,7 @@ button:disabled {
   flex-direction: column;
   gap: 4px;
   overflow-y: auto;
-  scrollbar-color: #3a3734 transparent;
+  scrollbar-color: var(--line-strong) transparent;
   scrollbar-width: thin;
 }
 
@@ -471,11 +471,11 @@ button:disabled {
 .history-list::-webkit-scrollbar-thumb {
   border: 2px solid var(--sidebar);
   border-radius: 999px;
-  background: #3a3734;
+  background: var(--line-strong);
 }
 
 .history-list::-webkit-scrollbar-thumb:hover {
-  background: #171615;
+  background: var(--muted);
 }
 
 .history-section {
@@ -1566,6 +1566,11 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.answer-reference strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
 .prose blockquote {
   margin: 0 0 1em;
   padding-left: 14px;
@@ -1621,90 +1626,6 @@ button:disabled {
 }
 
 .prose tbody tr:last-child td { border-bottom: 0; }
-
-/* ---- 出典 ---- */
-
-.sources {
-  margin-top: 18px;
-}
-
-.sources h2 {
-  margin: 0 0 8px;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-}
-
-.sources ul {
-  display: grid;
-  gap: 7px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.sources a {
-  display: flex;
-  /* **1行に押し込まない。** 省略記号で切ると「鳥人間プロジェクトの活動再開と…」
-     のようになり、どのページか分からなくなる。入らないときは折り返す
-     （2026-08-10に報告） */
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--text);
-  text-decoration: none;
-}
-
-.sources a:hover {
-  border-color: var(--line-strong);
-  background: var(--surface-soft);
-}
-
-.source-origin {
-  flex: none;
-  padding: 3px 6px;
-  border: 1px solid var(--line-strong);
-  border-radius: 4px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1;
-  white-space: nowrap;
-}
-
-.source-origin.public {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.source-title {
-  /* min-width:0 が無いと横スクロールになる。flexの子は既定で min-width:auto
-     のため、内容の幅より小さくならず外側を押し広げる（2026-08-10に報告） */
-  min-width: 0;
-  flex: 1 1 auto;
-  font-size: 14px;
-  font-weight: 600;
-  /* 長い題名は折り返す。日本語には単語の区切りが無いので anywhere にする */
-  overflow-wrap: anywhere;
-}
-
-.source-meta {
-  flex: none;
-  color: var(--muted);
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.source-arrow {
-  flex: none;
-  margin-left: auto;
-  color: var(--muted);
-  font-size: 14px;
-}
 
 /* ---- 下部固定の入力欄 ---- */
 
@@ -1778,7 +1699,7 @@ button:disabled {
 .composer {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
+  align-items: end;
   gap: 3px;
   min-height: 58px;
   padding: 7px 8px 7px 14px;
@@ -1796,18 +1717,27 @@ button:disabled {
 .composer textarea {
   width: 100%;
   min-height: 28px;
-  max-height: 96px;
+  max-height: calc(1.7em * 5);
   resize: none;
   padding: 2px;
-  overflow-y: auto;
+  overflow-y: hidden;
   border: 0;
   outline: 0;
   background: transparent;
   font-size: 16px;
   line-height: 1.7;
+  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-width: thin;
 }
 
 .composer textarea::placeholder { color: #8a8680; }
+
+.composer textarea::-webkit-scrollbar { width: 6px; }
+.composer textarea::-webkit-scrollbar-track { background: transparent; }
+.composer textarea::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: var(--line-strong);
+}
 
 .composer-actions {
   display: flex;
@@ -2054,8 +1984,6 @@ button:disabled {
   .assistant-row { grid-template-columns: 28px minmax(0, 1fr); gap: 10px; }
   .assistant-avatar { width: 28px; height: 28px; }
   .assistant-row > .avatar { width: 28px !important; height: 28px !important; font-size: 12px !important; }
-  .sources a { align-items: center; }
-  .source-meta { display: none; }
   .answer-feedback-comment { grid-template-columns: 1fr auto; }
   .answer-feedback-comment textarea { grid-column: 1 / -1; }
   .composer-area { padding-inline: 12px; }
@@ -2216,31 +2144,6 @@ button:disabled {
 
 .sidebar-assistant.active {
   background: var(--surface);
-}
-
-.assistant-dialog {
-  width: min(560px, 100%);
-  max-height: min(80vh, 720px);
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding: 22px;
-  overflow-y: auto;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--surface);
-  box-shadow: var(--shadow);
-}
-
-.assistant-dialog header h2 {
-  margin: 0 0 6px;
-  font-size: 18px;
-}
-
-.assistant-dialog header p {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.6;
 }
 
 /* ---- アイコン ---- */
@@ -2679,9 +2582,11 @@ button:disabled {
 /* ---- 管理画面 ---- */
 
 .admin-shell {
+  --admin-header-height: 72px;
   width: 100%;
   height: 100dvh;
   overflow: auto;
+  scrollbar-gutter: stable;
   background: var(--bg);
 }
 
@@ -2693,10 +2598,10 @@ button:disabled {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  min-height: 72px;
+  min-height: var(--admin-header-height);
   padding: 13px clamp(20px, 4vw, 52px);
   border-bottom: 1px solid var(--line);
-  background: rgb(255 255 255 / 92%);
+  background: var(--surface);
 }
 
 .admin-brand {
@@ -2781,6 +2686,9 @@ button:disabled {
 }
 
 .admin-tabs {
+  position: sticky;
+  z-index: 8;
+  top: calc(var(--admin-header-height) + 8px);
   display: flex;
   gap: 6px;
   margin: -8px 0 28px;
@@ -2816,8 +2724,16 @@ button:disabled {
 .admin-page-title h2 { margin: 0; font-size: 1.4rem; line-height: 1.4; }
 .admin-page-title p { margin-top: 4px; }
 
-.admin-main > section {
-  margin-bottom: 34px;
+.admin-tab-panel {
+  min-width: 0;
+  animation: admin-tab-enter 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.admin-tab-panel > section { margin-bottom: 34px; }
+
+@keyframes admin-tab-enter {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .admin-section-head {
@@ -3219,9 +3135,13 @@ button:disabled {
 }
 
 @media (max-width: 560px) {
-  .admin-header { min-height: 60px; padding: 9px 12px; }
-  .admin-logo { width: 132px; }
-  .admin-mode-label { font-size: 15px; }
+  .admin-shell { --admin-header-height: 60px; }
+  .admin-header { gap: 8px; padding: 9px 10px; }
+  .admin-brand { flex: 1; gap: 7px; }
+  .admin-back { width: 36px; height: 36px; }
+  .admin-logo { width: 94px; flex: none; }
+  .admin-mode-label { flex: none; font-size: 14px; white-space: nowrap; }
+  .admin-header .header-actions { flex: none; gap: 4px; }
   .admin-main { width: calc(100% - 28px); padding-top: 22px; }
   .admin-stat-grid { grid-template-columns: 1fr; }
   .admin-stat { min-height: 100px; }
@@ -3244,13 +3164,51 @@ button:disabled {
   .admin-version-grid article + article { border-top: 1px solid var(--line); border-left: 0; }
   .admin-quota-summary { grid-template-columns: 1fr; }
   .admin-quota-summary article + article { border-top: 1px solid var(--line); border-left: 0; }
+  .admin-log-tools {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .admin-log-tools label:first-child { grid-column: 1 / -1; }
   .admin-log-tools label,
-  .admin-filter-field { flex: 1 1 130px; }
+  .admin-filter-field { width: 100%; }
+  .admin-log-tools input { min-width: 0; }
+  .admin-log-tools .admin-select-control { width: 100%; }
+  .admin-filter-reset { grid-column: 1 / -1; justify-self: end; }
+  .admin-table-wrap { overflow: visible; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+  .admin-table { display: block; white-space: normal; }
+  .admin-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+  .admin-table tbody { display: grid; gap: 10px; }
+  .admin-table tbody tr {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface);
+    box-shadow: 0 3px 12px rgb(35 31 28 / 4%);
+  }
+  .admin-table tbody tr > [data-label] {
+    min-width: 0;
+    display: grid;
+    gap: 4px;
+    padding: 11px 13px;
+    overflow-wrap: anywhere;
+    border: 0;
+  }
+  .admin-table tbody tr > [data-label]::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 0.68rem;
+    font-weight: 600;
+  }
+  .admin-table tbody tr > [data-label]:nth-child(n + 3) { border-top: 1px solid var(--line); }
+  .admin-table tbody tr > [data-label]:nth-child(even) { border-left: 1px solid var(--line); }
+  .admin-table tbody tr.admin-empty-row { display: block; }
+  .admin-table .admin-empty { display: block; width: 100%; }
 }
 
 @media (max-width: 420px) {
-  .admin-header { gap: 8px; }
-  .admin-brand { gap: 8px; }
-  .admin-logo { width: 100px; }
-  .admin-mode-label { font-size: 14px; }
+  .admin-logo { width: 82px; }
+  .admin-mode-label { font-size: 13px; }
 }

@@ -344,7 +344,7 @@ func (s *Server) handleAdminRole(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Enabled  bool   `json:"enabled"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSmallRequestBodyBytes)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "リクエストが不正です"})
 		return
 	}

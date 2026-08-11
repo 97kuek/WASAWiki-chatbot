@@ -57,7 +57,13 @@ const shortTitle = (title: string) => {
  */
 function citationChips(html: string): string {
   if (citations.length === 0) return html;
-  return html.replace(/(?:\[(\d{1,2})\])+/g, (match) => {
+  // 日本語の句点より前に番号を置く生成が多いが、チップが文中へ割り込んで見える。
+  // コードと数式はすでに退避済みなので、本文の連続した出典番号だけを句点の後へ送る。
+  const punctuationNormalized = html.replace(
+    /((?:\[\d{1,2}\])+)([。．.!！？?])/g,
+    "$2$1",
+  );
+  return punctuationNormalized.replace(/(?:\[(\d{1,2})\])+/g, (match) => {
     const chips = Array.from(match.matchAll(/\[(\d{1,2})\]/g))
       .map(([, digits]) => citations[Number(digits) - 1])
       .filter((citation): citation is Citation => Boolean(citation))
