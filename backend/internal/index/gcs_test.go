@@ -39,3 +39,25 @@ func TestBuildRejectsEmptyIndex(t *testing.T) {
 		t.Error("pages が無い index.json を受け入れてしまいました")
 	}
 }
+
+func TestBuildAddsStableContentVersion(t *testing.T) {
+	raw := []byte(`{"pages":[{"id":"1","title":"A","chunks":[]}]}`)
+	first, err := Build(raw, []byte("目次"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Build(raw, []byte("目次"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Version == "" || len(first.Version) != 12 || first.Version != second.Version {
+		t.Fatalf("索引本文の安定した短縮ハッシュではない: first=%q second=%q", first.Version, second.Version)
+	}
+	changed, err := Build(raw, []byte("別の目次"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed.Version == first.Version {
+		t.Fatalf("目次の変更が索引バージョンへ反映されていない: %q", changed.Version)
+	}
+}

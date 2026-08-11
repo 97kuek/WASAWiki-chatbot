@@ -6,6 +6,7 @@
 package index
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -67,7 +68,10 @@ type Page struct {
 }
 
 type Index struct {
-	TOC string // 常時コンテキストに載せる目次
+	// Versionは本文を外へ出さず、どの索引を読んでいるか照合するための短いハッシュ。
+	// 管理画面で「公開した索引へ本当に切り替わったか」を判断するために使う。
+	Version string
+	TOC     string // 常時コンテキストに載せる目次
 	// SiteTOC は公式サイト（一般公開）の部分だけを抜いた目次。
 	//
 	// 「公式サイトのみ」のアシスタントに TOC をそのまま渡すと、選択ページと
@@ -139,7 +143,12 @@ func Build(raw, toc []byte) (*Index, error) {
 		return nil, fmt.Errorf("index.json にページがありません")
 	}
 
+	digest := sha256.New()
+	digest.Write(raw)
+	digest.Write([]byte{0})
+	digest.Write(toc)
 	ix := &Index{
+		Version: fmt.Sprintf("%x", digest.Sum(nil))[:12],
 		TOC:     string(toc),
 		SiteTOC: siteOnlyTOC(string(toc)),
 		Pages:   parsed.Pages,

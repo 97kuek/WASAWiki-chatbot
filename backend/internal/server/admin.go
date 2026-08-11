@@ -55,6 +55,21 @@ type quotaModelView struct {
 	Remaining int    `json:"remaining"`
 }
 
+type adminAlertView struct {
+	ID       string `json:"id"`
+	Severity string `json:"severity"`
+	Title    string `json:"title"`
+	Detail   string `json:"detail"`
+	Tab      string `json:"tab"`
+}
+
+type updateProgressView struct {
+	Stage       string     `json:"stage"`
+	CheckedAt   *time.Time `json:"checkedAt,omitempty"`
+	PublishedAt *time.Time `json:"publishedAt,omitempty"`
+	Changes     int        `json:"changes"`
+}
+
 // eventID は連番用DBを増やさず、秘密の利用者キーも外へ出さないIDを作る。
 // UnixNanoだけでは同時処理で衝突しうるため、用途・対象・時刻を既存のHMACへ通す。
 func (s *Server) eventID(kind, target string, at time.Time) string {
@@ -274,6 +289,69 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 		sourceCheckView["last"] = lastSourceCheck
 	}
 
+	var publishedAt *time.Time
+	if parsed, parseErr := time.Parse(time.RFC3339, s.cfg.IndexPublishedAt); parseErr == nil {
+		publishedAt = &parsed
+	}
+	progress := updateProgressView{Stage: "not_checked", PublishedAt: publishedAt}
+	if !s.cfg.SourceCheckAvailable {
+		progress.Stage = "unavailable"
+	} else if hasSourceCheck {
+		checkedAt := lastSourceCheck.CheckedAt
+		progress.CheckedAt = &checkedAt
+		for _, delta := range lastSourceCheck.Deltas {
+			progress.Changes += len(delta.Added) + len(delta.Updated) + len(delta.Removed)
+		}
+		switch {
+		case !lastSourceCheck.Changed:
+			progress.Stage = "current"
+		case publishedAt != nil && publishedAt.After(lastSourceCheck.CheckedAt):
+			progress.Stage = "verify_needed"
+		default:
+			progress.Stage = "changes_detected"
+		}
+	}
+
+	alerts := make([]adminAlertView, 0, 4)
+	switch progress.Stage {
+	case "unavailable":
+		alerts = append(alerts, adminAlertView{ID: "source-unavailable", Severity: "warning", Title: "資料の更新確認を利用できません", Detail: "専用Wikiアカウントの本番設定を確認してください。", Tab: "sources"})
+	case "not_checked":
+		alerts = append(alerts, adminAlertView{ID: "source-not-checked", Severity: "info", Title: "資料をまだ確認していません", Detail: "Wikiと公式サイトに変更がないか確認してください。", Tab: "sources"})
+	case "changes_detected":
+		alerts = append(alerts, adminAlertView{ID: "source-changed", Severity: "warning", Title: fmt.Sprintf("資料に%d件の変更があります", progress.Changes), Detail: "索引の再構築、差分確認、本番反映が必要です。", Tab: "sources"})
+	case "verify_needed":
+		alerts = append(alerts, adminAlertView{ID: "source-verify", Severity: "info", Title: "索引反映後の確認が必要です", Detail: "もう一度更新を確認し、変更なしになることを確かめてください。", Tab: "sources"})
+	}
+	if runtimeStatus.State != "available" {
+		alerts = append(alerts, adminAlertView{ID: "quota-state", Severity: "danger", Title: "Geminiを現在利用できません", Detail: quotaStateDetail(runtimeStatus.State), Tab: "quota"})
+	} else {
+		for _, model := range quotaModels {
+			if model.Limit > 0 && model.Remaining*5 <= model.Limit {
+				alerts = append(alerts, adminAlertView{ID: "quota-low", Severity: "warning", Title: "Gemini無料枠の残りが20%以下です", Detail: fmt.Sprintf("%sは推定残り%d回です。", model.Model, model.Remaining), Tab: "quota"})
+				break
+			}
+		}
+	}
+	recentFailures := 0
+	failureCutoff := now.Add(-24 * time.Hour)
+	for _, event := range events {
+		if event.OccurredAt.Before(failureCutoff) {
+			continue
+		}
+		switch event.Outcome {
+		case "daily_quota", "rate_limit", "unavailable", "failed":
+			recentFailures++
+		}
+	}
+	if recentFailures > 0 {
+		alerts = append(alerts, adminAlertView{ID: "recent-failures", Severity: "warning", Title: fmt.Sprintf("24時間以内に%d件の失敗があります", recentFailures), Detail: "監査ログで利用者・結果・発生時刻を確認してください。", Tab: "logs"})
+	}
+	indexVersion := ""
+	if s.ix != nil {
+		indexVersion = s.ix.Version
+	}
+
 	quota := map[string]any{
 		"day": pacificDay, "resetAt": resetAt, "state": runtimeStatus.State,
 		"totalRequests": totalAPIRequests, "estimated": true, "models": quotaModels,
@@ -286,18 +364,33 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 		"system": map[string]any{
 			"ok": true, "llm": s.cfg.LLMName,
 			"store": s.cfg.StoreName, "indexSource": s.cfg.IndexSource,
-			"revision": s.cfg.Revision, "startedAt": s.startedAt,
+			"revision": s.cfg.Revision, "codeVersion": s.cfg.CodeVersion,
+			"indexVersion": indexVersion, "indexPublishedAt": s.cfg.IndexPublishedAt,
+			"startedAt": s.startedAt,
 		},
-		"currentAdmin": map[string]any{"username": actor, "role": rolesByName[actor]},
-		"admins":       adminRoles,
-		"sourceCheck":  sourceCheckView,
-		"quota":        quota,
+		"currentAdmin":   map[string]any{"username": actor, "role": rolesByName[actor]},
+		"admins":         adminRoles,
+		"sourceCheck":    sourceCheckView,
+		"updateProgress": progress,
+		"alerts":         alerts,
+		"quota":          quota,
 		"summary": map[string]any{
 			"todayQuestions": todayQuestions, "activeUsersToday": activeToday,
 			"knownUsers": len(users), "dailyLimit": s.cfg.DailyLimit,
 		},
 		"users": users, "usageEvents": eventViews, "adminAudits": audits,
 	})
+}
+
+func quotaStateDetail(state string) string {
+	switch state {
+	case "daily_quota":
+		return "本日分のAPI上限へ到達しています。"
+	case "rate_limited":
+		return "短時間の送信制限が解除されるまで待ってください。"
+	default:
+		return "API障害または接続設定を確認してください。"
+	}
 }
 
 func (s *Server) handleAdminRole(w http.ResponseWriter, r *http.Request) {

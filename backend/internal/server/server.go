@@ -35,16 +35,18 @@ const (
 )
 
 type Config struct {
-	SessionSecret string // Cookie署名用。未設定なら起動時に生成する
-	DailyLimit    int    // 利用者1人あたりの1日の質問数上限
-	APIDailyLimit int    // Geminiのモデル別RPD。実送信回数から残量を推定する
-	AllowOrigin   string // 開発時にViteのdev serverから叩くためのCORS設定
-	SPADir        string // 指定するとビルド済みSPAも同じサーバーから配る
-	StoreName     string // 管理画面へ出す保存先名（秘密値は含めない）
-	IndexSource   string // 管理画面へ出す索引の読込元
-	Revision      string // Cloud RunのK_REVISION
-	LLMName       string // APIキーを含まないプロバイダ・モデル名
-	LLMStatus     func() llm.RuntimeStatus
+	SessionSecret    string // Cookie署名用。未設定なら起動時に生成する
+	DailyLimit       int    // 利用者1人あたりの1日の質問数上限
+	APIDailyLimit    int    // Geminiのモデル別RPD。実送信回数から残量を推定する
+	AllowOrigin      string // 開発時にViteのdev serverから叩くためのCORS設定
+	SPADir           string // 指定するとビルド済みSPAも同じサーバーから配る
+	StoreName        string // 管理画面へ出す保存先名（秘密値は含めない）
+	IndexSource      string // 管理画面へ出す索引の読込元
+	Revision         string // Cloud RunのK_REVISION
+	CodeVersion      string // デプロイしたGitコミット。K_REVISIONとは別にコードを照合する
+	IndexPublishedAt string // publish-index.shが索引差し替え時に記録するRFC3339日時
+	LLMName          string // APIキーを含まないプロバイダ・モデル名
+	LLMStatus        func() llm.RuntimeStatus
 	// SourceCheck は現在の索引とWiki・公式サイトを読み取り専用で照合する。
 	SourceCheck          func(context.Context) ([]state.SourceDelta, error)
 	SourceCheckAvailable bool

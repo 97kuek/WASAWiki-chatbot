@@ -267,16 +267,18 @@ func main() {
 	}
 
 	serverConfig := server.Config{
-		SessionSecret: secret,
-		DailyLimit:    envInt("DAILY_LIMIT", 30),
-		APIDailyLimit: envInt("GEMINI_RPD_LIMIT", 500),
-		AllowOrigin:   allowOrigin,
-		SPADir:        os.Getenv("SPA_DIR"),
-		StoreName:     storeName,
-		IndexSource:   source,
-		Revision:      env("K_REVISION", "local"),
-		LLMName:       client.Name(),
-		AdminUsers:    admins,
+		SessionSecret:    secret,
+		DailyLimit:       envInt("DAILY_LIMIT", 30),
+		APIDailyLimit:    envInt("GEMINI_RPD_LIMIT", 500),
+		AllowOrigin:      allowOrigin,
+		SPADir:           os.Getenv("SPA_DIR"),
+		StoreName:        storeName,
+		IndexSource:      source,
+		Revision:         env("K_REVISION", "local"),
+		CodeVersion:      env("APP_VERSION", "local"),
+		IndexPublishedAt: os.Getenv("INDEX_PUBLISHED_AT"),
+		LLMName:          client.Name(),
+		AdminUsers:       admins,
 	}
 	updateChecker := sourcecheck.New(
 		ix, wikiAPI,

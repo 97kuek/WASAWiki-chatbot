@@ -39,9 +39,10 @@ func TestAdminOverviewShowsNamesWithoutQuestionContentOrUserKeys(t *testing.T) {
 		cfg: Config{
 			SessionSecret: "テスト用の固定鍵テスト用の固定鍵", DailyLimit: 30,
 			APIDailyLimit: 500, AdminUsers: []string{"管理者"}, LLMName: "gemini/test-model",
-			StoreName: "メモリ", Revision: "test-revision",
+			StoreName: "メモリ", Revision: "test-revision", CodeVersion: "abcdef0",
+			IndexPublishedAt: "2026-08-11T01:00:00Z",
 		},
-		ix: &index.Index{}, state: shared, startedAt: time.Now().UTC(),
+		ix: &index.Index{Version: "index1234567"}, state: shared, startedAt: time.Now().UTC(),
 	}
 	ctx := context.Background()
 	key := srv.userKey("42 Wasa Taro")
@@ -68,13 +69,43 @@ func TestAdminOverviewShowsNamesWithoutQuestionContentOrUserKeys(t *testing.T) {
 		t.Fatalf("管理画面APIが失敗: %d %s", res.Code, res.Body.String())
 	}
 	body := res.Body.String()
-	for _, expected := range []string{`"username":"42 Wasa Taro"`, `"today":1`, `"requests":1`, `"actor":"管理者"`} {
+	for _, expected := range []string{`"username":"42 Wasa Taro"`, `"today":1`, `"requests":1`, `"actor":"管理者"`, `"codeVersion":"abcdef0"`, `"indexVersion":"index1234567"`, `"updateProgress"`, `"alerts"`} {
 		if !strings.Contains(body, expected) {
 			t.Errorf("管理情報に %s がない: %s", expected, body)
 		}
 	}
 	if strings.Contains(body, key) || strings.Contains(body, "質問本文") || strings.Contains(body, "user_key") || strings.Contains(body, "0001-01-01") {
 		t.Fatalf("秘密の利用者キーまたは質問本文が管理APIへ出た: %s", body)
+	}
+}
+
+func TestAdminOverviewTracksPublishAndVerificationProgress(t *testing.T) {
+	shared := state.NewMemory()
+	checkedAt := time.Date(2026, 8, 11, 1, 0, 0, 0, time.UTC)
+	srv := &Server{
+		cfg: Config{
+			SessionSecret: "テスト用の固定鍵テスト用の固定鍵", DailyLimit: 30,
+			APIDailyLimit: 500, AdminUsers: []string{"管理者"}, LLMName: "gemini/test-model",
+			SourceCheckAvailable: true, IndexPublishedAt: "2026-08-11T02:00:00Z",
+		},
+		ix: &index.Index{Version: "index1234567"}, state: shared, startedAt: time.Now().UTC(),
+	}
+	if err := shared.SaveSourceCheck(context.Background(), state.SourceCheck{
+		CheckedAt: checkedAt, CheckedBy: "管理者", Changed: true,
+		Deltas: []state.SourceDelta{{Source: "wiki", Updated: []string{"更新ページ"}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	res := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(res, srv.testRequest(http.MethodGet, "/api/admin/overview", "", "管理者"))
+	if res.Code != http.StatusOK {
+		t.Fatalf("管理画面APIが失敗: %d %s", res.Code, res.Body.String())
+	}
+	for _, expected := range []string{`"stage":"verify_needed"`, `"changes":1`, `"source-verify"`} {
+		if !strings.Contains(res.Body.String(), expected) {
+			t.Errorf("更新進捗に %s がない: %s", expected, res.Body.String())
+		}
 	}
 }
 

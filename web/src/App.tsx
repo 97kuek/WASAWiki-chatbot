@@ -1224,7 +1224,7 @@ export default function App() {
   }
 
 	if (view === "admin" && isAdmin) {
-		return <Suspense fallback={<div className="admin-loading" role="status">管理画面を読み込んでいます…</div>}><AdminPage username={username} onBack={closeAdmin} /></Suspense>;
+		return <Suspense fallback={<div className="admin-loading" role="status">管理画面を読み込んでいます…</div>}><AdminPage username={username} onBack={closeAdmin} onLogout={() => void handleLogout()} /></Suspense>;
 	}
 
   return (

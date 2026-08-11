@@ -126,6 +126,14 @@ export type AdminAudit = {
   occurredAt: string;
 };
 
+export type AdminAlert = {
+  id: string;
+  severity: "info" | "warning" | "danger";
+  title: string;
+  detail: string;
+  tab: "overview" | "sources" | "users" | "quota" | "logs";
+};
+
 export type AdminOverview = {
   generatedAt: string;
   system: {
@@ -134,6 +142,9 @@ export type AdminOverview = {
     store: string;
     indexSource: string;
     revision: string;
+    codeVersion: string;
+    indexVersion: string;
+    indexPublishedAt?: string;
     startedAt: string;
   };
   currentAdmin: { username: string; role: "owner" | "co_admin" };
@@ -143,6 +154,13 @@ export type AdminOverview = {
     hasResult: boolean;
     last?: SourceCheckResult;
   };
+  updateProgress: {
+    stage: "unavailable" | "not_checked" | "current" | "changes_detected" | "verify_needed";
+    checkedAt?: string;
+    publishedAt?: string;
+    changes: number;
+  };
+  alerts: AdminAlert[];
   quota: {
     day: string;
     resetAt: string;
