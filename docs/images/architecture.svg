@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 720" role="img" aria-labelledby="title description">
+  <title id="title">WASA Chat全体構成</title>
+  <desc id="description">通常利用ではブラウザがCloudflare PagesとCloud Runへ接続し、Cloud RunがWiki、Gemini、Cloud Storage、Firestoreを利用する。資料更新は保守者が確認して手動で反映する。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#333" />
+    </marker>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #222; }
+      .title { font-size: 27px; font-weight: 700; }
+      .section { font-size: 18px; font-weight: 700; }
+      .label { font-size: 16px; font-weight: 600; text-anchor: middle; }
+      .detail { font-size: 13px; fill: #555; text-anchor: middle; }
+      .edge-label { font-size: 12px; fill: #555; text-anchor: middle; }
+      .box { fill: #fff; stroke: #666; stroke-width: 1.5; }
+      .primary { fill: #f5f5f5; stroke: #333; stroke-width: 2; }
+      .edge { fill: none; stroke: #333; stroke-width: 1.5; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="1000" height="720" fill="#fff" />
+  <text class="title" x="35" y="45">WASA Chat 全体構成</text>
+  <text x="35" y="72" font-size="13" fill="#666">通常の通信と資料更新だけを示します。認証とRAGの詳細は専用図へ分けます。</text>
+
+  <text class="section" x="35" y="115">通常の利用</text>
+
+  <rect class="box" x="35" y="180" width="180" height="85" rx="14" />
+  <text class="label" x="125" y="215">部員のブラウザ</text>
+  <text class="detail" x="125" y="240">チャット / 管理画面</text>
+
+  <rect class="box" x="305" y="140" width="190" height="75" rx="14" />
+  <text class="label" x="400" y="172">Cloudflare Pages</text>
+  <text class="detail" x="400" y="195">React画面</text>
+
+  <rect class="primary" x="305" y="260" width="190" height="95" rx="14" />
+  <text class="label" x="400" y="294">Cloud Run</text>
+  <text class="label" x="400" y="318">Go API</text>
+  <text class="detail" x="400" y="340">認証 / 検索 / 回答 / 管理</text>
+
+  <rect class="box" x="665" y="140" width="210" height="75" rx="14" />
+  <text class="label" x="770" y="172">外部サービス</text>
+  <text class="detail" x="770" y="195">WASA Wiki / Gemini</text>
+
+  <rect class="box" x="665" y="275" width="210" height="95" rx="14" />
+  <text class="label" x="770" y="306">Google Cloudのデータ</text>
+  <text class="detail" x="770" y="332">Cloud Storage: 索引</text>
+  <text class="detail" x="770" y="353">Firestore: 履歴・利用状況</text>
+
+  <path class="edge" d="M 215 205 H 260 V 178 H 305" />
+  <text class="edge-label" x="258" y="168">画面</text>
+  <path class="edge" d="M 215 240 H 260 V 307 H 305" />
+  <text class="edge-label" x="258" y="292">API</text>
+  <path class="edge" d="M 495 285 L 665 195" />
+  <path class="edge" d="M 495 325 L 665 325" />
+
+  <line x1="35" y1="420" x2="965" y2="420" stroke="#ccc" />
+  <text class="section" x="35" y="465">資料を更新するとき</text>
+
+  <rect class="box" x="35" y="510" width="180" height="75" rx="14" />
+  <text class="label" x="125" y="555">Wiki・公開資料</text>
+
+  <rect class="primary" x="350" y="500" width="220" height="95" rx="14" />
+  <text class="label" x="460" y="535">保守者が確認して実行</text>
+  <text class="detail" x="460" y="563">rebuild.py</text>
+
+  <rect class="primary" x="700" y="500" width="230" height="95" rx="14" />
+  <text class="label" x="815" y="530">Cloud Storageの索引を</text>
+  <text class="label" x="815" y="554">差し替える</text>
+  <text class="detail" x="815" y="578">publish-index.sh</text>
+
+  <path class="edge" d="M 215 548 H 350" />
+  <text class="edge-label" x="282" y="539">取得</text>
+  <path class="edge" d="M 570 548 H 700" />
+  <text class="edge-label" x="635" y="539">差分確認後</text>
+
+  <rect x="35" y="635" width="895" height="48" rx="8" fill="#fff" stroke="#999" stroke-dasharray="5 5" />
+  <text x="55" y="665" font-size="13" fill="#555">管理画面の「更新を確認」は公開元との差分だけを見ます。再構築と反映は自動実行しません。</text>
+</svg>

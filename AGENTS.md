@@ -7,10 +7,11 @@
 ## プロジェクト概要
 
 早稲田大学 鳥人間プロジェクト WASA の引き継ぎ資料Wiki（MediaWiki 1.37）に、
-自然言語で質問できるチャットボット。**初期Webアプリまで実装済みで、現在は精度検証・本番準備フェーズ。**
+自然言語で質問できるチャットボット。**本番運用中で、現在は精度の確定と運用改善フェーズ。**
 
-対象データの規模（2026-08-09の索引実測）: Wiki 114ページ + 公式サイト500ページ /
-646,856字 / 911チャンク / Wiki添付画像67枚（本文参照57箇所）
+対象データの規模（2026-08-11の索引実測）: Wiki 114ページ + 公式サイト500ページ +
+フライトシミュレータガイド32ページ / 735,264字 / 1,012チャンク /
+Wiki添付画像67枚（本文参照57箇所）
 
 ---
 
@@ -21,10 +22,9 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install requests python-dotenv
 cp .env.example .env      # Wikiの認証情報を記入
 
-python dump_wiki.py       # Wiki全体を取得        → dump/pages.jsonl
-python build_index.py     # 整形・チャンク化       → data/index.json
-python build_toc.py       # facts.md + 目次       → data/toc.md
-python eval/retrieval_eval.py   # 検索精度を測定
+python check_updates.py        # 必要なときだけ公開元との差分を確認
+python rebuild.py              # 全資料の取得・索引作成・検索検査
+python eval/retrieval_eval.py  # 検索精度を測定
 ```
 
 `facts.md` は**人が保守する事実カード**で、`build_toc.py` が `data/toc.md` の先頭に
