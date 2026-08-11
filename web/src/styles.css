@@ -829,8 +829,7 @@ button:disabled {
   overflow-y: auto;
 }
 
-.feedback-popover-head,
-.feedback-admin-head {
+.feedback-popover-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -936,95 +935,6 @@ button:disabled {
   background: var(--surface-soft);
   color: var(--muted);
   cursor: default;
-}
-
-.feedback-admin {
-  margin-top: 16px;
-  padding-top: 14px;
-  border-top: 1px solid var(--line);
-}
-
-.feedback-admin h3 {
-  margin: 0;
-  font-size: 13px;
-}
-
-.feedback-admin-head button {
-  padding: 3px 7px;
-  border: 0;
-  background: transparent;
-  color: var(--accent);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.feedback-summary {
-  display: flex;
-  gap: 6px;
-  margin-top: 9px;
-}
-
-.feedback-summary span {
-  padding: 4px 7px;
-  border-radius: 6px;
-  background: var(--surface-soft);
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.feedback-admin-list {
-  display: grid;
-  gap: 6px;
-  margin-top: 10px;
-}
-
-.feedback-admin-list > p {
-  margin: 12px 0;
-  color: var(--muted);
-  font-size: 12px;
-  text-align: center;
-}
-
-.feedback-admin-list details {
-  padding: 8px 9px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  font-size: 12px;
-}
-
-.feedback-admin-list summary {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  cursor: pointer;
-}
-
-.feedback-admin-list summary span {
-  padding: 2px 5px;
-  border-radius: 4px;
-  background: var(--surface-soft);
-  color: var(--muted);
-  font-size: 10px;
-}
-
-.feedback-admin-list summary strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.feedback-admin-list details p {
-  margin: 8px 0 0;
-  overflow-wrap: anywhere;
-  line-height: 1.55;
-  white-space: pre-wrap;
-}
-
-.feedback-admin-list time {
-  display: block;
-  margin-top: 8px;
-  color: var(--muted);
-  font-size: 10px;
 }
 
 .popover-empty {
@@ -1558,6 +1468,27 @@ button:disabled {
   font-size: 14px;
 }
 
+/* コードブロックは表と同じく、内側だけを横スクロールさせる。
+   .prose の overflow-wrap: anywhere に任せてコマンドを折り返すと、
+   コピーしたときに改行が混ざる */
+.prose pre.code-block {
+  max-width: 100%;
+  margin: 0 0 1em;
+  padding: 12px 14px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f1efec;
+}
+
+.prose pre.code-block code {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  white-space: pre;
+}
+
 .prose a {
   color: var(--text);
   text-underline-offset: 3px;
@@ -1933,6 +1864,13 @@ button:disabled {
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 1.8;
+}
+
+/* 停止は送信と同じ場所に出る。押す先が入れ替わったことが分かるよう、
+   輪郭ではなく塗りの四角にする */
+.send.stop svg {
+  fill: currentColor;
+  stroke: none;
 }
 
 .composer-hint,

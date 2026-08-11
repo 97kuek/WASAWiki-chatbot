@@ -12,7 +12,8 @@ import "katex/dist/katex.min.css";
  * 生のHTMLが通る経路が構造的に存在しない。
  *
  * 対応する記法は生成文に実際に出るものだけ:
- * 見出し / 箇条書き / 番号付き / 表 / 引用 / 水平線 / 強調 / コード / リンク / TeX数式。
+ * 見出し / 箇条書き（入れ子・継続行つき） / 番号付き / 表 / 引用 / 水平線 /
+ * 強調 / コード（行内・フェンス付き） / リンク / TeX数式。
  */
 
 type Inline = { html: string };
@@ -121,29 +122,128 @@ const cells = (line: string) =>
 
 const isDivider = (line: string) => /^\|?[\s:|-]+\|[\s:|-]*$/.test(line.trim());
 
+/** ``` または ~~~ で囲まれたコードブロック。開始行の言語名は表示に使わない。 */
+const FENCE_OPEN = /^\s*(`{3,}|~{3,})\s*\S*\s*$/;
+const FENCE_CLOSE = /^\s*(`{3,}|~{3,})\s*$/;
+
+/**
+ * フェンス付きコードブロックを取り出す。
+ *
+ * **閉じていなくても、そこまでをコードとして描く。** 回答はSSEで少しずつ届くので、
+ * 開始の ``` だけが届いた状態を必ず通る。閉じるまで通常の行として扱っていると、
+ * 中の `#` が見出しに、`**` が強調に化けたあと、閉じた瞬間に組み変わる。
+ * コマンドや型番がそのまま化けるので、途中でもコードとして固定するほうが正しい
+ * （2026-08-11に確認）。
+ */
+function fencedCode(lines: string[], start: number): { html: string; next: number } | null {
+  const open = lines[start].match(FENCE_OPEN);
+  if (!open) return null;
+  const fence = open[1];
+  const body: string[] = [];
+  let i = start + 1;
+  while (i < lines.length) {
+    const close = lines[i].match(FENCE_CLOSE);
+    // 開いたときと同じ記号で、同じ長さ以上のときだけ閉じる
+    if (close && close[1][0] === fence[0] && close[1].length >= fence.length) {
+      i++;
+      break;
+    }
+    body.push(lines[i]);
+    i++;
+  }
+  return {
+    html: `<pre class="code-block"><code>${escapeHtml(body.join("\n"))}</code></pre>`,
+    next: i,
+  };
+}
+
+const LIST_ITEM = /^(\s*)(?:[-*+]|\d+[.)])\s+(.*)$/;
+const ORDERED_ITEM = /^\s*\d+[.)]\s+/;
+const indentOf = (line: string) => line.length - line.trimStart().length;
+
+/** 項目の中身を組み立てる。文字どうしは改行で繋ぎ、入れ子リストはそのまま並べる。 */
+const joinItemParts = (parts: { block: boolean; html: string }[]) =>
+  parts
+    .map((part, index) => (index > 0 && !part.block && !parts[index - 1].block ? "<br>" : "") + part.html)
+    .join("");
+
+/**
+ * 箇条書きを、入れ子と継続行を含めて1つのブロックとして取り出す。
+ *
+ * 平坦に読むと「- 親 / 　- 子」が兄弟になり、**手順の親子関係が消える。**
+ * 継続行（項目の下に字下げして書かれた説明）も、以前はリストを分断して
+ * 独立した段落になっていた（どちらも2026-08-11に確認）。引き継ぎ資料への
+ * 質問は手順を聞くものが多く、構造がそのまま答えの一部になる。
+ *
+ * **どの経路でも必ず1行以上進む。** 進まない経路を作ると、表のときと同じく
+ * 描画が止まらなくなり、エラー境界では受け止められない（docs/02 M35）。
+ */
+function listBlock(lines: string[], start: number): { html: string; next: number } | null {
+  const head = lines[start].match(LIST_ITEM);
+  if (!head) return null;
+  const indent = head[1].length;
+  const ordered = ORDERED_ITEM.test(lines[start]);
+  const items: string[] = [];
+  let i = start;
+
+  while (i < lines.length) {
+    // 項目の間に空行があっても同じリストとして続ける。空行で切ると、
+    // 説明を挟んだ箇条書きが番号1から振り直しになる
+    let cursor = i;
+    while (cursor < lines.length && !lines[cursor].trim()) cursor++;
+    if (cursor >= lines.length) break;
+
+    const item = lines[cursor].match(LIST_ITEM);
+    // 同じ深さ・同じ種類の項目だけをこのリストに入れる。
+    // より深い項目は下の入れ子側で消費するので、ここへは残らない
+    if (!item || item[1].length !== indent || ORDERED_ITEM.test(lines[cursor]) !== ordered) break;
+    i = cursor + 1;
+
+    const parts: { block: boolean; html: string }[] = [{ block: false, html: inline(item[2]).html }];
+    for (;;) {
+      let probe = i;
+      while (probe < lines.length && !lines[probe].trim()) probe++;
+      if (probe >= lines.length) break;
+
+      if (LIST_ITEM.test(lines[probe])) {
+        if (indentOf(lines[probe]) <= indent) break; // 同じか浅い ＝ この項目は終わり
+        const nested = listBlock(lines, probe);
+        if (!nested) break;
+        parts.push({ block: true, html: nested.html });
+        i = nested.next;
+        continue;
+      }
+      if (indentOf(lines[probe]) <= indent) break; // 字下げが無い ＝ リストの外
+      parts.push({ block: false, html: inline(lines[probe].trim()).html });
+      i = probe + 1;
+    }
+
+    items.push(`<li>${joinItemParts(parts)}</li>`);
+  }
+
+  if (items.length === 0) return null;
+  const tag = ordered ? "ol" : "ul";
+  return { html: `<${tag}>${items.join("")}</${tag}>`, next: i };
+}
+
 export function renderMarkdown(source: string): string {
   const lines = source.replace(/\r\n?/g, "\n").split("\n");
   const out: string[] = [];
   let i = 0;
-
-  const flushList = (ordered: boolean) => {
-    const tag = ordered ? "ol" : "ul";
-    const items: string[] = [];
-    const pattern = ordered ? /^\s*\d+[.)]\s+(.*)$/ : /^\s*[-*+]\s+(.*)$/;
-    while (i < lines.length) {
-      const m = lines[i].match(pattern);
-      if (!m) break;
-      items.push(`<li>${inline(m[1]).html}</li>`);
-      i++;
-    }
-    out.push(`<${tag}>${items.join("")}</${tag}>`);
-  };
 
   while (i < lines.length) {
     const line = lines[i];
 
     if (!line.trim()) {
       i++;
+      continue;
+    }
+
+    // コードが最優先。中の記号を記法として解釈しないため、他より先に取り切る
+    const code = fencedCode(lines, i);
+    if (code) {
+      out.push(code.html);
+      i = code.next;
       continue;
     }
 
@@ -178,14 +278,13 @@ export function renderMarkdown(source: string): string {
       continue;
     }
 
-    if (/^\s*[-*+]\s+/.test(line)) {
-      flushList(false);
+    const list = listBlock(lines, i);
+    if (list) {
+      out.push(list.html);
+      i = list.next;
       continue;
     }
-    if (/^\s*\d+[.)]\s+/.test(line)) {
-      flushList(true);
-      continue;
-    }
+
     if (/^>\s?/.test(line)) {
       const quote: string[] = [];
       while (i < lines.length && /^>\s?/.test(lines[i])) {
@@ -206,7 +305,8 @@ export function renderMarkdown(source: string): string {
     while (
       i < lines.length &&
       lines[i].trim() &&
-      !/^\s*([-*+]|\d+[.)])\s+/.test(lines[i]) &&
+      !LIST_ITEM.test(lines[i]) &&
+      !FENCE_OPEN.test(lines[i]) &&
       !lines[i].trim().startsWith("|") &&
       !/^#{1,6}\s/.test(lines[i]) &&
       !/^>\s?/.test(lines[i])

@@ -124,14 +124,7 @@ export type FeedbackPayload = {
   page: "chat" | "assistants";
 };
 
-export type Feedback = Omit<FeedbackPayload, "clientId"> & {
-  id: string;
-  submittedAt: string;
-};
-
-export type FeedbackNotification = "sent" | "failed" | "disabled";
-
-export async function submitFeedback(payload: FeedbackPayload): Promise<FeedbackNotification> {
+export async function submitFeedback(payload: FeedbackPayload): Promise<void> {
   const res = await fetch(`${base}/api/feedback`, {
     method: "POST",
     credentials: "include",
@@ -142,15 +135,6 @@ export async function submitFeedback(payload: FeedbackPayload): Promise<Feedback
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? "フィードバックを送信できませんでした");
   }
-  const body = await res.json().catch(() => ({})) as { notification?: FeedbackNotification };
-  return body.notification ?? "disabled";
-}
-
-export async function listFeedback(): Promise<Feedback[]> {
-  const res = await fetch(`${base}/api/feedback`, { credentials: "include" });
-  if (!res.ok) throw new Error("フィードバックを読み込めませんでした");
-  const body = await res.json() as { feedback?: Feedback[] };
-  return Array.isArray(body.feedback) ? body.feedback : [];
 }
 
 /** 全員で共有するアシスタント。作成者名は隠さない（誰に聞けばよいか分かるため）。 */

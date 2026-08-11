@@ -123,3 +123,89 @@ test("コード中の $ は数式にしない", () => {
 test("閉じていない数式ブロックは原文のまま段落へ戻す", () => {
   assert.doesNotThrow(() => renderWithin("$$\n\\frac{1}{2}\n"));
 });
+
+// ここから下は 2026-08-11 に見つけた3件。どれも「実際にこう描かれていた」を固定する。
+
+// コマンドや型番がそのまま化ける。中身をMarkdownとして解釈してはいけない。
+test("フェンス付きコードブロックの中身は記法として解釈しない", () => {
+  const html = renderWithin("```bash\n# コメント\n**強調しない**\n| a | b |\n```");
+  assert.match(html, /<pre class="code-block"><code>/);
+  assert.match(html, /# コメント/);
+  assert.doesNotMatch(html, /<h3>/);
+  assert.doesNotMatch(html, /<strong>/);
+  assert.doesNotMatch(html, /<table>/);
+});
+
+// 開始の ``` だけが届いた状態は、ストリーミングでは必ず通る。
+test("閉じていないコードブロックも、そこまでをコードとして描く", () => {
+  const html = renderWithin("```bash\npython rebuild.py");
+  assert.match(html, /<pre class="code-block"><code>python rebuild\.py<\/code><\/pre>/);
+});
+
+test("コードブロック内のHTMLもエスケープする", () => {
+  const html = renderWithin('```\n<img src=x onerror="alert(1)">\n```');
+  assert.doesNotMatch(html, /<img/);
+  assert.match(html, /&lt;img/);
+});
+
+// 平坦に読むと手順の親子関係が消える。
+test("字下げされた箇条書きは入れ子にする", () => {
+  assert.match(
+    renderWithin("- 親1\n  - 子1\n  - 子2\n- 親2"),
+    /<ul><li>親1<ul><li>子1<\/li><li>子2<\/li><\/ul><\/li><li>親2<\/li><\/ul>/,
+  );
+});
+
+test("番号付きの中の箇条書きも入れ子にする", () => {
+  const html = renderWithin("1. 親\n   - 子A\n2. 次");
+  assert.match(html, /<ol><li>親<ul><li>子A<\/li><\/ul><\/li><li>次<\/li><\/ol>/);
+});
+
+// 以前はリストが2つに割れ、継続行が先頭の空白ごと段落になっていた。
+test("字下げした継続行は同じ項目の中に入れる", () => {
+  const html = renderWithin("- 手順1\n  補足の説明\n- 手順2");
+  assert.match(html, /<ul><li>手順1<br>補足の説明<\/li><li>手順2<\/li><\/ul>/);
+});
+
+test("項目の間に空行があっても1つのリストにする", () => {
+  const html = renderWithin("- 項目A\n\n- 項目B");
+  assert.match(html, /<ul><li>項目A<\/li><li>項目B<\/li><\/ul>/);
+  assert.equal(html.match(/<ul>/g).length, 1);
+});
+
+test("リストの次の段落はリストの外に出す", () => {
+  assert.match(renderWithin("- a\n次の段落"), /<ul><li>a<\/li><\/ul><p>次の段落<\/p>/);
+});
+
+// 入れ子と継続行を足したので、止まらなくなる経路が増えていないかを見る。
+test("コードと入れ子リストを含む本文でも、どの長さで切っても描画が終わる", () => {
+  const answer = [
+    "## 索引の作り直し",
+    "",
+    "```bash",
+    "python check_updates.py",
+    "python rebuild.py",
+    "```",
+    "",
+    "- 事前に確認すること",
+    "  - `.env` がコミットに出ていない",
+    "  - ページ数が100件を下回っていない",
+    "    1. 取得が途中で失敗していないか",
+    "    2. ログに429が出ていないか",
+    "",
+    "- 反映",
+    "  差し替えたあと、環境変数を1つ動かす",
+    "",
+    "| 手順 | 時間 |",
+    "|---|---|",
+    "| 資料だけ | 1分 |",
+  ].join("\n");
+
+  for (let length = 1; length <= answer.length; length++) {
+    const partial = answer.slice(0, length);
+    assert.doesNotThrow(
+      () => renderWithin(partial),
+      `${length}字目で止まらなくなりました: ${JSON.stringify(partial.slice(-30))}`,
+    );
+  }
+});

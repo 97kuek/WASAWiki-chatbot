@@ -6,7 +6,6 @@ import {
   deleteChat,
   listAssistants,
   listChats,
-  listFeedback,
   login,
   logout,
   saveChat,
@@ -16,7 +15,6 @@ import {
   type Assistant,
   type AssistantDraft,
   type Chat,
-  type Feedback,
   type FeedbackReason,
   type ResponseMode,
   type StageTimingName,
@@ -24,6 +22,7 @@ import {
   type Turn,
 } from "./api";
 import { stripCitation } from "./answer";
+import { chatTitle, groupChats, retryLabel, shareText, slugify } from "./chat";
 import { ACCEPTED_IMAGE_TYPES, toAttachment, type Attachment } from "./attachment";
 import { AssistantAvatar, DefaultAvatar, toIconDataURL, type IconCropPosition } from "./avatar";
 import { SelectMenu, type SelectOption } from "./SelectMenu";
@@ -40,26 +39,48 @@ import {
 const loadMarkdownModule = () => import("./markdown");
 
 const CHUNK_RELOAD_KEY = "wasa-chat-chunk-reload";
-const readFlag = (key: string) => {
+
+/**
+ * localStorage と sessionStorage は、**参照そのものが例外を投げることがある。**
+ * Cookieを全面遮断した設定の端末が該当する。読めない・書けないだけなら
+ * 動作を続けられるので、必ずここを通す。
+ *
+ * 素で呼んでいた5か所のうち2か所は `useState` の初期化子だったため、
+ * その環境では**描画が始まる前に落ちて、エラー境界の画面になっていた**
+ * （2026-08-11に確認）。M30の白画面と同じ入口である。
+ */
+function readStored(area: "local" | "session", key: string): string | null {
   try {
-    return sessionStorage.getItem(key);
+    return (area === "local" ? localStorage : sessionStorage).getItem(key);
   } catch {
-    return null; // プライベートモードなどで読めなくても動作は続ける
+    return null;
   }
-};
-const writeFlag = (key: string, value: string | null) => {
+}
+
+function writeStored(area: "local" | "session", key: string, value: string | null) {
   try {
-    if (value === null) sessionStorage.removeItem(key);
-    else sessionStorage.setItem(key, value);
+    const storage = area === "local" ? localStorage : sessionStorage;
+    if (value === null) storage.removeItem(key);
+    else storage.setItem(key, value);
   } catch {
-    /* 保存できなくてもよい。1回だけ再読み込みする保険が効かなくなるだけ */
+    /* 保存できなくても、現在のタブでは選んだ状態を維持する */
   }
-};
+}
+
+/** 保存してあるJSON配列を文字列の配列として読む。壊れていれば空にする。 */
+function readStoredIds(key: string): string[] {
+  try {
+    const parsed = JSON.parse(readStored("local", key) ?? "[]") as unknown;
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
 
 const Markdown = lazy(async () => {
   try {
     const module = await loadMarkdownModule();
-    writeFlag(CHUNK_RELOAD_KEY, null);
+    writeStored("session", CHUNK_RELOAD_KEY, null);
     return { default: module.Markdown };
   } catch (error) {
     // デプロイすると配信物のファイル名（ハッシュ）が変わり、開いたままのタブが
@@ -67,8 +88,8 @@ const Markdown = lazy(async () => {
     // 例外を投げ、画面が真っ白になる（2026-08-09に本番で報告あり）。
     // 新しい配信物を取り直せば直るので、1回だけ再読み込みする。
     // 印を残すのは、取得そのものが壊れているときに再読み込みを繰り返さないため。
-    if (!readFlag(CHUNK_RELOAD_KEY)) {
-      writeFlag(CHUNK_RELOAD_KEY, "1");
+    if (!readStored("session", CHUNK_RELOAD_KEY)) {
+      writeStored("session", CHUNK_RELOAD_KEY, "1");
       location.reload();
       await new Promise<never>(() => {}); // 再読み込みするので解決させない
     }
@@ -84,17 +105,16 @@ type Announcement = {
 };
 
 const MAX_CHATS = 30;
-const CHAT_TITLE_RUNES = 28;
-const RECENT_HISTORY_DAYS = 7;
 const CONVERSATION_CONTEXT_TURNS = 2;
 const CONVERSATION_ANSWER_RUNES = 2_000;
-const ASSISTANT_ID_MAX = 64;
 const ANNOUNCEMENT_READ_KEY = "wasa-chat-read-announcements";
 const ASSISTANT_KEY = "wasa-chat-assistant";
 const ASSISTANT_FAVORITES_KEY = "wasa-chat-assistant-favorites";
 const ASSISTANT_SORT_KEY = "wasa-chat-assistant-sort";
 const RESPONSE_MODE_KEY = "wasa-chat-response-mode";
 const TOAST_DURATION_MS = 3000;
+/** これ以内なら「下端を見ている」とみなし、回答の伸びに追従する。 */
+const STICK_TO_BOTTOM_PX = 80;
 const CENTER_ICON_POSITION: IconCropPosition = { x: 50, y: 50 };
 
 type AssistantSort = "favorite" | "name" | "author";
@@ -126,17 +146,12 @@ const RESPONSE_MODE_LABELS: Record<ResponseMode, string> = {
 };
 
 function loadResponseMode(): "auto" | "deep" {
-  const saved = localStorage.getItem(RESPONSE_MODE_KEY);
   // 旧画面の高速・標準は内部の自動判定へ戻す。利用者に速度の細分を求めない。
-  return saved === "deep" ? "deep" : "auto";
+  return readStored("local", RESPONSE_MODE_KEY) === "deep" ? "deep" : "auto";
 }
 
 const emptyDraft: AssistantDraft = { id: "", name: "", description: "", instruction: "" };
 
-/** 名前からIDの候補を作る。日本語名だとほぼ空になるので、そのときは呼び出し側で補う。 */
-function slugify(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, ASSISTANT_ID_MAX);
-}
 const WIKI_URL = import.meta.env.VITE_WIKI_URL ?? "https://wasabirdman.sakura.ne.jp/wbwiki/w/index.php";
 // 使い方・注意事項・プライバシーポリシーの静的ページ。SPAの初回JavaScriptを
 // 増やさないよう、web/public/support.html として素のHTMLで置いてある。
@@ -164,94 +179,13 @@ const SUGGESTIONS: { title: string; body: string }[] = [
 ];
 
 const makeId = () => crypto.randomUUID();
-const chatTitle = (question: string) =>
-  Array.from(question.trim()).slice(0, CHAT_TITLE_RUNES).join("") +
-  (Array.from(question.trim()).length > CHAT_TITLE_RUNES ? "…" : "");
 
-type HistorySection = { label: string; chats: Chat[] };
-
-function groupChats(chats: Chat[]): HistorySection[] {
-  const ordered = [...chats].sort((a, b) => {
-    if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
-    return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
-  });
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const sections = new Map<string, Chat[]>();
-
-  for (const chat of ordered) {
-    const updated = new Date(chat.updatedAt);
-    let label = "以前";
-    if (chat.pinned) {
-      label = "ピン留め";
-    } else if (!Number.isNaN(updated.getTime())) {
-      const day = new Date(updated);
-      day.setHours(0, 0, 0, 0);
-      const daysAgo = Math.round((today.getTime() - day.getTime()) / 86_400_000);
-      if (daysAgo === 0) label = "今日";
-      else if (daysAgo === 1) label = "昨日";
-      else if (daysAgo <= RECENT_HISTORY_DAYS) label = "過去7日間";
-      else label = `${updated.getFullYear()}年${updated.getMonth() + 1}月`;
-    }
-    const section = sections.get(label) ?? [];
-    section.push(chat);
-    sections.set(label, section);
-  }
-  return Array.from(sections, ([label, grouped]) => ({ label, chats: grouped }));
-}
-
-function shareText(chat: Chat): string {
-  const turns = chat.turns.map((turn) => {
-    const sources = turn.sources.length > 0
-      ? `\n\n出典:\n${turn.sources.map((source) => `- ${source.title}: ${source.url}`).join("\n")}`
-      : "";
-    return `質問:\n${turn.question}\n\n回答:\n${turn.answer || turn.error || "回答なし"}${sources}`;
-  });
-  return `${chat.title}\n\n${turns.join("\n\n---\n\n")}`;
-}
-
-function retryLabel(value: string | undefined, now: number): string {
-  if (!value) return "";
-  const at = new Date(value);
-  const milliseconds = at.getTime() - now;
-  if (Number.isNaN(at.getTime())) return "";
-  if (milliseconds <= 0) return "まもなく再開予定です";
-  const seconds = Math.ceil(milliseconds / 1000);
-  const minutes = Math.ceil(milliseconds / 60_000);
-  const duration = seconds < 60
-    ? `約${seconds}秒後`
-    : minutes < 60
-      ? `約${minutes}分後`
-    : `約${Math.floor(minutes / 60)}時間${minutes % 60 ? `${minutes % 60}分` : ""}後`;
-  const clock = new Intl.DateTimeFormat("ja-JP", { hour: "2-digit", minute: "2-digit" }).format(at);
-  return `再開目安: ${duration}（${clock}頃）`;
-}
-
-function loadReadAnnouncementIds(): string[] {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(ANNOUNCEMENT_READ_KEY) ?? "[]") as unknown;
-    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
-function loadFavoriteAssistantIds(): string[] {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(ASSISTANT_FAVORITES_KEY) ?? "[]") as unknown;
-    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
-  } catch {
-    return [];
-  }
-}
+const loadReadAnnouncementIds = () => readStoredIds(ANNOUNCEMENT_READ_KEY);
+const loadFavoriteAssistantIds = () => readStoredIds(ASSISTANT_FAVORITES_KEY);
 
 function loadAssistantSort(): AssistantSort {
-  try {
-    const saved = localStorage.getItem(ASSISTANT_SORT_KEY);
-    return saved === "name" || saved === "author" ? saved : "favorite";
-  } catch {
-    return "favorite";
-  }
+  const saved = readStored("local", ASSISTANT_SORT_KEY);
+  return saved === "name" || saved === "author" ? saved : "favorite";
 }
 
 function HistoryIcon() {
@@ -271,7 +205,6 @@ export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [username, setUsername] = useState("");
   const [remaining, setRemaining] = useState(0);
-  const [isAdmin, setIsAdmin] = useState(false);
   const [form, setForm] = useState({ username: "", password: "" });
   const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState("");
@@ -293,8 +226,6 @@ export default function App() {
   const [noticeOpen, setNoticeOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
-  const [feedbackItems, setFeedbackItems] = useState<Feedback[]>([]);
-  const [feedbackLoading, setFeedbackLoading] = useState(false);
   const [generalFeedbackId, setGeneralFeedbackId] = useState(makeId);
   const [generalReason, setGeneralReason] = useState<FeedbackReason | null>(null);
   const [generalComment, setGeneralComment] = useState("");
@@ -313,7 +244,7 @@ export default function App() {
   const [responseMode, setResponseMode] = useState<"auto" | "deep">(loadResponseMode);
   // 選んだアシスタントは端末に覚える。毎回選び直させると、結局
   // 誰も使わない機能になる（サーバーに持つほどの情報でもない）
-  const [assistantId, setAssistantId] = useState(() => localStorage.getItem(ASSISTANT_KEY) ?? "");
+  const [assistantId, setAssistantId] = useState(() => readStored("local", ASSISTANT_KEY) ?? "");
   // チャット画面とアシスタント一覧を切り替える。モーダルではなく画面ごと
   // 差し替えるのは、一覧が「選ぶ場所」であって会話の付随物ではないため
   const [view, setView] = useState<"chat" | "assistants">("chat");
@@ -324,6 +255,12 @@ export default function App() {
   const [pendingIcon, setPendingIcon] = useState<{ file: File; url: string } | null>(null);
   const [iconPosition, setIconPosition] = useState<IconCropPosition>(CENTER_ICON_POSITION);
   const bottom = useRef<HTMLDivElement>(null);
+  const conversation = useRef<HTMLElement>(null);
+  // 下端に張り付いているか。読み返すために上へ動かした人を、回答が届くたびに
+  // 引き戻さないための判定である
+  const stickToBottom = useRef(true);
+  // 実行中の質問。停止ボタンから中断する
+  const inflight = useRef<AbortController | null>(null);
   const headerMenus = useRef<HTMLDivElement>(null);
   const historyArea = useRef<HTMLElement>(null);
   // ポップオーバーを閉じたときの戻り先。保持しないとフォーカスがbodyへ落ち、
@@ -398,7 +335,6 @@ export default function App() {
       setAuthed(current.authenticated);
       setUsername(current.username);
       setRemaining(current.remaining);
-      setIsAdmin(current.admin);
       if (current.authenticated) {
         void restoreHistory();
         void refreshAssistants();
@@ -476,9 +412,41 @@ export default function App() {
     return () => URL.revokeObjectURL(pendingIcon.url);
   }, [pendingIcon]);
 
+  // 利用者が自分でスクロールしたかを見る。下端から離れていれば追従をやめる
   useEffect(() => {
+    const area = conversation.current;
+    if (!area) return;
+    const follow = () => {
+      stickToBottom.current = area.scrollHeight - area.scrollTop - area.clientHeight < STICK_TO_BOTTOM_PX;
+    };
+    follow();
+    area.addEventListener("scroll", follow, { passive: true });
+    return () => area.removeEventListener("scroll", follow);
+  }, [view, authed]);
+
+  // 往復が増えたときとチャットを切り替えたときだけ、滑らかに送る
+  const turnCount = activeChat?.turns.length ?? 0;
+  useEffect(() => {
+    stickToBottom.current = true;
     bottom.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [activeChat?.turns]);
+  }, [activeChatId, turnCount]);
+
+  /**
+   * 回答が伸びる間の追従。
+   *
+   * 以前は `activeChat?.turns` を依存にしていたが、**1文字届くたびに配列が
+   * 作り直されるので、デルタごとに smooth スクロールが走っていた。**
+   * 読み返そうと上へ動かしても即座に引き戻され、スマホではアニメーションが
+   * 連続して重くなる（2026-08-11に確認）。
+   *
+   * 下端に張り付いているときだけ、アニメーションなしで位置を合わせる。
+   */
+  const streamingLength = activeChat?.turns.at(-1)?.answer.length ?? 0;
+  useEffect(() => {
+    if (!stickToBottom.current) return;
+    const area = conversation.current;
+    if (area) area.scrollTop = area.scrollHeight;
+  }, [streamingLength]);
 
   useEffect(() => {
     if (!authed || !username || streaming) return;
@@ -521,7 +489,6 @@ export default function App() {
     setAuthed(true);
     setUsername(current.username);
     setRemaining(current.remaining);
-    setIsAdmin(current.admin);
     void restoreHistory();
     void refreshAssistants();
   }
@@ -530,10 +497,11 @@ export default function App() {
     setNoticeOpen(false);
     setProfileOpen(false);
     setFeedbackOpen(false);
+    // 受け取り先を消す前に止める。残しても書き込む先が無い
+    inflight.current?.abort();
     await logout();
     setAuthed(false);
     setUsername("");
-    setIsAdmin(false);
     syncedChats.current.clear();
     setChats([]);
     setActiveChatId(null);
@@ -547,24 +515,8 @@ export default function App() {
     if (!opening || announcements.length === 0) return;
     const ids = announcements.map((announcement) => announcement.id);
     setReadAnnouncementIds(ids);
-    try {
-      // お知らせIDだけなので、非公開Wikiの内容を端末へ保存することにはならない。
-      localStorage.setItem(ANNOUNCEMENT_READ_KEY, JSON.stringify(ids));
-    } catch {
-      // 保存できなくても、現在の表示中は既読状態を維持する。
-    }
-  }
-
-  async function refreshFeedbackItems() {
-    if (!isAdmin) return;
-    setFeedbackLoading(true);
-    try {
-      setFeedbackItems(await listFeedback());
-    } catch {
-      showToast("フィードバック一覧を読み込めませんでした");
-    } finally {
-      setFeedbackLoading(false);
-    }
+    // お知らせIDだけなので、非公開Wikiの内容を端末へ保存することにはならない。
+    writeStored("local", ANNOUNCEMENT_READ_KEY, JSON.stringify(ids));
   }
 
   function handleFeedbackToggle() {
@@ -576,14 +528,13 @@ export default function App() {
     setGeneralFeedbackId(makeId());
     setGeneralReason(null);
     setGeneralComment("");
-    void refreshFeedbackItems();
   }
 
   async function sendGeneralFeedback() {
     if (!generalReason || generalSubmitting) return;
     setGeneralSubmitting(true);
     try {
-      const notification = await submitFeedback({
+      await submitFeedback({
         clientId: generalFeedbackId,
         kind: "general",
         reasons: [generalReason],
@@ -591,8 +542,7 @@ export default function App() {
         page: view === "assistants" ? "assistants" : "chat",
       });
       setFeedbackOpen(false);
-      showToast(feedbackNotificationMessage(notification));
-      void refreshFeedbackItems();
+      showToast(feedbackNotificationMessage());
     } catch (error) {
       showToast(error instanceof Error ? error.message : "フィードバックを送信できませんでした");
     } finally {
@@ -651,9 +601,8 @@ export default function App() {
     setAnswerFeedbackOpen(key);
     setAnswerComments((current) => ({ ...current, [key]: comment }));
     try {
-      const notification = await sendAnswerFeedback(chat, turnIndex, turn, rating, reasons, comment);
-      showToast(feedbackNotificationMessage(notification, "評価"));
-      void refreshFeedbackItems();
+      await sendAnswerFeedback(chat, turnIndex, turn, rating, reasons, comment);
+      showToast(feedbackNotificationMessage("評価"));
     } catch (error) {
       patchTurnFeedback(chat.id, turnIndex, previous);
       showToast(error instanceof Error ? error.message : "評価を送信できませんでした");
@@ -666,9 +615,8 @@ export default function App() {
     const reasons = current.includes(reason) ? current.filter((item) => item !== reason) : [...current, reason];
     patchTurnFeedback(chat.id, turnIndex, { feedbackReasons: reasons });
     try {
-      const notification = await sendAnswerFeedback(chat, turnIndex, turn, turn.feedbackRating, reasons, turn.feedbackComment ?? "");
-      showToast(feedbackNotificationMessage(notification, "理由"));
-      void refreshFeedbackItems();
+      await sendAnswerFeedback(chat, turnIndex, turn, turn.feedbackRating, reasons, turn.feedbackComment ?? "");
+      showToast(feedbackNotificationMessage("理由"));
     } catch (error) {
       patchTurnFeedback(chat.id, turnIndex, { feedbackReasons: current });
       showToast(error instanceof Error ? error.message : "理由を送信できませんでした");
@@ -681,12 +629,22 @@ export default function App() {
     const comment = (answerComments[key] ?? "").trim();
     patchTurnFeedback(chat.id, turnIndex, { feedbackComment: comment });
     try {
-      const notification = await sendAnswerFeedback(chat, turnIndex, turn, turn.feedbackRating, turn.feedbackReasons ?? [], comment);
-      showToast(feedbackNotificationMessage(notification, "補足"));
-      void refreshFeedbackItems();
+      await sendAnswerFeedback(chat, turnIndex, turn, turn.feedbackRating, turn.feedbackReasons ?? [], comment);
+      showToast(feedbackNotificationMessage("補足"));
     } catch (error) {
       showToast(error instanceof Error ? error.message : "補足を送信できませんでした");
     }
+  }
+
+  /**
+   * 回答の生成を止める。
+   *
+   * `thinking` は `fast` の4.1倍かかる（M23）。聞き方を間違えたと気づいたときに、
+   * 終わるまで待つか再読み込みするしかない状態だった。中断してもサーバー側の
+   * 1回は消費済みなので、**残回数は戻らない**（`finally` で取り直す）。
+   */
+  function handleStop() {
+    inflight.current?.abort();
   }
 
   function handleNewChat() {
@@ -774,7 +732,7 @@ export default function App() {
       // 質問には古いIDを送る状態になり、表示と実際の参照範囲が食い違う
       setAssistants([]);
       setAssistantId("");
-      localStorage.removeItem(ASSISTANT_KEY);
+      writeStored("local", ASSISTANT_KEY, null);
     }
   }
 
@@ -786,7 +744,7 @@ export default function App() {
     const changed = id !== assistantId;
     const name = selectedName ?? assistants.find((item) => item.id === id)?.name ?? "汎用";
     setAssistantId(id);
-    localStorage.setItem(ASSISTANT_KEY, id);
+    writeStored("local", ASSISTANT_KEY, id);
     // 選んだらチャットへ戻る。選ぶために開いた画面なので、留まる理由がない
     closeAssistantForm();
     setView("chat");
@@ -816,11 +774,7 @@ export default function App() {
       ? [...favoriteAssistantIds, item.id]
       : favoriteAssistantIds.filter((id) => id !== item.id);
     setFavoriteAssistantIds(next);
-    try {
-      localStorage.setItem(ASSISTANT_FAVORITES_KEY, JSON.stringify(next));
-    } catch {
-      // 保存できなくても、現在のタブではお気に入り状態を維持する。
-    }
+    writeStored("local", ASSISTANT_FAVORITES_KEY, JSON.stringify(next));
     showToast(adding
       ? `「${item.name}」をお気に入りに追加しました`
       : `「${item.name}」をお気に入りから外しました`);
@@ -829,11 +783,7 @@ export default function App() {
   function changeAssistantSort(value: string) {
     const next = value === "name" || value === "author" ? value : "favorite";
     setAssistantSort(next);
-    try {
-      localStorage.setItem(ASSISTANT_SORT_KEY, next);
-    } catch {
-      // 保存できなくても、現在のタブでは選んだ並び順を維持する。
-    }
+    writeStored("local", ASSISTANT_SORT_KEY, next);
   }
 
   function clearPendingIcon() {
@@ -908,11 +858,7 @@ export default function App() {
       if (favoriteAssistantIds.includes(target.id)) {
         const nextFavorites = favoriteAssistantIds.filter((id) => id !== target.id);
         setFavoriteAssistantIds(nextFavorites);
-        try {
-          localStorage.setItem(ASSISTANT_FAVORITES_KEY, JSON.stringify(nextFavorites));
-        } catch {
-          // 削除そのものは成功しているため、端末の設定保存に失敗しても続行する。
-        }
+        writeStored("local", ASSISTANT_FAVORITES_KEY, JSON.stringify(nextFavorites));
       }
       if (assistantId === target.id) chooseAssistant("");
       showToast(`「${target.name}」を削除しました`);
@@ -1033,7 +979,8 @@ export default function App() {
         ? { ...existing, updatedAt: now, turns: [...existing.turns, turn] }
         : {
             id: chatId,
-            title: chatTitle(q),
+            // 本文が空でも名前が付く。画像だけを送ると空欄になっていた
+            title: chatTitle(q, sent !== null),
             createdAt: now,
             updatedAt: now,
             turns: [turn],
@@ -1053,6 +1000,9 @@ export default function App() {
             : chat,
         ),
       );
+
+    const controller = new AbortController();
+    inflight.current = controller;
 
     try {
       await ask(q, (event) => {
@@ -1094,21 +1044,27 @@ export default function App() {
           patch((current) => ({ ...current, streaming: false, status: "", retryAt: undefined }));
           break;
       }
-      }, undefined, assistantId, context, responseMode, sent ? [sent.dataUrl] : []);
+      }, controller.signal, assistantId, context, responseMode, sent ? [sent.dataUrl] : []);
     } catch (error) {
       // fetch自体の失敗やストリームの切断は ask() の中でイベントにならない。
       // ここで拾わないと streaming が立ったままになり、入力欄が永久に
       // disabled のまま、履歴同期も残回数の更新も止まる
+      // ブラウザによって、中断時の例外は AbortError にも NetworkError にもなる。
+      // 例外の名前ではなく、自分で止めたかどうかで判断する
+      const stopped = controller.signal.aborted || (error instanceof Error && error.name === "AbortError");
       patch((current) => ({
         ...current,
-        error: error instanceof Error && error.name === "AbortError"
-          ? "送信を中止しました"
+        // 途中まで届いていれば、それは利用者が読める回答である。止めた事実を
+        // エラーとして被せず、そこまでを残して評価もできるようにする
+        error: stopped
+          ? (current.answer ? undefined : "送信を中止しました")
           : "通信に失敗しました。接続を確認してもう一度お試しください",
         streaming: false,
         status: "",
         retryAt: undefined,
       }));
     } finally {
+      inflight.current = null;
       patch((current) => ({ ...current, streaming: false, status: "" }));
       // Gemini側の制限などでサーバーが回数を返却する場合もあるため、推測で1回減らさない。
       try {
@@ -1359,9 +1315,6 @@ export default function App() {
                   reason={generalReason}
                   comment={generalComment}
                   submitting={generalSubmitting}
-                  isAdmin={isAdmin}
-                  items={feedbackItems}
-                  loading={feedbackLoading}
                   onReason={setGeneralReason}
                   onComment={setGeneralComment}
                   onSubmit={() => void sendGeneralFeedback()}
@@ -1369,7 +1322,6 @@ export default function App() {
                     setFeedbackOpen(false);
                     feedbackTrigger.current?.focus();
                   }}
-                  onRefresh={() => void refreshFeedbackItems()}
                 />
               )}
             </div>
@@ -1622,7 +1574,7 @@ export default function App() {
           </main>
         ) : (
         <>
-        <main className="conversation" aria-live="polite">
+        <main className="conversation" ref={conversation} aria-live="polite">
           {!activeChat && (
             <div className="intro">
               <img src="/assets/wasa-chat-logo-photo-trimmed.png" alt="WASA Chat" className="intro-logo" />
@@ -1749,7 +1701,7 @@ export default function App() {
                 onChange={(value) => {
                   const next = value === "deep" ? "deep" : "auto";
                   setResponseMode(next);
-                  localStorage.setItem(RESPONSE_MODE_KEY, next);
+                  writeStored("local", RESPONSE_MODE_KEY, next);
                 }}
               />
             </div>
@@ -1823,17 +1775,27 @@ export default function App() {
                   <path d="M14 6.5 8 12.5a3 3 0 0 0 4.2 4.2l6.3-6.3a5 5 0 0 0-7-7L5 9.7a7 7 0 0 0 9.9 9.9l5.1-5.1" />
                 </svg>
               </button>
-              <button
-                type="submit"
-                className="send"
-                aria-label="送信"
-                title="送信"
-                disabled={(!question.trim() && !attachment) || streaming}
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="m4 12 16-8-5.5 16-3-6.5L4 12Zm7.5 1.5L20 4" />
-                </svg>
-              </button>
+              {/* 回答中は送信を停止に差し替える。並べて置くと、押し間違いが
+                  そのまま1回分の消費になる */}
+              {streaming ? (
+                <button type="button" className="send stop" aria-label="回答を停止" title="回答を停止" onClick={handleStop}>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <rect x="7" y="7" width="10" height="10" rx="2" />
+                  </svg>
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  className="send"
+                  aria-label="送信"
+                  title="送信"
+                  disabled={!question.trim() && !attachment}
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m4 12 16-8-5.5 16-3-6.5L4 12Zm7.5 1.5L20 4" />
+                  </svg>
+                </button>
+              )}
             </div>
           </form>
           <p className="composer-hint">Enterで送信・Shift + Enterで改行</p>

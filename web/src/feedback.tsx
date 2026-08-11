@@ -1,10 +1,8 @@
-import type { Feedback, FeedbackNotification, FeedbackReason, StageTimings, Turn } from "./api";
+import type { FeedbackReason, Turn } from "./api";
 
 export const FEEDBACK_COMMENT_MAX = 500;
 export const FEEDBACK_ANSWER_MAX = 20_000;
 export const FEEDBACK_SOURCE_MAX = 8;
-const ADMIN_ANSWER_PREVIEW_MAX = 500;
-const ADMIN_RECENT_MAX = 12;
 
 export const FEEDBACK_LABELS: Record<FeedbackReason, string> = {
   helpful: "知りたいことが分かった",
@@ -27,16 +25,8 @@ export const GOOD_REASONS: FeedbackReason[] = ["helpful", "clear", "good_sources
 export const BAD_REASONS: FeedbackReason[] = ["incorrect", "missing", "unclear", "wrong_sources", "outdated", "slow"];
 export const GENERAL_REASONS: FeedbackReason[] = ["bug", "usability", "feature", "content", "other"];
 
-export function feedbackNotificationMessage(status: FeedbackNotification, noun = "フィードバック"): string {
-  if (status === "sent") return `${noun}をメールで送信しました`;
-  if (status === "failed") return `${noun}は保存しましたが、メール通知に失敗しました`;
+export function feedbackNotificationMessage(noun = "フィードバック"): string {
   return `${noun}を保存しました`;
-}
-
-function formatDuration(milliseconds: number | undefined): string {
-  if (milliseconds === undefined) return "—";
-  if (milliseconds < 1_000) return `${milliseconds}ms`;
-  return `${(milliseconds / 1_000).toFixed(milliseconds < 10_000 ? 1 : 0)}秒`;
 }
 
 type ReasonButtonsProps = {
@@ -64,31 +54,21 @@ export function FeedbackReasonButtons({ reasons, selected, onToggle, className }
   );
 }
 
-function TimingDetails({ timings }: { timings: StageTimings }) {
-  return (
-    <p><b>所要時間:</b> ページ {formatDuration(timings.pagesMs)} / 節 {formatDuration(timings.chunksMs)} / 回答 {formatDuration(timings.answerMs)} / 合計 {formatDuration(timings.totalMs)}</p>
-  );
-}
-
 type FeedbackPopoverProps = {
   reason: FeedbackReason | null;
   comment: string;
   submitting: boolean;
-  isAdmin: boolean;
-  items: Feedback[];
-  loading: boolean;
   onReason: (reason: FeedbackReason) => void;
   onComment: (comment: string) => void;
   onSubmit: () => void;
   onClose: () => void;
-  onRefresh: () => void;
 };
 
 export function FeedbackPopover(props: FeedbackPopoverProps) {
   return (
     <section className="header-popover feedback-popover" id="feedback-popover" aria-label="フィードバック">
       <div className="feedback-popover-head">
-        <div><h2>気づいたことを送る</h2><p>匿名で管理者にフィードバックを送れます</p></div>
+        <div><h2>気づいたことを送る</h2><p>改善のため、開発者が確認します</p></div>
         <button type="button" className="popover-close" onClick={props.onClose} aria-label="閉じる">×</button>
       </div>
       <form className="feedback-comment-form" onSubmit={(event) => { event.preventDefault(); props.onSubmit(); }}>
@@ -104,34 +84,6 @@ export function FeedbackPopover(props: FeedbackPopoverProps) {
         </label>
         <button type="submit" disabled={!props.reason || props.submitting}>{props.submitting ? "送信中…" : "送信する"}</button>
       </form>
-      {props.isAdmin && (
-        <section className="feedback-admin">
-          <div className="feedback-admin-head">
-            <h3>最近の報告</h3>
-            <button type="button" onClick={props.onRefresh} disabled={props.loading}>{props.loading ? "読込中" : "更新"}</button>
-          </div>
-          <div className="feedback-summary">
-            <span>良い {props.items.filter((item) => item.rating === "good").length}</span>
-            <span>改善 {props.items.filter((item) => item.rating === "bad").length}</span>
-            <span>全体 {props.items.filter((item) => item.kind === "general").length}</span>
-          </div>
-          <div className="feedback-admin-list">
-            {props.items.length === 0 ? <p>まだ報告はありません</p> : props.items.slice(0, ADMIN_RECENT_MAX).map((item) => (
-              <details key={item.id}>
-                <summary>
-                  <span>{item.rating === "good" ? "良い" : item.rating === "bad" ? "改善" : "全体"}</span>
-                  <strong>{item.reasons?.[0] ? FEEDBACK_LABELS[item.reasons[0]] : item.comment || "理由なし"}</strong>
-                </summary>
-                {item.question && <p><b>質問:</b> {item.question}</p>}
-                {item.comment && <p><b>補足:</b> {item.comment}</p>}
-                {item.answer && <p><b>回答:</b> {item.answer.slice(0, ADMIN_ANSWER_PREVIEW_MAX)}{item.answer.length > ADMIN_ANSWER_PREVIEW_MAX ? "…" : ""}</p>}
-                {item.timings && <TimingDetails timings={item.timings} />}
-                <time dateTime={item.submittedAt}>{new Date(item.submittedAt).toLocaleString("ja-JP")}</time>
-              </details>
-            ))}
-          </div>
-        </section>
-      )}
     </section>
   );
 }
