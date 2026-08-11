@@ -1,0 +1,98 @@
+<mxfile host="app.diagrams.net" agent="WASA Chat" version="24.0.0">
+  <diagram name="認証と認可" id="wasa-auth">
+    <mxGraphModel dx="1100" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1100" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" value="認証と認可 ― Wikiのアカウントでログインする仕組み" style="text;html=1;align=left;verticalAlign=middle;fontSize=20;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="800" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" value="WASA Chatは&lt;b&gt;独自のアカウントを持たない。&lt;/b&gt;入力されたWikiのパスワードをWikiへ中継して照合するだけで、保存はしない。" style="text;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="40" y="52" width="900" height="24" as="geometry" />
+        </mxCell>
+
+        <mxCell id="laneA" value="ブラウザ" style="rounded=0;whiteSpace=wrap;html=1;dashed=1;fillColor=#f5f9ff;strokeColor=#6c8ebf;verticalAlign=top;fontSize=13;fontStyle=1;fontColor=#3B5E8C;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="40" y="100" width="270" height="700" as="geometry" />
+        </mxCell>
+        <mxCell id="laneB" value="Cloud Run（Go API）" style="rounded=0;whiteSpace=wrap;html=1;dashed=1;fillColor=#f6fbf5;strokeColor=#82b366;verticalAlign=top;fontSize=13;fontStyle=1;fontColor=#4B7A3B;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="340" y="100" width="300" height="700" as="geometry" />
+        </mxCell>
+        <mxCell id="laneC" value="外部（Wiki / Firestore）" style="rounded=0;whiteSpace=wrap;html=1;dashed=1;fillColor=#fffaf2;strokeColor=#d79b00;verticalAlign=top;fontSize=13;fontStyle=1;fontColor=#9E7300;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="670" y="100" width="270" height="700" as="geometry" />
+        </mxCell>
+
+        <mxCell id="s1" value="&lt;b&gt;①&lt;/b&gt; ログイン画面で&lt;br&gt;利用者名・パスワードを入力" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="60" y="150" width="230" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="s2" value="&lt;b&gt;②&lt;/b&gt; POST /api/login&lt;br&gt;&lt;font style=&quot;font-size: 10px;&quot;&gt;本文で送る。URLに載せるとアクセスログに残る&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="360" y="150" width="260" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="s3" value="&lt;b&gt;③&lt;/b&gt; Originを照合&lt;br&gt;&lt;font style=&quot;font-size: 10px;&quot;&gt;許可外は 403。Cookieが SameSite=None なので&lt;br&gt;CORSヘッダーだけではCSRFを防げない&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="360" y="240" width="260" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="s4" value="&lt;b&gt;④&lt;/b&gt; ログイントークンを取得&lt;br&gt;&lt;font style=&quot;font-size: 10px;&quot;&gt;action=query&amp;amp;meta=tokens&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="690" y="340" width="230" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="s5" value="&lt;b&gt;⑤&lt;/b&gt; action=clientlogin へ中継&lt;br&gt;&lt;font style=&quot;font-size: 10px;&quot;&gt;④と同じHTTPセッション / 20秒で打ち切り&lt;br&gt;&lt;b&gt;status: PASS のときだけ成功&lt;/b&gt;&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="690" y="430" width="230" height="75" as="geometry" />
+        </mxCell>
+        <mxCell id="s6" value="&lt;b&gt;⑥&lt;/b&gt; 署名Cookieを発行&lt;br&gt;&lt;font style=&quot;font-size: 10px;&quot;&gt;wasa_session ＝ 利用者名 + 有効期限（30日）&lt;br&gt;+ SESSION_SECRET による HMAC-SHA256&lt;br&gt;&lt;b&gt;パスワードは入れない&lt;/b&gt;&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="360" y="545" width="260" height="85" as="geometry" />
+        </mxCell>
+        <mxCell id="s7" value="&lt;b&gt;⑦&lt;/b&gt; Cookieを保存&lt;br&gt;&lt;font style=&quot;font-size: 10px;&quot;&gt;HttpOnly / Secure / SameSite=None / Partitioned&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="60" y="555" width="230" height="65" as="geometry" />
+        </mxCell>
+        <mxCell id="s8" value="&lt;b&gt;⑧&lt;/b&gt; 以降のAPI（/api/ask など）&lt;br&gt;&lt;font style=&quot;font-size: 10px;&quot;&gt;Cookieを付けて送る&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="60" y="680" width="230" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="s9" value="&lt;b&gt;⑨&lt;/b&gt; 署名を検証し、利用者名を取り出す" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="360" y="680" width="260" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="s10" value="&lt;b&gt;⑩&lt;/b&gt; Firestore&lt;br&gt;&lt;font style=&quot;font-size: 10px;&quot;&gt;利用者キー ＝ HMAC-SHA256(SESSION_SECRET, &quot;state|利用者名&quot;)&lt;br&gt;&lt;b&gt;利用者名を平文のIDにしない&lt;/b&gt;&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=10;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="690" y="660" width="230" height="90" as="geometry" />
+        </mxCell>
+
+        <mxCell id="a1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="s1" target="s2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="s2" target="s3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;exitX=1;exitY=0.8;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="s3" target="s4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="s4" target="s5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a5" value="PASS + 正規化済みの利用者名" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=10;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.3;entryDx=0;entryDy=0;" edge="1" parent="1" source="s5" target="s6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a6" value="Set-Cookie" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=10;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="s6" target="s7">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a7" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="s7" target="s8">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a8" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="s8" target="s9">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a9" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="s9" target="s10">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="pwnote" value="&lt;b&gt;パスワードの扱い（絶対の前提）&lt;/b&gt;&lt;br&gt;・保存しない&lt;br&gt;・ログへ出さない&lt;br&gt;・Wikiへの照合が終わったら保持しない&lt;br&gt;・Cookie / Firestore / 履歴へ入れない&lt;br&gt;・成否によらず入力欄から即座に消す" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;align=left;verticalAlign=top;spacing=10;" vertex="1" parent="1">
+          <mxGeometry x="960" y="340" width="120" height="165" as="geometry" />
+        </mxCell>
+
+        <mxCell id="whynote" value="&lt;b&gt;なぜWikiのアカウントを使うのか&lt;/b&gt;&lt;br&gt;・新しいパスワードを配らなくて済む&lt;br&gt;・退部した人はWiki側で止めれば締め出せる&lt;br&gt;・誰が使ったか分かるので、1人1日30回の上限をかけられる" style="rounded=0;whiteSpace=wrap;html=1;dashed=1;fillColor=none;strokeColor=#999999;fontSize=11;align=left;verticalAlign=top;spacing=8;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="40" y="820" width="440" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="secretnote" value="&lt;b&gt;SESSION_SECRET を変えると&lt;/b&gt;、全員がログアウトするだけでなく利用者キーも変わり、&lt;b&gt;既存の回数と履歴を参照できなくなる。&lt;/b&gt;気軽に変えてよい値ではない。" style="rounded=0;whiteSpace=wrap;html=1;dashed=1;fillColor=none;strokeColor=#999999;fontSize=11;align=left;verticalAlign=top;spacing=8;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="510" y="820" width="450" height="60" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
