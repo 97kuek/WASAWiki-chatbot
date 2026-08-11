@@ -24,6 +24,11 @@ eval/answers*.json
 eval/*_results.json
 eval/answers-*.json
 
+# 利用者フィードバックの書き出し（質問・回答に非公開Wikiの内容を含む）
+feedback-exports/
+wasa-feedback-*.jsonl
+wasa-feedback-*.csv
+
 # Dockerビルド用にコピーしたデータ
 backend/data/
 web/node_modules/

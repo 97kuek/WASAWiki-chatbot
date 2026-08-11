@@ -145,6 +145,8 @@ type Store interface {
 	SaveChat(context.Context, string, Chat, int) error
 	DeleteChat(context.Context, string, string) error
 	SaveFeedback(context.Context, Feedback) error
+	// ListFeedback は新しい順で返す。limitが0以下なら全件を返す。
+	// HTTP画面ではなく、開発者用の書き出しCLIから使う。
 	ListFeedback(context.Context, int) ([]Feedback, error)
 	// PurgeFeedback は submitted_at が before より古い報告を消し、消した件数を返す。
 	// プライバシーポリシーで保存期間を1年と示している以上、管理者の手作業に頼らず

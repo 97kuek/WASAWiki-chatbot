@@ -83,3 +83,17 @@ func TestMemoryPurgesFeedbackOlderThanCutoff(t *testing.T) {
 		}
 	}
 }
+
+func TestMemoryListsAllFeedbackWhenLimitIsZero(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemory()
+	for _, id := range []string{"1", "2", "3"} {
+		if err := store.SaveFeedback(ctx, Feedback{ID: id, SubmittedAt: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, err := store.ListFeedback(ctx, 0)
+	if err != nil || len(items) != 3 {
+		t.Fatalf("全件を書き出せない: count=%d err=%v", len(items), err)
+	}
+}

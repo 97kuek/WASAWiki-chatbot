@@ -179,11 +179,11 @@ func (f *Firestore) PurgeFeedback(ctx context.Context, before string) (int, erro
 }
 
 func (f *Firestore) ListFeedback(ctx context.Context, limit int) ([]Feedback, error) {
-	snapshots, err := f.client.Collection("feedback").
-		OrderBy("submitted_at", firestore.Desc).
-		Limit(limit).
-		Documents(ctx).
-		GetAll()
+	query := f.client.Collection("feedback").OrderBy("submitted_at", firestore.Desc)
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	snapshots, err := query.Documents(ctx).GetAll()
 	if err != nil {
 		return nil, err
 	}

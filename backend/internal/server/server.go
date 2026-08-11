@@ -34,18 +34,11 @@ const (
 	sessionMaxAge = 30 * 24 * time.Hour
 )
 
-// FeedbackNotifier は、保存済みのフィードバックを管理者へ知らせる。
-// 保存先と通知先を分けることで、メール障害で報告そのものを失わない。
-type FeedbackNotifier interface {
-	Notify(context.Context, state.Feedback) error
-}
-
 type Config struct {
-	SessionSecret    string // Cookie署名用。未設定なら起動時に生成する
-	DailyLimit       int    // 利用者1人あたりの1日の質問数上限
-	AllowOrigin      string // 開発時にViteのdev serverから叩くためのCORS設定
-	SPADir           string // 指定するとビルド済みSPAも同じサーバーから配る
-	FeedbackNotifier FeedbackNotifier
+	SessionSecret string // Cookie署名用。未設定なら起動時に生成する
+	DailyLimit    int    // 利用者1人あたりの1日の質問数上限
+	AllowOrigin   string // 開発時にViteのdev serverから叩くためのCORS設定
+	SPADir        string // 指定するとビルド済みSPAも同じサーバーから配る
 	// 他人のアシスタントも削除できるWiki利用者名。役割ではなく、
 	// 明らかなゴミを片付けるための最小限の権限（docs/06-ルールベース.md）
 	AdminUsers []string
@@ -86,7 +79,6 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("PUT /api/chats/{id}", s.requireAuth(s.handleSaveChat))
 	mux.HandleFunc("DELETE /api/chats/{id}", s.requireAuth(s.handleDeleteChat))
 	mux.HandleFunc("POST /api/feedback", s.requireAuth(s.handleSaveFeedback))
-	mux.HandleFunc("GET /api/feedback", s.requireAuth(s.handleListFeedback))
 	mux.HandleFunc("GET /api/assistants", s.requireAuth(s.handleListAssistants))
 	mux.HandleFunc("POST /api/assistants", s.requireAuth(s.handleCreateAssistant))
 	mux.HandleFunc("PUT /api/assistants/{id}", s.requireAuth(s.handleUpdateAssistant))
@@ -363,21 +355,19 @@ func (s *Server) handleDeleteChat(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------- フィードバック
 
 const (
-	maxFeedbackList             = 100
-	maxFeedbackBodyBytes        = 128 << 10
-	maxFeedbackReasons          = 5
-	maxFeedbackCommentRunes     = 500
-	maxFeedbackQuestionRunes    = 500
-	maxFeedbackAnswerRunes      = 20_000
-	maxFeedbackSources          = 8
-	maxFeedbackAssistantID      = 64
-	maxFeedbackAssistantRunes   = 40
-	maxFeedbackChatID           = 64
-	maxFeedbackTurnIndex        = 99
-	maxFeedbackSourceTitle      = 300
-	maxFeedbackSourceURL        = 4_000
-	maxStageTimingMS            = int64((30 * time.Minute) / time.Millisecond)
-	feedbackNotificationTimeout = 10 * time.Second
+	maxFeedbackBodyBytes      = 128 << 10
+	maxFeedbackReasons        = 5
+	maxFeedbackCommentRunes   = 500
+	maxFeedbackQuestionRunes  = 500
+	maxFeedbackAnswerRunes    = 20_000
+	maxFeedbackSources        = 8
+	maxFeedbackAssistantID    = 64
+	maxFeedbackAssistantRunes = 40
+	maxFeedbackChatID         = 64
+	maxFeedbackTurnIndex      = 99
+	maxFeedbackSourceTitle    = 300
+	maxFeedbackSourceURL      = 4_000
+	maxStageTimingMS          = int64((30 * time.Minute) / time.Millisecond)
 )
 
 func validStageTimings(timings *state.StageTimings) bool {
@@ -551,36 +541,7 @@ func (s *Server) handleSaveFeedback(w http.ResponseWriter, r *http.Request) {
 	} else if removed > 0 {
 		log.Printf("保存期限を過ぎたフィードバックを%d件削除した", removed)
 	}
-	status := "disabled"
-	if s.cfg.FeedbackNotifier != nil {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), feedbackNotificationTimeout)
-		err := s.cfg.FeedbackNotifier.Notify(ctx, item)
-		cancel()
-		if err != nil {
-			// 保存は完了している。メール障害を500にすると利用者が再送し、
-			// 同じ報告が増えるため、通知状態だけを画面へ返す。
-			status = "failed"
-			log.Printf("フィードバックのメール通知に失敗: %v", err)
-		} else {
-			status = "sent"
-		}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "notification": status})
-}
-
-func (s *Server) handleListFeedback(w http.ResponseWriter, r *http.Request) {
-	user, _ := s.currentUser(r)
-	if !s.isAdmin(user) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "フィードバックを閲覧する権限がありません"})
-		return
-	}
-	items, err := s.state.ListFeedback(r.Context(), maxFeedbackList)
-	if err != nil {
-		log.Printf("フィードバックの読み込みに失敗: %v", err)
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "フィードバックを読み込めませんでした"})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"feedback": items})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // ---------------------------------------------------------------- アシスタント
@@ -783,7 +744,7 @@ const (
 	maxQuestionRunes             = 500
 	// 画像1枚（縮小後400KBまで）をbase64で載せる余地を持たせる。
 	// 32KBのままだと添付が一切通らない
-	maxAskBodyBytes              = 1 << 20
+	maxAskBodyBytes = 1 << 20
 )
 
 func validConversationContext(context []pipeline.ConversationTurn) bool {

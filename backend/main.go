@@ -18,7 +18,6 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/97kuek/wasa-chat/backend/internal/assistant"
-	"github.com/97kuek/wasa-chat/backend/internal/feedbackmail"
 	"github.com/97kuek/wasa-chat/backend/internal/index"
 	"github.com/97kuek/wasa-chat/backend/internal/llm"
 	"github.com/97kuek/wasa-chat/backend/internal/pipeline"
@@ -243,30 +242,12 @@ func main() {
 		log.Fatalf("初期アシスタントの登録に失敗: %v", err)
 	}
 
-	var feedbackNotifier server.FeedbackNotifier
-	if recipients := splitList(os.Getenv("FEEDBACK_EMAIL_TO")); len(recipients) > 0 {
-		from := env("SMTP_FROM", os.Getenv("SMTP_USERNAME"))
-		notifier, err := feedbackmail.New(feedbackmail.Config{
-			Host: os.Getenv("SMTP_HOST"), Port: envInt("SMTP_PORT", 587),
-			Username: os.Getenv("SMTP_USERNAME"), Password: os.Getenv("SMTP_PASSWORD"),
-			From: from, Recipients: recipients,
-		})
-		if err != nil {
-			log.Fatalf("フィードバックのメール設定が不正です: %v", err)
-		}
-		feedbackNotifier = notifier
-		log.Printf("フィードバックのメール通知: 有効（宛先%d件）", len(recipients))
-	} else {
-		log.Println("警告: FEEDBACK_EMAIL_TO が未設定のため、フィードバックは保存だけ行います")
-	}
-
 	srv := server.New(server.Config{
-		SessionSecret:    secret,
-		DailyLimit:       envInt("DAILY_LIMIT", 30),
-		AllowOrigin:      allowOrigin,
-		SPADir:           os.Getenv("SPA_DIR"),
-		AdminUsers:       admins,
-		FeedbackNotifier: feedbackNotifier,
+		SessionSecret: secret,
+		DailyLimit:    envInt("DAILY_LIMIT", 30),
+		AllowOrigin:   allowOrigin,
+		SPADir:        os.Getenv("SPA_DIR"),
+		AdminUsers:    admins,
 	}, ix, pipeline.New(ix, client), wiki.New(wikiAPI), sharedState)
 
 	addr := ":" + env("PORT", "8080") // Cloud Run は PORT を渡してくる

@@ -124,7 +124,7 @@ func (m *Memory) ListFeedback(_ context.Context, limit int) ([]Feedback, error) 
 		list = append(list, item)
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].SubmittedAt > list[j].SubmittedAt })
-	if len(list) > limit {
+	if limit > 0 && len(list) > limit {
 		list = list[:limit]
 	}
 	return list, nil
